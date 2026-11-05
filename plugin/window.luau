@@ -50,3 +50,42 @@ for _, language in { "js", "python", "kotlin" } do
     end,
   })
 end
+
+tern.command({
+  id = "serve",
+  title = "Serve directory or script",
+  run = function(cx)
+    if cx.hosts:current().kind ~= "local" then
+      cx:toast("error", "Configure a server launcher on this host before serving remotely.")
+      return
+    end
+    local ok, config = pcall(function()
+      return tern.json.decode(tern.fs.read(tern.plugin.dir .. "/config.json"))
+    end)
+    if not ok or type(config) ~= "table" then
+      cx:toast("error", "Configure plugin/config.json before serving.")
+      return
+    end
+    cx:prompt({ placeholder = "Directory or script path", value = ".", icon = "server", action = "serve" })
+      :next(function(subject, err, current)
+        if not current or not subject or subject == "" then
+          return
+        end
+        if err then
+          current:toast("error", err)
+          return
+        end
+        local launcher = config.serve or "../dist/elide-tern-serve"
+        if string.sub(launcher, 1, 1) ~= "/" then
+          launcher = tern.plugin.dir .. "/" .. launcher
+        end
+        local runtime = config.runtime or "elide"
+        if string.find(runtime, "/") and string.sub(runtime, 1, 1) ~= "/" then
+          runtime = tern.plugin.dir .. "/" .. runtime
+        end
+        current.hosts:terminal("local", {
+          command = "exec " .. quote(launcher) .. " " .. quote(runtime) .. " " .. quote(subject),
+        })
+      end)
+  end,
+})
