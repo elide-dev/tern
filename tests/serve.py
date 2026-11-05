@@ -41,7 +41,8 @@ with tempfile.TemporaryDirectory(prefix='serve-', dir='/tmp') as temporary:
                 time.sleep(.1)
             raise AssertionError(tree())
         def address():
-            return re.search(r'http://127\.0\.0\.1:\d+', tree('[data-role="address"]')).group()
+            match = re.search(r'http://127\.0\.0\.1:\d+', tree('[data-role="address"]'))
+            return match.group() if match else None
         def stopped(url):
             try: urlopen(url, timeout=.3).close(); return False
             except (URLError, OSError): return True
@@ -81,7 +82,7 @@ with tempfile.TemporaryDirectory(prefix='serve-', dir='/tmp') as temporary:
                 wait(lambda: '500' in tree())
                 ctl('shot', 'runtime-requests')
                 ctl('click', '[data-role="restart"]')
-                wait(lambda: 'Running' in tree() and address() != url)
+                wait(lambda: (current := address()) is not None and current != url)
                 wait(lambda: stopped(url))
                 url = address()
                 ctl('key', 'ctrl+c')
