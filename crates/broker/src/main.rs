@@ -28,6 +28,7 @@ const DEADLINE: Duration = Duration::from_secs(10);
 const IDLE: Duration = Duration::from_secs(120);
 const MAX_SESSIONS: usize = 8;
 type Sessions = Arc<Mutex<HashMap<String, Arc<Mutex<Runtime>>>>>;
+type Projects = Arc<Mutex<elide_project_session::Host>>;
 
 struct Runtime {
   worker: Worker,
@@ -165,6 +166,7 @@ fn serve(state: &Path) -> Result<(), String> {
   let listener = UnixListener::bind(&socket).map_err(err)?;
   listener.set_nonblocking(true).map_err(err)?;
   let sessions: Sessions = Default::default();
+  let projects: Projects = Default::default();
   let active = Arc::new(AtomicUsize::new(0));
   let serial = Arc::new(AtomicUsize::new(1));
   let mut last = Instant::now();
@@ -178,8 +180,9 @@ fn serve(state: &Path) -> Result<(), String> {
         }
         active.fetch_add(1, Ordering::SeqCst);
         let (sessions, serial, active) = (sessions.clone(), serial.clone(), active.clone());
+        let projects = projects.clone();
         thread::spawn(move || {
-          let _ = connection(stream, &sessions, &serial);
+          let _ = connection(stream, &sessions, &serial, &projects);
           active.fetch_sub(1, Ordering::SeqCst);
         });
       }
@@ -190,7 +193,12 @@ fn serve(state: &Path) -> Result<(), String> {
       .lock()
       .unwrap()
       .retain(|_, runtime| runtime.try_lock().map(|r| r.used.elapsed() < IDLE).unwrap_or(true));
-    if active.load(Ordering::SeqCst) == 0 && last.elapsed() >= IDLE && sessions.lock().unwrap().is_empty() {
+    projects.lock().unwrap().tick(Instant::now());
+    if active.load(Ordering::SeqCst) == 0
+      && last.elapsed() >= IDLE
+      && sessions.lock().unwrap().is_empty()
+      && projects.lock().unwrap().is_empty()
+    {
       break;
     }
     thread::sleep(Duration::from_millis(25));
@@ -198,7 +206,12 @@ fn serve(state: &Path) -> Result<(), String> {
   fs::remove_file(socket).map_err(err)
 }
 
-fn connection(mut stream: UnixStream, sessions: &Sessions, serial: &AtomicUsize) -> Result<(), String> {
+fn connection(
+  mut stream: UnixStream,
+  sessions: &Sessions,
+  serial: &AtomicUsize,
+  projects: &Projects,
+) -> Result<(), String> {
   stream.set_read_timeout(Some(Duration::from_secs(2))).map_err(err)?;
   stream.set_write_timeout(Some(Duration::from_secs(2))).map_err(err)?;
   let result = (|| {
@@ -206,7 +219,7 @@ fn connection(mut stream: UnixStream, sessions: &Sessions, serial: &AtomicUsize)
       .map_err(err)?
       .ok_or("Empty request")?;
     let request: Request = serde_json::from_slice(&bytes).map_err(err)?;
-    dispatch(request, sessions, serial)
+    dispatch(request, sessions, serial, projects)
   })();
   let response = match result {
     Ok(value) => json!({"ok": true, "result": value}),
@@ -219,8 +232,41 @@ fn connection(mut stream: UnixStream, sessions: &Sessions, serial: &AtomicUsize)
   write_frame(&mut stream, &bytes).map_err(err)
 }
 
-fn dispatch(request: Request, sessions: &Sessions, serial: &AtomicUsize) -> Result<Value, String> {
+fn dispatch(request: Request, sessions: &Sessions, serial: &AtomicUsize, projects: &Projects) -> Result<Value, String> {
   match &request {
+    Request::ProjectAttach { root, runtime } => {
+      let binding = projects
+        .lock()
+        .unwrap()
+        .attach(Path::new(root), Path::new(runtime), Instant::now())?;
+      return serde_json::to_value(binding).map_err(err);
+    }
+    Request::ProjectSnapshot { binding, after } => {
+      let snapshot = projects
+        .lock()
+        .unwrap()
+        .snapshot(binding, after.as_deref(), Instant::now())?;
+      return serde_json::to_value(snapshot).map_err(err);
+    }
+    Request::ProjectDetach { binding } => {
+      projects.lock().unwrap().detach(binding, Instant::now())?;
+      return Ok(json!({}));
+    }
+    Request::ProjectTest {
+      binding,
+      command,
+      subject,
+    } => {
+      let run = projects
+        .lock()
+        .unwrap()
+        .test(binding, command, Path::new(subject), Instant::now())?;
+      return Ok(json!({"run": run}));
+    }
+    Request::ProjectCancel { binding, run } => {
+      projects.lock().unwrap().cancel(binding, run, Instant::now())?;
+      return Ok(json!({}));
+    }
     Request::Ping {} => {
       return Ok(json!({"protocol": 1, "pid": std::process::id(), "sessions": sessions.lock().unwrap().len()}));
     }

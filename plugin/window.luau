@@ -82,7 +82,26 @@ local function launch_job(cx, kind, subject, cwd)
   if string.find(runtime, "/") and string.sub(runtime, 1, 1) ~= "/" then
     runtime = path(runtime)
   end
-  terminal(cx, { path(config[kind] or ("../dist/elide-tern-" .. kind)), runtime, subject }, cwd)
+  if kind == "test" and cwd then
+    terminal(cx, {
+      path(config.project or "../dist/elide-tern-project"),
+      path(config.broker or "../dist/elide-tern-broker"),
+      config.project_state or (config.state and (config.state .. "-projects")) or (tern.plugin.data .. "/projects"),
+      runtime,
+      cwd,
+      subject,
+    }, cwd)
+  else
+    terminal(cx, { path(config[kind] or ("../dist/elide-tern-" .. kind)), runtime, subject }, cwd)
+  end
+end
+
+local function view_tests(context, cx)
+  if not context then
+    cx:toast("info", "Open a local project directory first.")
+    return
+  end
+  launch_job(cx, "test", nil, context.root)
 end
 
 local function prompt_job(cx, kind, placeholder)
@@ -118,6 +137,7 @@ local function project_menu(context, cx)
       { label = "Serve static files", value = "static", icon = "server" },
       { label = "Serve a script…", value = "script", icon = "server" },
       { label = "Open manifest", value = "manifest", icon = "file" },
+      { label = "View test runs", value = "tests", icon = "list" },
     },
   }):next(function(item, err, current)
     if err and current then
@@ -131,6 +151,8 @@ local function project_menu(context, cx)
         launch_job(current, "serve", context.root, context.root)
       elseif item.value == "manifest" then
         current:open(context.root .. "/elide.pkl")
+      elseif item.value == "tests" then
+        view_tests(context, current)
       elseif item.value == "script" then
         current
           :prompt({ placeholder = "Script path relative to project", value = "", action = "serve" })
@@ -195,6 +217,13 @@ tern.command({
   icon = "folder",
   run = function(cx)
     detect(cx, project_menu)
+  end,
+})
+tern.command({
+  id = "project_tests",
+  title = "View project test runs",
+  run = function(cx)
+    detect(cx, view_tests)
   end,
 })
 tern.chrome.status(project.status)

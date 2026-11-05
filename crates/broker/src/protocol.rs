@@ -5,6 +5,27 @@ use studio_embed::embedding_capnp as wire;
 #[derive(Debug, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
+  ProjectAttach {
+    root: String,
+    runtime: String,
+  },
+  ProjectSnapshot {
+    binding: elide_project_session::Binding,
+    #[serde(default)]
+    after: Option<String>,
+  },
+  ProjectDetach {
+    binding: elide_project_session::Binding,
+  },
+  ProjectTest {
+    binding: elide_project_session::Binding,
+    command: String,
+    subject: String,
+  },
+  ProjectCancel {
+    binding: elide_project_session::Binding,
+    run: String,
+  },
   Ping {},
   Open {
     sdk: String,

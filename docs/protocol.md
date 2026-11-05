@@ -36,3 +36,30 @@ The request helper bounds stdin and checks its shape before starting the broker.
 The broker revalidates all socket input. Local state paths must be short enough
 for Unix sockets and have mode 0700; symlinks and foreign-owned directories are
 rejected. The initial transport is Unix-only; Windows and iOS are unsupported.
+# Shared project test sessions
+
+These additive operations use the existing private broker socket and response envelope.
+They are separate from SDK runtime/kernel session handles and do not initialize the SDK.
+
+| Operation | Fields | Result |
+| --- | --- | --- |
+| `project_attach` | absolute `root`, absolute or PATH `runtime` | `binding`: the result itself is `{session, epoch, lease}` |
+| `project_snapshot` | `binding`, optional `after` revision | versioned snapshot, or null when unchanged |
+| `project_test` | `binding`, UUID `command`, `subject` | `{run}` |
+| `project_cancel` | `binding`, `run` | empty object; cancellation is asynchronous |
+| `project_detach` | `binding` | empty object; a finite test continues |
+
+Use the entire binding returned by attachment. Each view has its own 60-second lease;
+snapshot reads renew it. IDs from an old host epoch or another project are rejected.
+Subject paths resolve inside the attached root and must remain there after resolving
+symlinks. One active test run per project prevents conflicting writes to build outputs.
+The same UUID and subject return the same run; changing arguments under that UUID fails.
+
+Snapshots include four recent runs with complete aggregate counts and bounded details
+for the latest 32 results, raw report paths, status and duration. Unchanged snapshots
+return null. Raw artifacts remain under `.dev/reports/tests/tern/`. There is a five-minute
+run deadline, 128 retained command IDs per project incarnation, and a two-minute idle
+reclamation period. Expired result retries fail explicitly rather than launching again.
+
+This layer reports configuration as `discovered`. It does not evaluate manifests,
+resolve workspace dependencies, provide streaming subscriptions, or implement MCP.

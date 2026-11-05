@@ -103,5 +103,17 @@ Build the native test host with `make testing`, then choose **Run tests** in Ter
 Enter a project directory or test file. The surface provides live results, failure
 filtering, original diagnostics, per-test output, source links, rerun and cancel.
 It uses `config.runtime`; `config.test` optionally overrides the launcher path.
+Inside a detected project, Tests attaches to a shared project host. Closing its view
+leaves tests running; **Cancel** stops them explicitly. **View project test runs**
+reconnects to recent results, and another view can observe the same run without
+launching it again. Recent runs are selectable in the native UI.
+
+Build this host with `make project` (`make link` includes it). `config.project`
+can override the launcher and `config.project_state` selects a short private host
+directory. Development builds currently consume the shared `elide-project-session`
+crate from the sibling Elide checkout, alongside the existing surface build dependency.
+
 Raw reports are saved under the target directory's `.dev/reports/tests/tern/`.
 Run the real Tern integration test with `make test-testing RUNTIME=/path/to/elide`.
+Run `make test-sessions RUNTIME=/path/to/elide` for two-window attachment, live shared
+results, duplicate-command protection, reconnect, rerun and cancellation checks.
