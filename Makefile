@@ -58,3 +58,7 @@ testing:
 
 test-testing: testing
 	python3 tests/testing.py --runtime "$(RUNTIME)"
+
+.PHONY: test-project
+test-project: build repl serve testing
+	python3 tests/project.py $(if $(SDK),--sdk "$(SDK)") $(if $(RUNTIME),--runtime "$(RUNTIME)")
