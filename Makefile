@@ -44,3 +44,7 @@ serve:
 
 test-serve: serve
 	python3 tests/serve.py $(if $(RUNTIME),--runtime "$(RUNTIME)")
+
+.PHONY: test-telemetry
+test-telemetry: serve
+	python3 tests/telemetry.py --runtime "$(RUNTIME)"
