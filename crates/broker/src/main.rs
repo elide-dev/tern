@@ -1,3 +1,4 @@
+mod project;
 mod protocol;
 
 use fs2::FileExt;
@@ -43,10 +44,14 @@ fn main() {
 fn run() -> Result<(), String> {
   let args: Vec<_> = std::env::args_os().skip(1).collect();
   if args.len() != 2 {
-    return Err("Usage: elide-tern-broker <request|serve> <state-directory>".into());
+    return Err("Usage: elide-tern-broker <request|serve|project-root> <state-directory>".into());
   }
   let path = Path::new(&args[1]);
   match args[0].to_str() {
+    Some("project-root") => {
+      println!("{}", project::discover(path)?);
+      Ok(())
+    }
     Some("serve") => serve(&private_dir(path)?),
     Some("request") => {
       // Validate and bound input before starting a broker or connecting to it.
