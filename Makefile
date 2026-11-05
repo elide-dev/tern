@@ -28,7 +28,7 @@ repl:
 	cp "$(ELIDE_SOURCE)/target/debug/examples/embedded_surface" dist/.elide-tern-repl.new
 	mv dist/.elide-tern-repl.new dist/elide-tern-repl
 
-link: build repl serve
+link: build repl serve testing
 	tern plugin link "$(CURDIR)/plugin"
 
 
@@ -48,3 +48,13 @@ test-serve: serve
 .PHONY: test-telemetry
 test-telemetry: serve
 	python3 tests/telemetry.py --runtime "$(RUNTIME)"
+
+.PHONY: testing test-testing
+testing:
+	$(MAKE) -C "$(ELIDE_SOURCE)" build-test-surface
+	mkdir -p dist
+	cp "$(ELIDE_SOURCE)/target/debug/examples/test_surface" dist/.elide-tern-test.new
+	mv dist/.elide-tern-test.new dist/elide-tern-test
+
+test-testing: testing
+	python3 tests/testing.py --runtime "$(RUNTIME)"
