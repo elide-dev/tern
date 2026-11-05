@@ -59,3 +59,21 @@ parse Luau; a successful build does not establish visual acceptance in Tern.
 
 See [architecture](docs/architecture.md), [broker protocol](docs/protocol.md),
 and [upstream provenance](third_party/README.md).
+
+### Servers
+
+Run `make serve` and choose **Serve directory or script** in Tern's command palette.
+The launcher uses the canonical Rust serving surface, independently of REPL workers.
+Directories bind an available loopback port; scripts use `runtime` from
+`plugin/config.json` (default `elide` on PATH). Relative runtime paths resolve from
+the plugin directory. The `serve` setting overrides the surface launcher.
+
+The dashboard provides actual bound URLs, observed request status/latency, clickable
+request details, bounded logs, stop and restart. Closing it stops the supervised
+server process group. Runtime readiness/request events currently require
+`Elide.serve`; other APIs, including `node:http`, expose process controls and logs
+without guessed readiness or request data. OTLP traces are a separate follow-up.
+
+`make test-serve RUNTIME=/path/to/elide` exercises static and runtime HTTP requests,
+failures, restart and teardown in an isolated Tern renderer. Without `RUNTIME`, it
+runs the static serving checks.

@@ -28,9 +28,19 @@ repl:
 	cp "$(ELIDE_SOURCE)/target/debug/examples/embedded_surface" dist/.elide-tern-repl.new
 	mv dist/.elide-tern-repl.new dist/elide-tern-repl
 
-link: build repl
+link: build repl serve
 	tern plugin link "$(CURDIR)/plugin"
 
 
 test-surface: build repl
 	python3 tests/surface.py --sdk "$(SDK)"
+
+.PHONY: serve test-serve
+serve:
+	$(MAKE) -C "$(ELIDE_SOURCE)" build-serve-surface
+	mkdir -p dist
+	cp "$(ELIDE_SOURCE)/target/debug/examples/serve_surface" dist/.elide-tern-serve.new
+	mv dist/.elide-tern-serve.new dist/elide-tern-serve
+
+test-serve: serve
+	python3 tests/serve.py $(if $(RUNTIME),--runtime "$(RUNTIME)")

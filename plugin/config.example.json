@@ -1,4 +1,6 @@
 {
   "sdk": "/absolute/path/to/extracted/elide-embed",
-  "broker": "../dist/elide-tern-broker"
+  "broker": "../dist/elide-tern-broker",
+  "serve": "../dist/elide-tern-serve",
+  "runtime": "elide"
 }
