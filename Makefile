@@ -28,7 +28,7 @@ repl:
 	cp "$(ELIDE_SOURCE)/target/debug/examples/embedded_surface" dist/.elide-tern-repl.new
 	mv dist/.elide-tern-repl.new dist/elide-tern-repl
 
-link: build repl serve testing
+link: build repl serve testing project
 	tern plugin link "$(CURDIR)/plugin"
 
 
@@ -60,5 +60,15 @@ test-testing: testing
 	python3 tests/testing.py --runtime "$(RUNTIME)"
 
 .PHONY: test-project
-test-project: build repl serve testing
+test-project: build repl serve testing project
 	python3 tests/project.py $(if $(SDK),--sdk "$(SDK)") $(if $(RUNTIME),--runtime "$(RUNTIME)")
+
+.PHONY: project test-sessions
+project:
+	$(MAKE) -C "$(ELIDE_SOURCE)" build-project-surface
+	mkdir -p dist
+	cp "$(ELIDE_SOURCE)/target/debug/examples/project_surface" dist/.elide-tern-project.new
+	mv dist/.elide-tern-project.new dist/elide-tern-project
+
+test-sessions: build project
+	python3 tests/sessions.py $(if $(RUNTIME),--runtime "$(RUNTIME)")

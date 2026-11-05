@@ -58,7 +58,7 @@ with tempfile.TemporaryDirectory(prefix='tp-', dir='/tmp') as temporary:
     package = fixtures / 'elide'
     shutil.copytree(root / 'plugin', package, ignore=shutil.ignore_patterns('config.json', 'tern.d.luau'))
     fixture_config = {'sdk': sdk, 'runtime': runtime}
-    for name in ['broker', 'repl', 'serve', 'test']:
+    for name in ['broker', 'repl', 'serve', 'test', 'project']:
         fixture_config[name] = str(root / 'dist' / ('elide-tern-' + name))
     (package / 'config.json').write_text(json.dumps(fixture_config))
     fixture_root = state / 'crates/tern'
