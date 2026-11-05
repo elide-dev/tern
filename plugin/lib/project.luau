@@ -31,6 +31,11 @@ function M.current(cx)
   return record and record.path == context.path and record.project or nil
 end
 
+function M.cached(cx)
+  local record = records[cx.session:focused()]
+  return local_host and record and record.project or nil
+end
+
 function M.probe(context, broker, callback)
   local previous = records[context.pane]
   if previous and previous.path == context.path and previous.pending and not callback then

@@ -248,6 +248,47 @@ fn dispatch(request: Request, sessions: &Sessions, serial: &AtomicUsize, project
         .snapshot(binding, after.as_deref(), Instant::now())?;
       return serde_json::to_value(snapshot).map_err(err);
     }
+    Request::ProjectSummary { binding } => {
+      let snapshot = projects
+        .lock()
+        .unwrap()
+        .snapshot(binding, None, Instant::now())?
+        .ok_or("Missing project snapshot")?;
+      let runs: Vec<_> = snapshot
+        .runs
+        .iter()
+        .map(|run| {
+          let failures: Vec<_> = run
+            .result
+            .tests
+            .iter()
+            .filter(|test| {
+              matches!(
+                test.status,
+                elide_project_session::tap::Status::Fail | elide_project_session::tap::Status::Abort
+              )
+            })
+            .take(2)
+            .map(|test| {
+              json!({
+                "number": test.number.to_string(), "name": test.label,
+                "diagnostic": test.diagnostics.chars().take(512).collect::<String>(),
+                "file": test.metadata.as_ref().and_then(|metadata| metadata.file.as_ref()),
+              })
+            })
+            .collect();
+          json!({"run":run.id, "subject":run.subject, "status":run.status, "running":run.running,
+          "duration_ms":run.duration_ms, "passed":run.result.passed, "failed":run.result.failed,
+          "total":run.result.total, "truncated":run.result.truncated, "report":run.report,
+          "failures":failures, "failure_limit":2})
+        })
+        .collect();
+      return Ok(
+        json!({"schema":snapshot.schema, "session":snapshot.session, "epoch":snapshot.epoch,
+        "revision":snapshot.revision, "root":snapshot.root, "configuration":snapshot.configuration,
+        "attachments":snapshot.attachments, "runs":runs}),
+      );
+    }
     Request::ProjectDetach { binding } => {
       projects.lock().unwrap().detach(binding, Instant::now())?;
       return Ok(json!({}));

@@ -32,6 +32,8 @@ local function local_host(cx)
   return false
 end
 
+require("./lib/agents").install(configuration, path, project)
+
 local function terminal(cx, argv, cwd)
   for i, value in argv do
     argv[i] = quote(value)

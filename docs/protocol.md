@@ -45,6 +45,7 @@ They are separate from SDK runtime/kernel session handles and do not initialize 
 | --- | --- | --- |
 | `project_attach` | absolute `root`, absolute or PATH `runtime` | `binding`: the result itself is `{session, epoch, lease}` |
 | `project_snapshot` | `binding`, optional `after` revision | versioned snapshot, or null when unchanged |
+| `project_summary` | `binding` | compact run counts, handles, reports and two failure previews per run |
 | `project_test` | `binding`, UUID `command`, `subject` | `{run}` |
 | `project_cancel` | `binding`, `run` | empty object; cancellation is asynchronous |
 | `project_detach` | `binding` | empty object; a finite test continues |

@@ -1,12 +1,14 @@
 # Elide for Tern
 
 A Luau plugin backed by a native broker and disposable embedded Elide workers.
-The worker loads the same C ABI and Cap'n Proto SDK used by Elide Studio; it does
-not invoke the Elide CLI or load GraalVM into Tern's UI process.
+Notebook workers load the same C ABI and Cap'n Proto SDK used by Elide Studio.
+Test and server hosts supervise the canonical runtime independently; GraalVM is
+never loaded into Tern's UI process.
 
-This is an initial integration, with the shared native REPL surface and a working broker transport
-for persistent kernels and SDK LSP/MCP channels. Server lifecycle/TUI controls and
-standard LSP/MCP client transports are not implemented yet.
+Native surfaces cover REPL, Tests, serving and trace inspection. Project testing
+sessions share live runs between views and the built-in agent. SDK LSP/MCP channels
+have broker plumbing; standard client transports and live WebSocket MCP attachment
+remain follow-up work.
 
 ## Development
 
@@ -117,3 +119,18 @@ Raw reports are saved under the target directory's `.dev/reports/tests/tern/`.
 Run the real Tern integration test with `make test-testing RUNTIME=/path/to/elide`.
 Run `make test-sessions RUNTIME=/path/to/elide` for two-window attachment, live shared
 results, duplicate-command protection, reconnect, rerun and cancellation checks.
+
+### Built-in agent project tools
+
+Carly receives a cached project hint and five asynchronous exports:
+`project_open(root)`, `project_read(binding)`, `test_run(binding, subject, command)`,
+`test_cancel(binding, run)`, and `project_close(binding)` under `plugins.elide`.
+Opening returns an explicit project binding; changing focused tabs cannot retarget
+it. Reads renew the 60-second attachment lease and return bounded run/failure summaries.
+Use a fresh UUID command for an intentional run and retain it for retries. Native
+Tests views observe agent-started runs through the same project host.
+
+This bridge uses Tern's callable exports and local IPC. It does not claim WebSocket
+MCP or automatic attachment to other agent harnesses. `make test-project` exercises
+actual Carly Lua exports against native Elide and verifies visible results and retry
+deduplication without invoking a model.

@@ -7,6 +7,7 @@ import re
 import subprocess
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from urllib.request import build_opener, ProxyHandler
 
@@ -18,7 +19,9 @@ args = parser.parse_args()
 config_path = root / 'plugin/config.json'
 config = json.loads(config_path.read_text()) if config_path.exists() else {}
 def configured(name, override):
-    value = override or config.get(name)
+    if override:
+        return str(Path(override).resolve())
+    value = config.get(name)
     assert value, f'Pass --{name} or configure plugin/config.json'
     path = Path(value)
     return str((path if path.is_absolute() else root / 'plugin' / path).resolve())
@@ -96,6 +99,20 @@ with tempfile.TemporaryDirectory(prefix='tp-', dir='/tmp') as temporary:
             wait(lambda: 'Passed' in tree('[data-role="run-status"]'))
             assert str(project.resolve()) in tree('[data-role="subject"]')
             assert ctl('state')['focused']['cwd'] == str(project.resolve())
+            ctl('carly', 'lua', 'project_binding = await(plugins.elide.project_open(' + json.dumps(str(project.resolve()), ensure_ascii=False) + ')); return await(plugins.elide.project_read(project_binding))')
+            wait(lambda: '"Passed"' in str(ctl('state').get('carly', {}).get('last_tool', '')))
+            print('PASS: built-in agent reads the same completed native test run')
+            command = str(uuid.uuid4())
+            ctl('carly', 'lua', 'agent_run = await(plugins.elide.test_run(project_binding, ".", ' + json.dumps(command) + ')); return "agent-started:" .. agent_run.run')
+            wait(lambda: 'agent-started:' in str(ctl('state').get('carly', {}).get('last_tool', '')))
+            wait(lambda: '2 · Passed' in tree('[data-role="project-runs"]'))
+            ctl('carly', 'lua', 'local repeated = await(plugins.elide.test_run(project_binding, ".", ' + json.dumps(command) + ')); assert(repeated.run == agent_run.run); return "agent-deduplicated"')
+            wait(lambda: 'agent-deduplicated' in str(ctl('state').get('carly', {}).get('last_tool', '')))
+            ctl('carly', 'lua', 'await(plugins.elide.project_close(project_binding)); return "agent-detached"')
+            wait(lambda: 'agent-detached' in str(ctl('state').get('carly', {}).get('last_tool', '')))
+            ctl('carly', 'lua', 'local ok = pcall(function() return await(plugins.elide.test_run(project_binding, ".", ' + json.dumps(str(uuid.uuid4())) + ')) end); assert(not ok); return "agent-revoked"')
+            wait(lambda: 'agent-revoked' in str(ctl('state').get('carly', {}).get('last_tool', '')))
+            print('PASS: built-in agent launches a native-visible run, retries without duplication, and detaches')
             ctl('key', 'ctrl+c')
             wait(lambda: not ctl('tree', '.sf-dock').get('nodes'))
             menu()
