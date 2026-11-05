@@ -2,6 +2,14 @@
 
 Status: proposed architecture and implementation plan, audited 2026-11-05.
 
+Implementation checkpoint, 2026-11-05: the initial shared Rust project/test host and
+native view attachments are implemented (`elide` `ac613061b`, plugin `c4bc13a`).
+Two real Tern views have been tested against the native runtime for shared results,
+detach/reconnect, launch deduplication and cancellation. Carly's project/test exports
+are the first agent bridge. Configuration remains explicitly `discovered`; canonical
+workspace resolution, the event journal, WebSocket MCP, native document providers and
+the subsequent inspection milestones below are not yet implemented by this slice.
+
 This is the requested root-level working plan. It describes work in **Elide**, **elide-tern**, and **Tern / tern-sdk**.
 It does not claim that proposed interfaces already exist. Registry, distribution CI, and product documentation are
 separate workstreams; this plan supplies their eventual compatibility requirements.

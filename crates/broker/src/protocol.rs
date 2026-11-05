@@ -14,6 +14,9 @@ pub enum Request {
     #[serde(default)]
     after: Option<String>,
   },
+  ProjectSummary {
+    binding: elide_project_session::Binding,
+  },
   ProjectDetach {
     binding: elide_project_session::Binding,
   },
