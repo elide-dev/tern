@@ -1,0 +1,6 @@
+schema = 1
+id = "elide"
+name = "Elide"
+version = "0.1.0"
+description = "Embedded polyglot runtime sessions for Tern."
+window = "window.luau"

@@ -1,0 +1,12 @@
+{
+  "repository": "https://github.com/elide-dev/studio",
+  "revision": "68657fe0f1942a40bf6fd901af3b0a34a439f309",
+  "path": "crates/studio-embed",
+  "sha256": {
+    "Cargo.toml": "63ca967dbff9157103380d1576e9f8f3068daad25700c9f15fdef3426e89c0dc",
+    "src/lib.rs": "2cc51d0d015eedf1bbe18d8ae147da3454a3e07ef14125eec77a382277d59823",
+    "src/abi.rs": "313b674316082d7528054973fb3c18dfe3806fd75812bd8583286a14e1e272f0",
+    "src/main.rs": "bcdc174e85dd26e48c9232dab5ffd4b4e36f8389ff52bab6713ab34fbb1e8186",
+    "src/embedding_capnp.rs": "a49095519ff93198a46f5605211a93db40f08a51926087fbb675ca584ed31198"
+  }
+}

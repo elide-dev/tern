@@ -1,0 +1,5 @@
+/target/
+/dist/
+/.dev/
+plugin/tern.d.luau
+plugin/config.json
