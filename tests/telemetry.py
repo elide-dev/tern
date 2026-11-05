@@ -49,6 +49,8 @@ with tempfile.TemporaryDirectory(prefix='otlp-', dir='/tmp') as temporary:
     script = state / 'server.mjs'
     script.write_text('''import { trace } from "@opentelemetry/api";
 const tracer = trace.getTracer("inspection-test");
+const session = crypto.randomUUID();
+let requests = 0;
 Elide.serve({port: 0, hostname: "127.0.0.1", fetch(request) {
   return tracer.startActiveSpan("handler", span => {
     span.setAttribute("answer", 42);
@@ -56,7 +58,7 @@ Elide.serve({port: 0, hostname: "127.0.0.1", fetch(request) {
     const failed = new URL(request.url).pathname === "/fail";
     if (failed) span.setStatus({code: 2, message: "test failure"});
     span.end();
-    return new Response("traced", {status: failed ? 500 : 200});
+    return new Response("traced", {status: failed ? 500 : 200, headers: {"x-session": session, "x-requests": String(++requests)}});
   });
 }});
 ''')
@@ -79,11 +81,17 @@ Elide.serve({port: 0, hostname: "127.0.0.1", fetch(request) {
         def address():
             match = re.search(r'http://127\.0\.0\.1:\d+', tree('[data-role="address"]'))
             return match.group() if match else None
+        sessions = set()
+        counts = []
         def request(url, suffix, number):
             trace_id = f'{number:032x}'
             req = Request(url + suffix, headers={'traceparent': f'00-{trace_id}-0000000000000001-01'})
             try:
-                with http.open(req, timeout=10) as response: assert response.read() == b'traced'
+                with http.open(req, timeout=10) as response:
+                    assert response.read() == b'traced'
+                    if not args.static:
+                        sessions.add(response.headers['x-session'])
+                        counts.append(int(response.headers['x-requests']))
             except HTTPError as error: assert suffix == '/fail' and error.code == (404 if args.static else 500)
             return trace_id
         def remote_has(trace_id):
@@ -104,12 +112,8 @@ Elide.serve({port: 0, hostname: "127.0.0.1", fetch(request) {
                             str(Path(args.runtime).resolve()), str(state if args.static else script)])
             ctl('run', shlex.join(command))
             wait(lambda: address() is not None)
-            before = address()
-            ctl('click', '[data-role="traces-start"]')
-            wait(lambda: 'Make a request' in tree())
-            ctl('click', '[data-role="traces-toggle"]')
-            wait(lambda: (value := address()) is not None and value != before)
             url = address()
+            assert not nodes('[data-role="traces-start"]'), 'Tracing must not require restarting'
             success = request(url, '/', 10)
             failure = request(url, '/fail', 11)
             ctl('click', '[data-role="traces-toggle"]')
@@ -124,16 +128,41 @@ Elide.serve({port: 0, hostname: "127.0.0.1", fetch(request) {
             ctl('click', '[data-role="span"]')
             wait(lambda: bool(nodes('.sf-json')))
             ctl('shot', 'static-trace' if args.static else 'trace-waterfall')
+            ctl('appearance', 'dark')
+            ctl('shot', 'static-trace-dark' if args.static else 'trace-waterfall-dark')
+            ctl('appearance', 'light')
             (out / 'trace-tree.json').write_text(tree())
-            ctl('click', '[data-role="traces-detach"]')
-            wait(lambda: bool(nodes('[data-role="traces-start"]')))
-            assert address() == url, 'Detaching restarted the server'
-            after = request(url, '/', 12)
-            if not args.local_only: wait(lambda: remote_has(after))
-            assert 'Traces' not in tree()
+            ctl('click', '[data-role="traces-errors"]')
+            wait(lambda: len(nodes('[data-role="trace"]')) == 1)
+            ctl('click', '[data-role="traces-errors"]')
+            wait(lambda: len(nodes('[data-role="trace"]')) == 2)
+            for cycle in range(2):
+                ctl('click', '[data-role="traces-pause"]')
+                wait(lambda: 'Capture paused' in tree('[data-role="capture-status"]'))
+                time.sleep(.2)
+                retained = len(nodes('[data-role="trace"]'))
+                paused = request(url, '/', 12 + cycle * 2)
+                if not args.local_only: wait(lambda: remote_has(paused))
+                else: time.sleep(1)
+                assert len(nodes('[data-role="trace"]')) == retained, 'Paused capture retained new traces'
+                assert address() == url, 'Pausing restarted the server'
+                ctl('click', '[data-role="traces-pause"]')
+                wait(lambda: 'Live capture' in tree('[data-role="capture-status"]'))
+                time.sleep(.2)
+                resumed = request(url, '/', 13 + cycle * 2)
+                wait(lambda: len(nodes('[data-role="trace"]')) == retained + 1)
+                if not args.local_only: wait(lambda: remote_has(resumed))
+                assert address() == url, 'Resuming restarted the server'
+            if not args.static:
+                assert len(sessions) == 1, 'Runtime process was replaced'
+                assert counts == sorted(set(counts)), 'Runtime state was reset'
+            ctl('click', '[data-role="traces-clear"]')
+            wait(lambda: len(nodes('[data-role="trace"]')) == 0)
+            request(url, '/', 20)
+            wait(lambda: len(nodes('[data-role="trace"]')) == 1)
             ctl('key', 'ctrl+c')
             wait(lambda: stopped(url))
-            print('PASS:', 'static' if args.static else 'runtime', 'OTLP traces, waterfall, remote fanout, detach, teardown')
+            print('PASS:', 'static' if args.static else 'runtime', 'OTLP traces, waterfall, remote fanout, live pause/resume, clear, uninterrupted runtime, teardown')
         except Exception:
             (out / 'failure-tree.json').write_text(tree())
             ctl('shot', 'failure')

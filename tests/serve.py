@@ -55,7 +55,7 @@ with tempfile.TemporaryDirectory(prefix='serve-', dir='/tmp') as temporary:
             try: urlopen(url + '/missing', timeout=10)
             except HTTPError as error: assert error.code == 404
             else: raise AssertionError('Missing path was successful')
-            wait(lambda: '404' in tree() and '200' in tree())
+            wait(lambda: '404' in tree('[data-role="request"]') and '200' in tree('[data-role="request"]'))
             ctl('click', '[data-role="request"]')
             wait(lambda: 'duration_ms' in tree('.sf-json'))
             ctl('shot', 'server-requests')
@@ -79,7 +79,7 @@ with tempfile.TemporaryDirectory(prefix='serve-', dir='/tmp') as temporary:
                 assert urlopen(url, timeout=10).read() == b'runtime works'
                 try: urlopen(url + '/fail', timeout=10)
                 except HTTPError as error: assert error.code == 500
-                wait(lambda: '500' in tree())
+                wait(lambda: '500' in tree('[data-role="request"]'))
                 ctl('shot', 'runtime-requests')
                 ctl('click', '[data-role="restart"]')
                 wait(lambda: (current := address()) is not None and current != url)
