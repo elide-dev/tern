@@ -72,8 +72,27 @@ The dashboard provides actual bound URLs, observed request status/latency, click
 request details, bounded logs, stop and restart. Closing it stops the supervised
 server process group. Runtime readiness/request events currently require
 `Elide.serve`; other APIs, including `node:http`, expose process controls and logs
-without guessed readiness or request data. OTLP traces are a separate follow-up.
+without guessed readiness or request data. Local OTLP trace inspection is described below.
 
 `make test-serve RUNTIME=/path/to/elide` exercises static and runtime HTTP requests,
 failures, restart and teardown in an isolated Tern renderer. Without `RUNTIME`, it
 runs the static serving checks.
+
+### Trace inspection
+
+In the serving dashboard, **Restart with tracing** enables a local, authenticated
+OTLP receiver and starts a fresh server run. **Traces** shows request groups,
+span timing, attributes and correlated logs. Click a trace, then a span for details.
+**Server** returns to the serving dashboard; **Detach tracing** releases local
+collection while leaving the server and existing remote exporters running.
+Reattaching requires restarting the server.
+
+The receiver accepts OTLP/HTTP protobuf and JSON (including gzip), with a 2 MiB
+payload limit. Retention is bounded to 512 records, 4 MiB, and five minutes;
+eviction, rejection and truncation are visible. Metrics, profiles and gRPC ingestion
+are not included yet. Static server spans measure handler work through response
+construction, not network delivery.
+
+`make test-telemetry RUNTIME=/path/to/elide` checks real nested runtime spans,
+correlated logs, trace rendering, preservation of a second exporter, detach and
+teardown. `python3 tests/telemetry.py --static` checks the static server path.
