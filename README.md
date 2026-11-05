@@ -80,12 +80,12 @@ runs the static serving checks.
 
 ### Trace inspection
 
-In the serving dashboard, **Restart with tracing** enables a local, authenticated
-OTLP receiver and starts a fresh server run. **Traces** shows request groups,
-span timing, attributes and correlated logs. Click a trace, then a span for details.
-**Server** returns to the serving dashboard; **Detach tracing** releases local
-collection while leaving the server and existing remote exporters running.
-Reattaching requires restarting the server.
+Local capture starts with the server. **Traces** opens a compact trace list beside
+the selected request's waterfall and browsable span details. The server URL and
+status stay visible. **Errors** filters failures; **Requests** returns to request history.
+**Pause capture**, **Resume capture**, and **Clear traces** work live without
+restarting the server or changing its application state or remote exporters.
+Pausing retains the existing bounded history; closing the session releases the receiver.
 
 The receiver accepts OTLP/HTTP protobuf and JSON (including gzip), with a 2 MiB
 payload limit. Retention is bounded to 512 records, 4 MiB, and five minutes;
@@ -94,5 +94,5 @@ are not included yet. Static server spans measure handler work through response
 construction, not network delivery.
 
 `make test-telemetry RUNTIME=/path/to/elide` checks real nested runtime spans,
-correlated logs, trace rendering, preservation of a second exporter, detach and
-teardown. `python3 tests/telemetry.py --static` checks the static server path.
+correlated logs, trace rendering, preservation of a second exporter, repeated live pause/resume, clear, runtime state
+continuity and teardown. `python3 tests/telemetry.py --static` checks the static server path.
