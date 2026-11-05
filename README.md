@@ -96,3 +96,12 @@ construction, not network delivery.
 `make test-telemetry RUNTIME=/path/to/elide` checks real nested runtime spans,
 correlated logs, trace rendering, preservation of a second exporter, repeated live pause/resume, clear, runtime state
 continuity and teardown. `python3 tests/telemetry.py --static` checks the static server path.
+
+### Tests
+
+Build the native test host with `make testing`, then choose **Run tests** in Tern.
+Enter a project directory or test file. The surface provides live results, failure
+filtering, original diagnostics, per-test output, source links, rerun and cancel.
+It uses `config.runtime`; `config.test` optionally overrides the launcher path.
+Raw reports are saved under the target directory's `.dev/reports/tests/tern/`.
+Run the real Tern integration test with `make test-testing RUNTIME=/path/to/elide`.

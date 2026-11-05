@@ -89,3 +89,42 @@ tern.command({
       end)
   end,
 })
+
+tern.command({
+  id = "test",
+  title = "Run tests",
+  run = function(cx)
+    if cx.hosts:current().kind ~= "local" then
+      cx:toast("error", "Configure a test launcher on this host before running tests remotely.")
+      return
+    end
+    local ok, config = pcall(function()
+      return tern.json.decode(tern.fs.read(tern.plugin.dir .. "/config.json"))
+    end)
+    if not ok or type(config) ~= "table" then
+      cx:toast("error", "Configure plugin/config.json before running tests.")
+      return
+    end
+    cx:prompt({ placeholder = "Project directory or test file", value = ".", icon = "play", action = "test" })
+      :next(function(subject, err, current)
+        if not current or not subject or subject == "" then
+          return
+        end
+        if err then
+          current:toast("error", err)
+          return
+        end
+        local launcher = config.test or "../dist/elide-tern-test"
+        if string.sub(launcher, 1, 1) ~= "/" then
+          launcher = tern.plugin.dir .. "/" .. launcher
+        end
+        local runtime = config.runtime or "elide"
+        if string.find(runtime, "/") and string.sub(runtime, 1, 1) ~= "/" then
+          runtime = tern.plugin.dir .. "/" .. runtime
+        end
+        current.hosts:terminal("local", {
+          command = "exec " .. quote(launcher) .. " " .. quote(runtime) .. " " .. quote(subject),
+        })
+      end)
+  end,
+})
