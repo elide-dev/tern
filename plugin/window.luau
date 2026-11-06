@@ -29,6 +29,23 @@ local function local_host(cx)
   return false
 end
 
+local function runtime_path(config)
+  local runtime = config.runtime or "elide"
+  if string.find(runtime, "/") and string.sub(runtime, 1, 1) ~= "/" then
+    runtime = path(runtime)
+  end
+  return runtime
+end
+
+-- The argv prefix that hosts a native surface: an explicit per-surface launcher from
+-- config, or the runtime's own `elide tern <kind>` host.
+local function launcher(config, kind)
+  if type(config[kind]) == "string" then
+    return { path(config[kind]) }
+  end
+  return { runtime_path(config), "tern", kind }
+end
+
 require("./lib/agents").install(configuration, path, project)
 
 local function terminal(cx, argv, cwd, target)
@@ -67,13 +84,12 @@ local function launch(cx, language, context, target)
     state = config.state and (config.state .. "-" .. context.session_key)
       or (tern.plugin.data .. "/p/" .. context.session_key)
   end
-  return terminal(cx, {
-    path(config.repl or "../dist/elide-tern-repl"),
-    path(config.broker or "../dist/elide-tern-broker"),
-    path(config.sdk),
-    state,
-    language,
-  }, context and context.root, target)
+  local argv = launcher(config, "repl")
+  table.insert(argv, path(config.broker or "../dist/elide-tern-broker"))
+  table.insert(argv, path(config.sdk))
+  table.insert(argv, state)
+  table.insert(argv, language)
+  return terminal(cx, argv, context and context.root, target)
 end
 
 local function launch_job(cx, kind, subject, cwd, target)
@@ -84,21 +100,25 @@ local function launch_job(cx, kind, subject, cwd, target)
   if not config then
     return
   end
-  local runtime = config.runtime or "elide"
-  if string.find(runtime, "/") and string.sub(runtime, 1, 1) ~= "/" then
-    runtime = path(runtime)
-  end
+  local runtime = runtime_path(config)
   if kind == "test" and cwd then
-    return terminal(cx, {
-      path(config.project or "../dist/elide-tern-project"),
-      path(config.broker or "../dist/elide-tern-broker"),
-      config.project_state or (config.state and (config.state .. "-projects")) or (tern.plugin.data .. "/projects"),
-      runtime,
-      cwd,
-      subject,
-    }, cwd, target)
+    local argv = launcher(config, "project")
+    table.insert(argv, path(config.broker or "../dist/elide-tern-broker"))
+    table.insert(
+      argv,
+      config.project_state or (config.state and (config.state .. "-projects")) or (tern.plugin.data .. "/projects")
+    )
+    table.insert(argv, runtime)
+    table.insert(argv, cwd)
+    if subject then
+      table.insert(argv, subject)
+    end
+    return terminal(cx, argv, cwd, target)
   else
-    return terminal(cx, { path(config[kind] or ("../dist/elide-tern-" .. kind)), runtime, subject }, cwd, target)
+    local argv = launcher(config, kind)
+    table.insert(argv, runtime)
+    table.insert(argv, subject)
+    return terminal(cx, argv, cwd, target)
   end
 end
 
@@ -110,17 +130,15 @@ local function launch_debug(cx, context, target)
   if not config then
     return
   end
-  local runtime = config.runtime or "elide"
-  if string.find(runtime, "/") and string.sub(runtime, 1, 1) ~= "/" then
-    runtime = path(runtime)
-  end
-  local argv = {
-    path(config.debug or "../dist/elide-tern-debug"),
-    path(config.broker or "../dist/elide-tern-broker"),
-    config.project_state or (config.state and (config.state .. "-projects")) or (tern.plugin.data .. "/projects"),
-    runtime,
-    context.root,
-  }
+  local runtime = runtime_path(config)
+  local argv = launcher(config, "debug")
+  table.insert(argv, path(config.broker or "../dist/elide-tern-broker"))
+  table.insert(
+    argv,
+    config.project_state or (config.state and (config.state .. "-projects")) or (tern.plugin.data .. "/projects")
+  )
+  table.insert(argv, runtime)
+  table.insert(argv, context.root)
   local pane = target or cx.session:focused()
   local read = pane and cx.session:read(pane, { lines = 1, max_chars = 1 })
   if type(read) == "table" and type(read.path) == "string" then
@@ -152,11 +170,7 @@ local function runtime_action(cx, context, command, target)
   if not config then
     return
   end
-  local runtime = config.runtime or "elide"
-  if string.find(runtime, "/") and string.sub(runtime, 1, 1) ~= "/" then
-    runtime = path(runtime)
-  end
-  return terminal(cx, { runtime, command }, context.root, target)
+  return terminal(cx, { runtime_path(config), command }, context.root, target)
 end
 
 workspace.install({

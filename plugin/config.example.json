@@ -1,6 +1,6 @@
 {
   "sdk": "/absolute/path/to/extracted/elide-embed",
   "broker": "../dist/elide-tern-broker",
-  "serve": "../dist/elide-tern-serve",
-  "runtime": "elide"
+  "runtime": "elide",
+  "_comment": "Surfaces launch as `<runtime> tern <repl|serve|test|project|debug>`. Set `repl`, `serve`, `test`, `project` or `debug` to an explicit launcher executable (for example `../dist/elide-tern-test`) to override one surface during development."
 }
