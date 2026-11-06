@@ -196,6 +196,25 @@ and verifies native tab launches, REPL, serving, and tests in that existing proj
 `make test-coverage RUNTIME=/path/to/elide` exercises coverage, native source/line
 navigation, editing, reruns and paged agent reads in an isolated desktop window.
 
+### Terminal integration
+
+Inside a detected project, tabs take the project's name (names you give a tab win)
+and the status bar shows the project, **Workspace**, and how the pane's last
+`elide test`, `build` or `run` ended. Click the project segment for the project menu.
+A failing `elide test` typed in a terminal toasts "Tests failed". Choosing `elide.pkl`
+from the palette opens that project's workspace.
+
+`elide build` in a Tern terminal shows compile errors as diagnostic cards linked to
+their source, and `elide test --reporter=tap` shows a pass/fail summary with a table of
+results. Both fall back to the raw output when nothing parses or the output is very large.
+
+`elide://source`, `elide://debug` and `elide://tests` links open a source line, the
+debugger or project test runs. Elide prints them; any program can, as OSC 8 hyperlinks.
+Links that leave their project root are ignored. See
+[the contract](docs/architecture.md#elide-links). Run `lua tests/links.lua` for the
+parser's unit tests and `python3 tests/integration.py --runtime /path/to/elide` for the
+lenses, links and status line in an isolated window.
+
 ### Built-in agent project tools
 
 Carly receives a cached project hint and asynchronous exports:

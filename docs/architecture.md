@@ -64,6 +64,81 @@ exits after two minutes without clients. The native host closes sessions on exit
 crash. Runtime handles are not persisted; a new process starts new kernels.
 History is stored by the shared REPL in SQLite; drafts live in the frontend.
 
+## Window integration points
+
+The window half also plugs into Tern's chrome, events and routes. None of these
+handlers start a process: formatters have a 4 ms budget and event and route handlers
+50 ms, so they read only state the asynchronous project probe already cached.
+
+- **Chrome.** `tern.chrome.tab_title` names a tab after the detected project of its
+  focused pane, unless the user named the tab. `tern.chrome.program_icon("elide",
+  "bolt")` gives `elide` panes their own icon. The status segment opens the project
+  menu on click (`plugin.elide.project`) and is followed by the last `elide test`,
+  `build` or `run` outcome in that pane.
+- **Events.** `command_finished` recognises `elide test|build|run` lines (leading
+  `VAR=value` words skipped, quoting not interpreted), records the outcome and calls
+  `tern.chrome.refresh()`. A failing `elide test` (status 1 to 127) toasts "Tests
+  failed" with the subject words, or the pane's directory when there are none;
+  statuses from 128 up are interrupts and stay quiet.
+- **Opens.** The workspace route redirects `files` and `palette` opens inside a
+  workspace tab into its editor. Outside a workspace, `elide.pkl` chosen from the
+  palette opens that project's workspace, or focuses the one already open.
+- **Lenses.** The host half adds `build` (`elide build`, `elide build *`) and `tap`
+  (`elide test --reporter=tap*`, `elide test * --reporter=tap*`) beside `json`. Each
+  keeps at most 20,000 lines and 4 MiB and falls back to raw output beyond that. `build`
+  reads the builder's `error: …` / `In file: path:line:col` / numbered excerpt form and
+  compilers' one-line `path:line[:col]: severity: message` form into
+  `tern.ui.diagnostic` cards (200 at most, then "… N more"); with no diagnostic it
+  shows raw output. `tap` shows `tern.ui.test_summary` and a table of top-level `ok` /
+  `not ok` lines (5,000 rows at most) with each failure's YAML `message`.
+
+### `elide://` links
+
+`tern.route.link` claims every `elide://` URL, whether it is an OSC 8 hyperlink in a
+terminal, an `href` in a surface, or a URL opened through `cx:open`. This is the
+contract Elide emits against:
+
+| URL | Effect |
+| --- | --- |
+| `elide://source?path=<abs>[&root=<abs>][&line=<n>[&col=<n>]]` | Opens the file in Tern's editor at `line`. |
+| `elide://debug?root=<abs>&path=<abs>[&line=<n>]` | Launches the project debugger for `root` with `path` as its source. |
+| `elide://tests?root=<abs>` | Opens the project's test runs for `root`. |
+
+Rules, implemented by the pure parser `plugin/lib/links.luau` (unit-tested by
+`lua tests/links.lua`) and checked by the window route:
+
+- Keys and values are percent-decoded (`%20`, `%CE%BB`). `+` is a literal plus, so
+  encode spaces as `%20`. Unknown keys are ignored; a repeated known key, a malformed
+  escape or a decoded control character rejects the URL. Fragments are not allowed.
+- `root` and `path` must be absolute with no empty, `.` or `..` segments (a trailing
+  slash is dropped), and `root` cannot be `/`. `line` and `col` are positive integers;
+  `col` needs `line`.
+- Paths are compared as written, so emit canonical (symlink-resolved) paths, as the
+  project probe reports roots: `/tmp/x` does not match a root at `/private/tmp/x`.
+- `path` must lie strictly inside `root`. A `root` must contain `elide.pkl`. Without
+  `root` (`source` only), `path` must lie inside a project this window already
+  detected. The linked file must exist. Links act on local hosts only.
+- A rejected `elide://` URL is claimed and dropped with an info toast, so it never
+  reaches the system's URL handlers; every other scheme returns `nil` to the next route.
+- Limits of this version: `col` is validated but not applied (`cx.docs:open` takes a
+  line only), `debug`'s `line` is validated but not applied (the debug launcher takes
+  no breakpoint), and confinement is lexical: `tern.fs` cannot resolve symlinks, so a
+  symlink inside the project that points outside it is followed.
+
+`python3 tests/integration.py --runtime /path/to/elide` drives the lenses, links (through
+`tern ctl open-url`, the path the system takes), chrome and `command_finished` in an isolated
+desktop window. Plugin lenses need the daemon-backed window; the in-process `tern serve`
+harness shows built-in lenses only.
+
+### Why workspaces don't use `cx.layout:tab`
+
+`cx.layout:tab(spec)` builds a tab in one call, but its leaves launch only a shell,
+a command or a plugin block. The workspace's editor is a `cx.docs` document and its
+toolbar an owner-tagged `cx.canvas` panel; neither is a launch. Building the tab with
+`layout:tab` would still need `cx.docs:open` and `cx.canvas:open` afterwards, aimed at
+panes the spec created, which is longer than the current sequence of opens and splits
+and gives the same result. The workspace keeps the incremental calls.
+
 ## Service ownership
 
 - REPL: one session with one persistent polyglot notebook kernel. The shared

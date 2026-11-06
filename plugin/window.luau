@@ -1,3 +1,4 @@
+local links = require("./lib/links")
 local project = require("./lib/project")
 local workspace = require("./lib/workspace")
 
@@ -176,7 +177,11 @@ local function launch_job(cx, kind, subject, cwd, target, opened)
   end
 end
 
-local function launch_debug(cx, context, target, opened)
+local DEBUGGABLE = { js = true, mjs = true, cjs = true, ts = true, mts = true, cts = true, py = true }
+
+-- Launches the debugger for `context.root`; `source` names the file to debug, else the
+-- focused file block's file when it is debuggable.
+local function launch_debug(cx, context, target, opened, source)
   if not local_host(cx) or not context then
     return
   end
@@ -193,19 +198,20 @@ local function launch_debug(cx, context, target, opened)
   )
   table.insert(argv, runtime)
   table.insert(argv, context.root)
+  if source then
+    if not DEBUGGABLE[string.match(source, "%.([%w]+)$") or ""] then
+      cx:toast("info", "Debugging takes JavaScript, TypeScript or Python sources.", source)
+      return
+    end
+    table.insert(argv, source)
+    return host(cx, config, "debug", argv, function(current, command)
+      return terminal(current, command, context.root, target)
+    end, opened)
+  end
   local pane = target or cx.session:focused()
   local read = pane and cx.session:read(pane, { lines = 1, max_chars = 1 })
   if type(read) == "table" and type(read.path) == "string" then
-    local extension = string.match(read.path, "%.([%w]+)$")
-    if
-      extension == "js"
-      or extension == "mjs"
-      or extension == "cjs"
-      or extension == "ts"
-      or extension == "mts"
-      or extension == "cts"
-      or extension == "py"
-    then
+    if DEBUGGABLE[string.match(read.path, "%.([%w]+)$") or ""] then
       if read.dirty then
         cx:toast("info", "Save this file before debugging.")
         return
@@ -408,6 +414,122 @@ tern.command({
   end,
 })
 tern.chrome.status(project.status)
+tern.chrome.tab_title(project.tab_title)
+if tern.chrome.program_icon then
+  tern.chrome.program_icon("elide", "bolt")
+end
+
+-- `elide test|build|run …` as a shell reported it: the subcommand and its subject words.
+-- Leading `VAR=value` assignments are skipped; quoting is not interpreted.
+local function elide_command(line)
+  local words = {}
+  for word in string.gmatch(line, "%S+") do
+    table.insert(words, word)
+  end
+  local index = 1
+  while words[index] and string.find(words[index], "^[%a_][%w_]*=") do
+    index += 1
+  end
+  local program = words[index] and string.match(words[index], "([^/]+)$")
+  if program ~= "elide" then
+    return nil
+  end
+  local command, subject = nil, {}
+  for position = index + 1, #words do
+    local word = words[position]
+    if string.sub(word, 1, 1) ~= "-" then
+      if command then
+        table.insert(subject, word)
+      else
+        command = word
+      end
+    end
+  end
+  if command ~= "test" and command ~= "build" and command ~= "run" then
+    return nil
+  end
+  return command, if #subject > 0 then table.concat(subject, " ") else nil
+end
+
+-- No process starts here: window event handlers share a 50 ms budget.
+tern.on("command_finished", function(ev, cx)
+  local command, subject = elide_command(ev.line)
+  if not command then
+    return
+  end
+  project.finished(ev.pane, command, ev.status)
+  tern.chrome.refresh()
+  -- Statuses from 128 up are signals (an interrupt), not failing tests.
+  if command == "test" and ev.status ~= 0 and ev.status < 128 then
+    if not subject then
+      local pane = cx.session:pane(ev.pane)
+      subject = pane and pane.cwd ~= "" and pane.cwd or nil
+    end
+    cx:toast("error", "Tests failed", subject)
+  end
+end)
+
+-- `elide://` links (contract in docs/architecture.md). Every elide:// link is claimed, so a
+-- rejected one is dropped with a toast instead of reaching the system's URL handlers.
+tern.route.link(function(request, cx)
+  if string.lower(string.sub(request.url, 1, 8)) ~= "elide://" then
+    return nil
+  end
+  local target = links.parse(request.url)
+  local problem
+  if not target then
+    problem = "Ignored a malformed elide:// link."
+  elseif cx.hosts:current().kind ~= "local" then
+    problem = "elide:// links open on local hosts only."
+  elseif target.root then
+    if not tern.fs.exists(target.root .. "/elide.pkl") then
+      problem = "Ignored an elide:// link whose root has no elide.pkl."
+    end
+  else
+    local inside = false
+    for _, root in project.roots() do
+      if links.within(target.path, root) then
+        inside = true
+        break
+      end
+    end
+    if not inside then
+      problem = "Ignored an elide:// link outside a detected project."
+    end
+  end
+  if not problem and target.path and not tern.fs.exists(target.path) then
+    problem = "The linked file does not exist."
+  end
+  if problem then
+    cx:toast("info", problem, string.sub(request.url, 1, 240))
+    return { handled = true }
+  end
+  if target.action == "source" then
+    cx.docs:open(target.path, { line = target.line })
+  elseif target.action == "debug" then
+    launch_debug(cx, { root = target.root }, nil, nil, target.path)
+  elseif target.action == "tests" then
+    view_tests({ root = target.root }, cx)
+  end
+  return { handled = true }
+end)
+
+-- `elide.pkl` chosen from the palette opens its project workspace (or focuses the open one).
+-- Opens inside a workspace tab were already redirected to its editor by the workspace route.
+tern.route.open(function(request, cx)
+  if request.origin ~= "palette" or not string.find(request.path, "/elide%.pkl$") then
+    return nil
+  end
+  local host = cx.hosts:current()
+  if host.kind ~= "local" or (request.host ~= "local" and request.host ~= host.name) then
+    return nil
+  end
+  if not configuration() then
+    return nil
+  end
+  detect(cx, workspace.open, { pane = -1, path = string.match(request.path, "^(.*)/[^/]*$") })
+  return { handled = true }
+end)
 tern.on("window_start", function(cx)
   detect(cx)
 end)
