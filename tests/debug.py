@@ -141,6 +141,17 @@ test("a debugged test", () => {
             ctl('type', text)
             wait(lambda: text_is(selector, text))
 
+        def choose_target(text):
+            # The target picker where the surface has one, else the typed target field.
+            if not ctl('tree', '[data-role="debug-choose"]').get('nodes'):
+                return input_text('debug-target', text)
+            click('[data-role="debug-choose"]')
+            wait(lambda: ctl('tree', '[data-role="debug-targets"]').get('nodes'))
+            ctl('type', text)
+            wait(lambda: text in tree('[data-role="debug-targets"] .pk-row.sel'))
+            click('[data-role="debug-targets"] .pk-btn[data-v="choose"]')
+            wait(lambda: text_is('[data-role="debug-target"]', text))
+
         def carly(code, marker):
             ctl('carly', 'lua', code + '; return ' + json.dumps(marker))
             wait(lambda: marker in json.dumps(ctl('state').get('carly', {}).get('last_tool', {})))
@@ -173,7 +184,7 @@ test("a debugged test", () => {
             click('[data-role="project-debug"]')
             wait(lambda: ctl('tree', '[data-role="debug-target"]').get('nodes'))
             binding = broker('project_attach', root=str(project.resolve()), runtime=str(runtime))
-            input_text('debug-target', 'main.mjs')
+            choose_target('main.mjs')
             breakpoint('main.mjs', 4)
             click('[data-role="debug-launch-button"]')
             entry = wait(lambda: stopped())
@@ -201,10 +212,18 @@ test("a debugged test", () => {
             click('[data-role="debug-read-values"]')
             wait(lambda: debug()['debug']['selected_reference'] == payload_reference and 'answer' in tree('[data-role="debug-variables"]'))
             click('[data-role="debug-source"]', 'meta')
-            ctl('file', 'wait')
-            wait(lambda: any(block.get('path') and Path(block['path']).resolve() == javascript.resolve()
-                and block.get('caret') == [first['frames'][0]['line'], max(1, first['frames'][0]['column'])]
-                for block in ctl('state').get('file_blocks', [])))
+
+            def source_opened():
+                # A file block at the paused caret (file:// links), or the Elide source block
+                # (elide://source links) whose gutter marks the paused line with ▶.
+                line = first['frames'][0]['line']
+                if any(block.get('path') and Path(block['path']).resolve() == javascript.resolve()
+                       and block.get('caret') == [line, max(1, first['frames'][0]['column'])]
+                       for block in ctl('state').get('file_blocks', [])):
+                    return True
+                gutter = ctl('tree', "[data-surface='plugin.elide.source'] .sf-editor .sf-ed-gutter").get('nodes', [])
+                return any((node.get('text') or '').split()[:2] == [str(line), '▶'] for node in gutter)
+            wait(source_opened)
             (out / 'javascript-state.json').write_text(json.dumps(ctl('state'), indent=2, ensure_ascii=False))
             ctl('shot', 'debug-light')
             ctl('prefs', 'preview', 'dark-nord')
@@ -228,7 +247,7 @@ test("a debugged test", () => {
             wait(lambda: not target_processes())
             print('PASS: JavaScript breakpoint, scopes, explicit nested values, native source, stepping, shared agent control and stale-stop rejection')
 
-            input_text('debug-target', 'main.py')
+            choose_target('main.py')
             breakpoint('main.py', 4)
             click('[data-role="debug-launch-button"]')
             entry = wait(lambda: stopped())

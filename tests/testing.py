@@ -94,7 +94,8 @@ test("refreshes expired sessions", {skip: true}, () => {});
             wait(lambda: status('Cancelled'))
             wait(lambda: gone(running_pid))
             ctl('key', 'ctrl+c')
-            wait(lambda: not ctl('tree', '.sf-dock').get('nodes'))
+            # The dock leaves when the surface closes; the process exits a moment later.
+            wait(lambda: not ctl('tree', '.sf-dock').get('nodes') and not ctl('state')['focused']['busy'])
             ctl('run', shlex.join([runtime, 'test', str(script)]))
             wait(lambda: 'waiting for a service' in tree('[data-role="test-running"]'))
             running_pid, host_pid = child()
