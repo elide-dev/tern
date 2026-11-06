@@ -62,6 +62,11 @@ local id = source.uuid(math.random)
 check("uuid shape", string.find(id, "^%x%x%x%x%x%x%x%x%-%x%x%x%x%-4%x%x%x%-[89ab]%x%x%x%-%x+$") ~= nil, true)
 check("uuid length", #id, 36)
 
+check("utf16be ascii", source.utf16be("A"), "\0A")
+check("utf16be astral", source.utf16be("😀"), "\216\061\222\000")
+check("comment js", source.comment("/p/a.ts"), "//")
+check("comment py", source.comment("/p/a.py"), "#")
+
 -- Buffer: UTF-16 positions, edits, undo, line maps.
 local buffer = dofile(here .. "/../plugin/lib/buffer.luau")
 local function key(name, extra)
