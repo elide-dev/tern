@@ -164,7 +164,7 @@ test("a debugged test", () => {
         def target_processes():
             rows = subprocess.check_output(['ps', '-axo', 'pid=,command='], text=True).splitlines()
             return [row for row in rows if row.strip().split(None, 1)[1].startswith(str(runtime) + ' ')
-                    and str(project.resolve()) in row]
+                    and '--debugger=dap' in row and str(project.resolve()) in row]
 
         try:
             wait(socket.exists)
@@ -177,6 +177,7 @@ test("a debugged test", () => {
             breakpoint('main.mjs', 4)
             click('[data-role="debug-launch-button"]')
             entry = wait(lambda: stopped())
+            assert target_processes(), 'Debug target process was not found'
             click('[data-role="debug-continue"]')
             first = wait(lambda: stopped(4, entry['stop_epoch']))
             wait(lambda: any(bp['verified'] and bp['line'] == 4 for bp in debug()['debug']['breakpoints']))
