@@ -44,10 +44,14 @@ with tempfile.TemporaryDirectory(prefix='tsp-', dir='/tmp') as state:
         def ready():
             wait(lambda: any(n.get('text') == 'Ready' for n in nodes('.sf-badge')))
 
-        def switch(index, label):
+        def switch(label):
             ctl('click', '.sf-select-btn')
             wait(lambda: len(nodes('.sf-select.open')) == 1)
-            assert len(nodes('.sf-select-opt svg')) >= 5, 'Native language icons missing'
+            options = nodes('.sf-select-opt')
+            assert len(nodes('.sf-select-opt svg')) == len(options), 'Native language icons missing'
+            for required in ['JavaScript', 'Python', 'CEL', 'Pkl']:
+                assert any(option.get('text', '').startswith(required) for option in options), required
+            index = next(i for i, option in enumerate(options, 1) if option.get('text', '').startswith(label))
             ctl('click', f'.sf-select-opt:nth-child({index})')
             wait(lambda: any(n.get('text') == label for n in nodes('.sf-select-v')))
             wait(lambda: not nodes('.sf-select.open'))
@@ -95,21 +99,21 @@ with tempfile.TemporaryDirectory(prefix='tsp-', dir='/tmp') as state:
             ctl('click', branches)
             wait(lambda: len(nodes('.sf-json .sf-tree-node')) != count)
             ctl('shot', 'notebook-javascript')
-            switch(2, 'Python')
+            switch('Python')
             evaluate('y.hi', '5')
             evaluate('y.hi = 9', None)
             evaluate('{"shared": y.hi, "items": [1, 2, 3]}', 'shared')
-            switch(1, 'JavaScript')
+            switch('JavaScript')
             evaluate('y.hi', '9')
             evaluate('null', 'null')
             evaluate('({get unsafe() { throw Error("getter ran"); }})', 'Accessor')
             ctl('type', 'y.hi + 1')
-            switch(4, 'CEL')
+            switch('CEL')
             evaluate('y.hi == 9', 'true')
-            switch(5, 'Pkl')
+            switch('Pkl')
             evaluate('name = "notebook"\ncount = 6 * 7', 'count')
             ctl('shot', 'notebook-polyglot')
-            switch(1, 'JavaScript')
+            switch('JavaScript')
             assert any('y.hi + 1' in n.get('text', '') for n in nodes('.sf-editor')), 'Draft was lost'
             ctl('key', 'Enter')
             wait(lambda: '10' in nodes('.sf-json')[-1].get('text', ''))
