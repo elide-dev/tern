@@ -81,7 +81,9 @@ launcher and SDK installation.
 `plugin/config.json` is ignored. The default broker is `../dist/elide-tern-broker`;
 keep `elide-tern-worker` beside it. Every native surface launches as
 `<runtime> tern <repl|serve|test|project|debug>`, so a runtime built from a branch with
-that command needs no separate launchers. The optional `repl`, `serve`, `test`,
+that command needs no separate launchers. The plugin probes each runtime path once with
+`tern --help` before its first launch and reports a runtime that lacks the command
+instead of letting an older runtime resolve `tern` as a project script. The optional `repl`, `serve`, `test`,
 `project` and `debug` settings name an explicit launcher executable for one surface,
 which the `dist/elide-tern-*` development shims built by `make link` provide. An optional `state` setting selects a short,
 private broker directory if Tern's plugin-data path exceeds Unix socket limits.
