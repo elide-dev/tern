@@ -143,6 +143,7 @@ test("a debugged test", () => {
 
         def choose_target(text):
             # The target picker where the surface has one, else the typed target field.
+            wait(lambda: ctl('tree', '[data-role="debug-choose"], .sf-input[data-role="debug-target"]').get('nodes'))
             if not ctl('tree', '[data-role="debug-choose"]').get('nodes'):
                 return input_text('debug-target', text)
             click('[data-role="debug-choose"]')
@@ -215,14 +216,21 @@ test("a debugged test", () => {
 
             def source_opened():
                 # A file block at the paused caret (file:// links), or the Elide source block
-                # (elide://source links) whose gutter marks the paused line with ▶.
+                # on main.mjs (elide://source links) with the paused line marked in its gutter.
                 line = first['frames'][0]['line']
                 if any(block.get('path') and Path(block['path']).resolve() == javascript.resolve()
                        and block.get('caret') == [line, max(1, first['frames'][0]['column'])]
                        for block in ctl('state').get('file_blocks', [])):
                     return True
-                gutter = ctl('tree', "[data-surface='plugin.elide.source'] .sf-editor .sf-ed-gutter").get('nodes', [])
-                return any((node.get('text') or '').split()[:2] == [str(line), '▶'] for node in gutter)
+                block = "[data-surface='plugin.elide.source']"
+                if 'main.mjs' not in json.dumps(ctl('tree', block), ensure_ascii=False):
+                    return False
+                gutter = block + ' .sf-editor .sf-ed-gutter'
+                # The stop sign when the Debug overlay is on, else the caret's accent line number.
+                return (any((node.get('text') or '').split()[:2] == [str(line), '▶']
+                            for node in ctl('tree', gutter).get('nodes', []))
+                        or any((node.get('text') or '').strip() == str(line)
+                               for node in ctl('tree', gutter + ' .sf-t-accent').get('nodes', [])))
             wait(source_opened)
             (out / 'javascript-state.json').write_text(json.dumps(ctl('state'), indent=2, ensure_ascii=False))
             ctl('shot', 'debug-light')
