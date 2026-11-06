@@ -57,6 +57,58 @@ Plugin changes:
    source navigation and measurement detail in native panels, without claiming
    those panels are editor gutters.
 
+## Work before native providers land
+
+The project service and inspection controllers can proceed independently of the
+host extension. Keep their source identities, immutable artifacts, operations and
+subscriptions outside the presentation layer. Existing TSP views and native source
+navigation consume those records now; a later native provider consumes the same
+records. Neither adapter owns another editable source buffer.
+
+| Workflow | Implement with current facilities | Requires new Tern facilities |
+| --- | --- | --- |
+| Coverage | Collection options, accurate JS/JVM artifacts, file/line/branch browser, native source reveal and rerun | Native gutter layers and continuous buffer freshness |
+| Debugging | Independent DAP controller, launch/control, breakpoint list, stacks/scopes/variables and source reveal | Native gutter toggles, execution markers and inline values |
+| Profiling | Native process profile pane; runtime source profiles and bounded inspection views | Source heat in native file buffers |
+| Diagnostics/LSP | Independent semantic workers, diagnostic sets and Problems view | Native completion/provider registration and live unsaved-buffer synchronization |
+| MCP/agents | Shared project operations, WebSocket binding, event/reconnect lifecycle, stdio bridge and existing Carly exports | Native service registration and hot attachment to supported agent harnesses |
+| Insight | Observer ownership, incremental collection, detach/control and observation views | Source-local annotations and editor selection hooks |
+
+Coverage panels initially describe the measured source snapshot, not continuously
+current editor contents. A source check on explicit navigation can identify a
+mismatch at that instant; polling or disk watchers cannot substitute for a native
+buffer revision/change stream. Preserve measured source for a read-only historical
+preview when current content differs or cannot be verified. Unknown compatibility
+stays unknown. Native editing and save continue through the existing document API;
+cross-client revision-safe edit transactions remain a separate host dependency.
+
+Recommended next commit sequence:
+
+1. **Coverage production:** preserve actual compiled/executed source identities,
+   expose JVM line/branch detail, and correct union/deduplication semantics. Test JS
+   and JVM fixtures, missing/incomplete measurements, and duplicate attempts.
+2. **Coverage workflow:** add typed collection options and bounded immutable
+   artifact reads to the shared project host; add a coverage browser and source
+   navigation to Tests. Validate collection, selection, editing and rerun in Tern.
+3. **Project events and MCP:** add bounded snapshot/cursor subscriptions and a real
+   WebSocket adapter over shared operations, with explicit reconnect/revocation and
+   job ownership. Exercise actual WebSocket clients independently of Carly exports.
+4. **Debug launch:** build the independent guest DAP controller and native Debug
+   view, including breakpoint editing, stop-scoped handles and control ownership.
+   Add a JVM adapter as a distinct capability.
+5. **Observation:** connect native process profiling, source-aware profile ingestion
+   and live Insight ownership to the same artifact/source model. Add semantic
+   Problems views as independent language-service capabilities become available.
+
+The public Tern SDK contains client libraries, Luau declarations and examples,
+not the native editor implementation. A host-provider implementation therefore
+needs Tern maintainer participation. [Draft SDK PR #264](https://github.com/stencil-hq/tern-sdk/pull/264)
+adds Rust/TypeScript typed support for already documented TSP editor properties:
+`highlight`, `nowrap`, `topline`, `followCursor`, `gutter` and `virt`. These support read-only inspection
+and historical-source previews; they do not decorate native file buffers. Keep
+the host API proposal in the upstream issue until its implementation contract is
+agreed, and never advertise unavailable methods through generated declarations.
+
 ## Proposed generic SDK contract
 
 These are API concepts, not callable names in the current SDK.
