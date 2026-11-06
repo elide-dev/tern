@@ -15,6 +15,14 @@ arguments are individually shell-quoted because this SDK field takes a command s
 Exercise this path against a desktop window with an isolated daemon (`make test-project`):
 the in-process `tern serve` harness can exceed the synchronous launch call's plugin budget.
 
+Project workspaces compose existing Tern primitives: `cx.docs:open` owns the file
+editor, `cx:open` reveals the project in Files, `cx.layout` owns adjustable splits,
+and an owner-tagged `cx.canvas` holds the action bar. The toolbar carries no test or
+document model. Its persisted pane references and explicit project root let actions
+survive plugin reloads without following an unrelated focused directory. Results
+use native TSP launchers beside the editor. Closing a workspace uses Tern's ordinary
+pane lifecycle; project-owned test runs retain their independent lifetime.
+
 Tern's process API captures a process result and closes stdin after writing. It is
 not an interactive native FFI or persistent pipe API. A short-lived request
 client lets Luau use the existing asynchronous process API while the broker owns
