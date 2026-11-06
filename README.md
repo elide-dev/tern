@@ -10,6 +10,12 @@ sessions share runs and debugger state between views and the built-in agent. SDK
 have broker plumbing; standard client transports and live WebSocket MCP attachment
 remain follow-up work.
 
+## Install the preview
+
+macOS Apple Silicon users with repository access can install the self-contained
+[preview release](https://github.com/elide-dev/tern/releases), including its matched
+runtime and SDK. See [installation instructions](docs/manual-install.md).
+
 ## Development
 
 Requires Rust with edition 2024 support, Cap'n Proto (capnp compiler), Python 3, Tern, and StyLua 2.5.2

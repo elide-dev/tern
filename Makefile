@@ -90,3 +90,7 @@ test-debug: build debugging
 .PHONY: test-workspace
 test-workspace: build
 	python3 -u tests/workspace.py $(if $(HEADLESS),--headless)
+
+.PHONY: test-install
+test-install:
+	python3 tests/install.py
