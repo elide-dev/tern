@@ -80,9 +80,10 @@ handlers start a process: formatters have a 4 ms budget and event and route hand
   `tern.chrome.refresh()`. A failing `elide test` (status 1 to 127) toasts "Tests
   failed" with the subject words, or the pane's directory when there are none;
   statuses from 128 up are interrupts and stay quiet.
-- **Opens.** The workspace route redirects `files` and `palette` opens inside a
-  workspace tab into its editor. Outside a workspace, `elide.pkl` chosen from the
-  palette opens that project's workspace, or focuses the one already open.
+- **Opens.** The workspace route redirects only `files` opens inside a workspace tab
+  into its editor. `palette` opens are left to Tern (the control socket's `file open`
+  arrives that way, and claiming it broke `tests/coverage.py`), except `elide.pkl`:
+  chosen from the palette, it opens that project's workspace, or focuses the open one.
 - **Lenses.** The host half adds `build` (`elide build`, `elide build *`) and `tap`
   (`elide test --reporter=tap*`, `elide test * --reporter=tap*`) beside `json`. Each
   keeps at most 20,000 lines and 4 MiB and falls back to raw output beyond that. `build`
