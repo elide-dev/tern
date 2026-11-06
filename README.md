@@ -208,12 +208,24 @@ from the palette opens that project's workspace.
 their source, and `elide test --reporter=tap` shows a pass/fail summary with a table of
 results. Both fall back to the raw output when nothing parses or the output is very large.
 
-`elide://source`, `elide://debug` and `elide://tests` links open a source line, the
-debugger or project test runs. Elide prints them; any program can, as OSC 8 hyperlinks.
+`elide://source`, `elide://debug` and `elide://tests` links open a source line (in the
+[source view](#source-view) for project sources), the debugger or project test runs. Elide prints them; any program can, as OSC 8 hyperlinks.
 Links that leave their project root are ignored. See
 [the contract](docs/architecture.md#elide-links). Run `lua tests/links.lua` for the
 parser's unit tests and `python3 tests/integration.py --runtime /path/to/elide` for the
 lenses, links and status line in an isolated window.
+
+### Source view
+
+**Open with Elide source** (from a file's menu), the workspace toolbar's **Source**
+button, or **Open Elide source…** in the project menu shows a project source file
+read-only with Tern's highlighting and three overlays: **Coverage** marks covered,
+uncovered and partially covered lines from the newest coverage run (or runs one),
+**Debug** sets breakpoints with `b` on the caret line, launches with F5 and shows where
+the target paused, and **Hotness** waits on source-located profile data the project
+session does not record yet. Press `e` to edit the file in Tern. `elide://source`
+links open this view for sources inside a project. Run `lua tests/source.lua` for its
+helpers and `python3 tests/source.py --runtime /path/to/elide` for the block itself.
 
 ### Built-in agent project tools
 
