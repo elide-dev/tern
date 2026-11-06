@@ -117,6 +117,23 @@
 - [ ] Tests: unit tests for link rewriting and HTML stripping; `tests/help.py` harness (model on `tests/testing.py`): run `$RUNTIME help` in a headless pane, assert `.sf-md` renders the landing page, click a nav item and assert the breadcrumb changed, type `/` plus a topic and Enter, assert the page, press `b` and assert back; take `shot`s light and dark. Verify `elide help --format markdown > out.md` contains no `\e_tsp` bytes.
 - [ ] Commit (`feat(help): …` needs the `project/docs/` change; `cli-references.md` `help` section documents the Tern mode).
 
+### Task 8: Tests page adapts to small blocks (worker W1 follow-up, after Task 4 lands)
+
+**Worktree:** a new branch `feat/tern-tests-responsive` from `feat/tern-integration-pr` in the existing `tern-tests-surface` worktree (rebase that worktree onto the integration branch first).
+
+- [ ] Track the pane width from `resize` events (`cols`) and define three bands in `testing/state.rs` with unit tests: wide (≥ 120 cols), medium (80–119), narrow (< 80).
+- [ ] Medium: detail card stacks under the table (`col` instead of `row`), stat tiles keep values but drop `sub` lines, key legend shows only views/select/run keys. Narrow: head row shows the title, the status badge and one `menu` (`buttons` collapsed) holding Run again, Run with coverage, Cancel; two stat tiles per row (Passed, Failed; Skipped and Duration move into the dock totals line); tabs keep counts; the table hides every column but the name and status (priority); the card becomes a `section` under the table; the key legend is one line.
+- [ ] Coverage view follows the same bands (files table alone in narrow, card below).
+- [ ] Verify with `tern ctl` by starting the headless window at 70, 100 and 160 columns (`tern serve --cols` if available, else `cx.layout:resize`/`tern ctl resize`), screenshot each, and run the three harness tests.
+
+### Task 9: Debugger entry points without typing paths (worker W2 follow-up, after Task 4 lands)
+
+**Worktree:** a new branch `feat/tern-debug-targets` from `feat/tern-integration-pr` in the existing `tern-serve-debug-surface` worktree.
+
+- [ ] Replace the launch target `input` with a `picker` (searchable) listing: the project's test files and entry points from the project session's discovery (`project_snapshot`), the files already debugged in this session, and a bounded walk of `*.js|mjs|ts|py|kt` under the root (cap 2,000 entries, skip `node_modules`, `.dev`, `target`, `build`); typing filters by path; Enter launches; a "Browse…" row keeps the typed path as the fallback. Keep `debug-path`/`debug-launch-button` roles on the picker and its launch control so `tests/debug.py` keeps passing (dual-compatible selector edits allowed, uncommitted).
+- [ ] Breakpoints from known locations: a row `menu` entry "Break here" on `stacktrace` frames and on the breakpoints table; in the Tests surface a "Debug this test" `sm` button in the selected test's card that launches the debugger in test mode on that file with a breakpoint at the failure line (through `elide://debug?root&path&line` when running inside the plugin, else by spawning `elide tern debug` is not available from the standalone surface, so emit the link and toast "open in the project workspace").
+- [ ] Unit tests for the candidate list builder and the filter; harness: `tests/debug.py` plus a scratch check that the picker lists the fixture test file.
+
 ### Task 5: Integration, review, rebuild (controller)
 
 - [ ] Merge W1 and W2 branches into `feat/tern-integration-pr` (fast-forward or merge; no conflicts expected since modules are disjoint), merge W3 into plugin `main`, dispatch W4, then a fresh Opus reviewer over both repos' ranges.
