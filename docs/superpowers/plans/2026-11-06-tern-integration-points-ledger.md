@@ -64,3 +64,4 @@ Hand-off record for the plan in `2026-11-06-tern-integration-points.md`. Keep it
 - 15:30 Sam: coverage overlay must be whole-line area tints (covered/uncovered/partial), not gutter dots; sent to W5.
 - 15:31 Sam: editor must feel like IDEA/VS Code: full-bleed under one toolbar, icon buttons with keys, strategic color, status bar, keys in a menu; sent W5 the structural spec (toolbar order, icons, color rules, status segs, gutter emphasis).
 - 15:35 W2: debug.py:216 fails on tern-pr since plugin main merged W5 (elide://source now opens the elide.source block for project files, intended). W2 to make a dual-compatible test edit (accept source block with paused sign) uncommitted.
+- 15:38 Sam: debugger actions must be icon-only buttons matching IDEA (Resume, Pause, Stop, Step over/into/out); sent to W2 (Debug surface) and W5 (source block stepping well) with the icon-names list as the source of names; align names at integration.
