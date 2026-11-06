@@ -86,6 +86,8 @@ local function diagnostics(lines)
     if pending and file then
       local path, line, col = tern.parse.location(file)
       pending.diag.path, pending.diag.line, pending.diag.col = path, line, col
+    elseif pending and pending.diag.path and #pending.excerpt == 0 and string.find(text, "^%s*$") then
+      -- The builder leaves a blank line between the location and its excerpt.
     elseif pending and number and pending.diag.path then
       pending.first = pending.first or tonumber(number)
       table.insert(pending.excerpt, source)
