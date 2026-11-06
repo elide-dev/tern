@@ -24,6 +24,22 @@ pub enum Request {
     binding: elide_project_session::Binding,
     command: String,
     subject: String,
+    #[serde(default)]
+    options: elide_project_session::TestOptions,
+  },
+  ProjectCoverage {
+    binding: elide_project_session::Binding,
+    run: String,
+  },
+  ProjectCoveragePage {
+    binding: elide_project_session::Binding,
+    run: String,
+    #[serde(default)]
+    file: Option<usize>,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default = "coverage_page_limit")]
+    limit: usize,
   },
   ProjectCancel {
     binding: elide_project_session::Binding,
@@ -61,6 +77,10 @@ pub enum Request {
     #[serde(default)]
     close: bool,
   },
+}
+
+fn coverage_page_limit() -> usize {
+  50
 }
 
 impl Request {

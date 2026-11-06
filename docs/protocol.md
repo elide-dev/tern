@@ -46,7 +46,9 @@ They are separate from SDK runtime/kernel session handles and do not initialize 
 | `project_attach` | absolute `root`, absolute or PATH `runtime` | `binding`: the result itself is `{session, epoch, lease}` |
 | `project_snapshot` | `binding`, optional `after` revision | versioned snapshot, or null when unchanged |
 | `project_summary` | `binding` | compact run counts, handles, reports and two failure previews per run |
-| `project_test` | `binding`, UUID `command`, `subject` | `{run}` |
+| `project_test` | `binding`, UUID `command`, `subject`, optional `options: {coverage: boolean}` | `{run}` |
+| `project_coverage` | `binding`, `run` | immutable bounded coverage artifact, or null if unavailable |
+| `project_coverage_page` | `binding`, `run`, optional `file`, `offset`, `limit` | bounded file listing or measured lines, with `next` offset |
 | `project_cancel` | `binding`, `run` | empty object; cancellation is asynchronous |
 | `project_detach` | `binding` | empty object; a finite test continues |
 
@@ -54,13 +56,26 @@ Use the entire binding returned by attachment. Each view has its own 60-second l
 snapshot reads renew it. IDs from an old host epoch or another project are rejected.
 Subject paths resolve inside the attached root and must remain there after resolving
 symlinks. One active test run per project prevents conflicting writes to build outputs.
-The same UUID and subject return the same run; changing arguments under that UUID fails.
+The same UUID, subject and collection options return the same run; changing arguments under that UUID fails.
 
 Snapshots include four recent runs with complete aggregate counts and bounded details
 for the latest 32 results, raw report paths, status and duration. Unchanged snapshots
 return null. Raw artifacts remain under `.dev/reports/tests/tern/`. There is a five-minute
 run deadline, 128 retained command IDs per project incarnation, and a two-minute idle
 reclamation period. Expired result retries fail explicitly rather than launching again.
+
+Each run includes `options.coverage` and a compact coverage summary. Coverage states
+are `not_requested`, `collecting`, `ready`, `incomplete`, `unavailable`, and `error`.
+Artifact reads retain measured source identity and never reread current source to
+invent it. A digest is optional; missing identity and missing branch counts stay
+unknown. Native views fetch the bounded artifact separately from test snapshots.
+
+For agent reads, `project_coverage_page` lists files when `file` is omitted, or
+returns lines for the chosen zero-based file index. `offset` defaults to zero and
+`limit` to 50 (maximum 100). `next` is the next offset, or null at the end. Indices
+are stable within the immutable run artifact. File pages also cap encoded entries at
+256 KiB, so use `next` even when fewer than `limit` entries arrive. Each page includes the producer's
+`complete` flag; consult the run summary for process and collection status.
 
 This layer reports configuration as `discovered`. It does not evaluate manifests,
 resolve workspace dependencies, provide streaming subscriptions, or implement MCP.

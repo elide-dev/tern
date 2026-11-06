@@ -1,3 +1,4 @@
+mod coverage;
 mod project;
 mod protocol;
 
@@ -280,7 +281,7 @@ fn dispatch(request: Request, sessions: &Sessions, serial: &AtomicUsize, project
           json!({"run":run.id, "subject":run.subject, "status":run.status, "running":run.running,
           "duration_ms":run.duration_ms, "passed":run.result.passed, "failed":run.result.failed,
           "total":run.result.total, "truncated":run.result.truncated, "report":run.report,
-          "failures":failures, "failure_limit":2})
+          "failures":failures, "failure_limit":2, "options":run.options, "coverage":run.coverage})
         })
         .collect();
       return Ok(
@@ -297,12 +298,30 @@ fn dispatch(request: Request, sessions: &Sessions, serial: &AtomicUsize, project
       binding,
       command,
       subject,
+      options,
     } => {
-      let run = projects
-        .lock()
-        .unwrap()
-        .test(binding, command, Path::new(subject), Instant::now())?;
+      let run =
+        projects
+          .lock()
+          .unwrap()
+          .test_with_options(binding, command, Path::new(subject), *options, Instant::now())?;
       return Ok(json!({"run": run}));
+    }
+    Request::ProjectCoverage { binding, run } => {
+      let artifact = projects.lock().unwrap().coverage(binding, run, Instant::now())?;
+      return serde_json::to_value(artifact).map_err(err);
+    }
+    Request::ProjectCoveragePage {
+      binding,
+      run,
+      file,
+      offset,
+      limit,
+    } => {
+      let artifact = projects.lock().unwrap().coverage(binding, run, Instant::now())?;
+      return artifact.map_or(Ok(Value::Null), |artifact| {
+        coverage::page(&artifact, *file, *offset, *limit)
+      });
     }
     Request::ProjectCancel { binding, run } => {
       projects.lock().unwrap().cancel(binding, run, Instant::now())?;

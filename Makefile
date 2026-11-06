@@ -72,3 +72,7 @@ project:
 
 test-sessions: build project
 	python3 tests/sessions.py $(if $(RUNTIME),--runtime "$(RUNTIME)")
+
+.PHONY: test-coverage
+test-coverage: build testing project
+	python3 -u tests/coverage.py $(if $(RUNTIME),--runtime "$(RUNTIME)")
