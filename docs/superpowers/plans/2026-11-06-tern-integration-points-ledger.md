@@ -63,3 +63,4 @@ Hand-off record for the plan in `2026-11-06-tern-integration-points.md`. Keep it
 - 15:29 Sam: breakpoint dot should sit left of the line numbers and tint the whole line lightly; sent W5 the gutter layout and decor-token requirement (on feat/source-block alongside editing work).
 - 15:30 Sam: coverage overlay must be whole-line area tints (covered/uncovered/partial), not gutter dots; sent to W5.
 - 15:31 Sam: editor must feel like IDEA/VS Code: full-bleed under one toolbar, icon buttons with keys, strategic color, status bar, keys in a menu; sent W5 the structural spec (toolbar order, icons, color rules, status segs, gutter emphasis).
+- 15:35 W2: debug.py:216 fails on tern-pr since plugin main merged W5 (elide://source now opens the elide.source block for project files, intended). W2 to make a dual-compatible test edit (accept source block with paused sign) uncommitted.
