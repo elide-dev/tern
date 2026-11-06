@@ -14,7 +14,7 @@ with tempfile.TemporaryDirectory(prefix='tern-install-') as temporary:
         (bundle / directory).mkdir(parents=True)
     shutil.copyfile(source / 'scripts/install-release.sh', bundle / 'install.sh')
     for relative in ['runtime/bin/elide', *(f'dist/elide-tern-{name}' for name in
-                     ['broker', 'worker', 'repl', 'serve', 'test', 'project', 'debug'])]:
+                     ['broker', 'worker'])]:
         path = bundle / relative
         path.write_text('#!/bin/sh\nexit 0\n')
         path.chmod(0o755)
@@ -45,7 +45,7 @@ with tempfile.TemporaryDirectory(prefix='tern-install-') as temporary:
     assert run().returncode == 0
     assert config.read_text() == '{"custom":true}\n'
     arguments.unlink()
-    (bundle / 'dist/elide-tern-debug').unlink()
+    (bundle / 'dist/elide-tern-worker').unlink()
     result = run()
     assert result.returncode != 0 and 'Incomplete release' in result.stderr
     assert not arguments.exists()

@@ -15,7 +15,7 @@ tern.lens.define("json", {
     if state.truncated then
       return
     end
-    if #state.lines >= MAX_LINES or state.bytes + #l.text > MAX_BYTES then
+    if #state.lines >= MAX_LINES or state.bytes + #l.text + 1 > MAX_BYTES then
       state.truncated = true
       return
     end

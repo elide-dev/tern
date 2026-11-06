@@ -1,6 +1,7 @@
 # Install the macOS preview
 
-This preview includes the plugin, native helpers, runtime and embedded SDK. It requires
+This preview includes the plugin, broker and worker, runtime and embedded SDK.
+Native surfaces are hosted by the bundled runtime through `elide tern`. It requires
 Tern with its `tern` command available, and macOS on Apple Silicon. No source checkout,
 Rust compiler or separate Elide installation is needed.
 

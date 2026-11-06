@@ -62,7 +62,7 @@ with tempfile.TemporaryDirectory(prefix='tp-', dir='/tmp') as temporary:
     package = fixtures / 'elide'
     shutil.copytree(root / 'plugin', package, ignore=shutil.ignore_patterns('config.json', 'tern.d.luau'))
     fixture_config = {'sdk': sdk, 'runtime': runtime}
-    for name in ['broker', 'repl', 'serve', 'test', 'project']:
+    for name in ['broker']:
         fixture_config[name] = str(root / 'dist' / ('elide-tern-' + name))
     (package / 'config.json').write_text(json.dumps(fixture_config))
     fixture_root = state / 'crates/tern'
@@ -89,7 +89,9 @@ with tempfile.TemporaryDirectory(prefix='tp-', dir='/tmp') as temporary:
             listing = json.loads(subprocess.check_output(['tern', 'ls', '--json'], env=environment, text=True))
             blocks = [block for session in listing['sessions'] for tab in session['tabs'] for block in tab['blocks']]
             launch = next(block for block in blocks if block['id'] == pane)
-            assert program in (launch['command'] or ''), launch
+            kind = program.removeprefix('elide-tern-')
+            assert runtime in (launch['command'] or ''), launch
+            assert f"'tern' '{kind}'" in launch['command'], launch
             assert '-c' in launch['args'] and launch['args'][-1] == launch['command'], launch
         def wait(predicate, seconds=45):
             deadline = time.monotonic() + seconds
@@ -182,8 +184,12 @@ with tempfile.TemporaryDirectory(prefix='tp-', dir='/tmp') as temporary:
             ctl('file', 'save')
             wait(lambda: manifest.read_text().startswith('// Edited in the native workspace editor\n'))
             ctl('shot', 'project-workspace')
+            subprocess.run(['tern', 'plugin', 'reload', 'elide'], env=environment, check=True, stdout=log, stderr=log)
+            before_probe = len(ctl('state')['panes'])
+            ctl('click', '[data-role="project-test"]')
             ctl('click', '[data-role="project-test"]')
             wait(lambda: 'Passed' in tree('[data-role="run-status"]'))
+            assert len(ctl('state')['panes']) == before_probe + 1, 'Pending runtime probe opened duplicate panes'
             native_panel('elide-tern-project')
             assert 'Build' in tree('[data-role="project-actions"]')
             assert ctl('state')['file_blocks'], 'Running tests must preserve the editor'

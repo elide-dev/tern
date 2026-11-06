@@ -20,16 +20,17 @@ runtime and SDK. See [installation instructions](docs/manual-install.md).
 
 Requires Rust with edition 2024 support, Cap'n Proto (capnp compiler), Python 3, Tern, and StyLua 2.5.2
 (`mise install`). Native SDK execution supports macOS arm64 and Linux amd64,
-subject to the selected SDK's deployment requirements.
+subject to the selected SDK's deployment requirements. The configured runtime must support
+`elide tern`; `make link` builds the broker and worker, then links the plugin.
 
 ```sh
-make build repl
+make build
 make test
 make check
 cp plugin/config.example.json plugin/config.json
 # Set sdk to a complete extracted embedded SDK directory.
 make smoke SDK=/path/to/elide-embed
-make test-surface SDK=/path/to/elide-embed
+make test-surface SDK=/path/to/elide-embed RUNTIME=/path/to/elide
 make link
 ```
 
