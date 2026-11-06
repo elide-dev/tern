@@ -31,6 +31,11 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         'import {classify} from "./classify.mjs";\n'
         'test("positive values", () => assert.equal(classify(1), "positive"));\n')
     (project / 'notes.txt').write_text('not a source\n')
+    # Near the size limit, and one past it.
+    large = project / 'large.mjs'
+    large.write_text(''.join(f'export const value{i} = {i}; // padding to make the line longer than usual\n' for i in range(5000)))
+    huge = project / 'huge.mjs'
+    huge.write_text('// x\n' * 140000)
     state = base / 'state'; (state / 'config').mkdir(parents=True)
     package = state / 'crates/plugins/fixtures/elide'
     shutil.copytree(ROOT / 'plugin', package, ignore=shutil.ignore_patterns('config.json', 'tern.d.luau'))
@@ -219,6 +224,24 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         ctl('prefs', 'close')
         ctl('key', 'F5')
         check('continue runs to exit', wait(lambda: 'Exited' in tree('.sf-main .sf-badge'), 60), tree('.sf-main'))
+        # Large files: a ~380 KiB file opens and takes edits; one past the limit says so.
+        ctl('open-url', 'elide://source?root=' + str(project) + '&path=' + str(large) + '&line=4000')
+        check('large file opens at line', wait(lambda: 'Ln 4000,' in tree('[data-role="source-position"]'), 30),
+              tree('[data-role="source-position"]'))
+        # The new block has the focus; type into it, not into the first editor on screen.
+        def statuses():
+            return [n.get('text') or '' for n in nodes('[data-role="source-status"]')]
+        started = time.monotonic()
+        ctl('type', 'z')
+        check('large file takes edits', wait(lambda: len(statuses()) == 2 and 'Modified' in statuses()[-1], 10), statuses())
+        check('edit stays in its block', 'Modified' not in statuses()[0], statuses())
+        check('large file says it is not highlighted', 'no highlighting' in tree('[data-role="source-lang"]'), tree('[data-role="source-lang"]'))
+        check('small file highlighted', 'no highlighting' not in json.dumps(nodes('[data-role="source-lang"]')[:1]), tree('[data-role="source-lang"]'))
+        print('     large file edit round trip: %.2fs' % (time.monotonic() - started), flush=True)
+        ctl('shot', 'source-large')
+        ctl('open-url', 'elide://source?root=' + str(project) + '&path=' + str(huge))
+        check('oversized file refused', wait(lambda: 'File too large' in tree('[data-role="source-problem"]'), 30),
+              tree('.sf-main'))
         ctl('open-url', 'elide://source?root=' + str(project) + '&path=' + str(project / 'notes.txt'))
         check('non-source link opens the editor', wait(lambda: any(Path(b['path']).resolve() == (project / 'notes.txt').resolve()
               for b in ctl('state').get('file_blocks', []) if b.get('path')), 15), ctl('state').get('file_blocks'))
