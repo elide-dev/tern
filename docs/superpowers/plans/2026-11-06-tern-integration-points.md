@@ -135,6 +135,14 @@
 - [ ] Breakpoints from known locations: a row `menu` entry "Break here" on `stacktrace` frames and on the breakpoints table; in the Tests surface a "Debug this test" `sm` button in the selected test's card that launches the debugger in test mode on that file with a breakpoint at the failure line (through `elide://debug?root&path&line` when running inside the plugin, else by spawning `elide tern debug` is not available from the standalone surface, so emit the link and toast "open in the project workspace").
 - [ ] Unit tests for the candidate list builder and the filter; harness: `tests/debug.py` plus a scratch check that the picker lists the fixture test file.
 
+### Task 10: Debug and Serve surfaces adapt to small blocks (worker W2 follow-up)
+
+Branch `feat/tern-debug-responsive` from `3f6f17c29`. Share W1's `Band` logic; narrow Debug: stacked icon wells, one-line breakpoint row with `sm` icon actions, one-line legend plus a keyboard `menu`, first-column tables; medium: stacked cards. Serve likewise (two tiles narrow, trimmed subs medium, method/path/status columns). Unit-tested bands, all harness roles kept, screenshots at 70/100/160 columns, serve/telemetry/debug harness PASS.
+
+### Task 11: `elide://help` route in the plugin (worker W3 follow-up)
+
+`tern.route.link` for `elide://help?topic=<slug>`: run `<runtime> help <url>` in a new pane beside the link's pane (the help surface resolves that argument to the topic). Reject malformed slugs. Document in `docs/architecture.md`; extend `tests/integration.py` with one check.
+
 ### Task 5: Integration, review, rebuild (controller)
 
 - [ ] Merge W1 and W2 branches into `feat/tern-integration-pr` (fast-forward or merge; no conflicts expected since modules are disjoint), merge W3 into plugin `main`, dispatch W4, then a fresh Opus reviewer over both repos' ranges.
