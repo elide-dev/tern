@@ -109,6 +109,7 @@ Inside a detected project, Tests attaches to a shared project host. Closing its 
 leaves tests running; **Cancel** stops them explicitly. **View project test runs**
 reconnects to recent results, and another view can observe the same run without
 launching it again. Recent runs are selectable in the native UI.
+Whole-project runs include JVM tests; individual paths remain explicit test filters.
 
 Build this host with `make project` (`make link` includes it). `config.project`
 can override the launcher and `config.project_state` selects a short private host
@@ -119,6 +120,8 @@ Raw reports are saved under the target directory's `.dev/reports/tests/tern/`.
 Run the real Tern integration test with `make test-testing RUNTIME=/path/to/elide`.
 Run `make test-sessions RUNTIME=/path/to/elide` for two-window attachment, live shared
 results, duplicate-command protection, reconnect, rerun and cancellation checks.
+`make test-project PROJECT=/path/to/project` opens an isolated desktop Tern window
+and verifies native tab launches, REPL, serving, and tests in that existing project.
 
 ### Built-in agent project tools
 

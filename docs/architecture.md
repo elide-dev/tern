@@ -9,8 +9,14 @@ Tern window: palette commands
           → Elide SDK C ABI 1.1 / Cap'n Proto protocol 1.0
 ```
 
-Tern's process API captures a process result and closes its stdin after writing.
-It is not an interactive native FFI or persistent pipe API. A short-lived request
+Native surface tabs open through `cx.layout:new_tab({cwd, command})`; the launcher
+is the tab's initial process, never text sent into an interactive shell. Launch
+arguments are individually shell-quoted because this SDK field takes a command string.
+Exercise this path against a desktop window with an isolated daemon (`make test-project`):
+the in-process `tern serve` harness can exceed the synchronous launch call's plugin budget.
+
+Tern's process API captures a process result and closes stdin after writing. It is
+not an interactive native FFI or persistent pipe API. A short-lived request
 client lets Luau use the existing asynchronous process API while the broker owns
 persistent runtime state. Requests never interpolate guest code into a shell.
 The socket is local, in an owned 0700 directory, and has no network listener.

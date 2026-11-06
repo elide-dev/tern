@@ -15,6 +15,7 @@ root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
 parser.add_argument('--sdk')
 parser.add_argument('--runtime')
+parser.add_argument('--project', help='Also run all tests in an existing project through the native project action')
 args = parser.parse_args()
 config_path = root / 'plugin/config.json'
 config = json.loads(config_path.read_text()) if config_path.exists() else {}
@@ -68,8 +69,13 @@ with tempfile.TemporaryDirectory(prefix='tp-', dir='/tmp') as temporary:
     (fixture_root / 'goldens').mkdir(parents=True)
     socket = state / 'control.sock'
     with (out / 'tern.log').open('w') as log:
-        server = subprocess.Popen(['tern', 'serve', '--control', str(socket), '--out', str(out), '--dir', str(nested)],
-            stdout=log, stderr=log, env={**os.environ, 'STENCIL_FIXTURE_ROOT': str(fixture_root), 'TERN_PLUGIN_DATA': str(state / 'data')})
+        environment = {**os.environ, 'STENCIL_FIXTURE_ROOT': str(fixture_root),
+            'TERN_PLUGIN_DATA': str(state / 'data'), 'TERN_DAEMON_SOCKET': str(state / 'daemon.sock'),
+            'TERN_CONFIG_DIR': str(state / 'config')}
+        subprocess.run(['tern', 'plugin', 'link', str(package)], env=environment, check=True, stdout=log, stderr=log)
+        daemon = subprocess.Popen(['tern', 'daemon', '--socket', str(state / 'daemon.sock')], stdout=log, stderr=log, env=environment)
+        server = subprocess.Popen(['tern', '--control', str(socket), '--out', str(out), '--dir', str(nested)],
+            stdout=log, stderr=log, env=environment)
         def ctl(command, *args):
             result = subprocess.run(['tern', 'ctl', '--control', str(socket), command,
                 *(str(a) if command == 'tree' else json.dumps(str(a), ensure_ascii=False) for a in args)], capture_output=True, text=True, timeout=30)
@@ -78,8 +84,15 @@ with tempfile.TemporaryDirectory(prefix='tp-', dir='/tmp') as temporary:
             return reply
         def tree(selector):
             return json.dumps(ctl('tree', selector), ensure_ascii=False)
-        def wait(predicate):
-            deadline = time.monotonic() + 45
+        def native_panel(program):
+            pane = ctl('state')['focused']['id']
+            listing = json.loads(subprocess.check_output(['tern', 'ls', '--json'], env=environment, text=True))
+            blocks = [block for session in listing['sessions'] for tab in session['tabs'] for block in tab['blocks']]
+            launch = next(block for block in blocks if block['id'] == pane)
+            assert program in (launch['command'] or ''), launch
+            assert '-c' in launch['args'] and launch['args'][-1] == launch['command'], launch
+        def wait(predicate, seconds=45):
+            deadline = time.monotonic() + seconds
             while time.monotonic() < deadline:
                 if predicate(): return
                 time.sleep(.1)
@@ -89,7 +102,6 @@ with tempfile.TemporaryDirectory(prefix='tp-', dir='/tmp') as temporary:
             wait(lambda: 'Run tests' in tree('#pick'))
         try:
             wait(socket.exists)
-            ctl('plugins', 'fixtures')
             ctl('status-bar', 'on')
             wait(lambda: project.name in tree('.sl-plugin'))
             ctl('click', '.sl-plugin')
@@ -97,6 +109,7 @@ with tempfile.TemporaryDirectory(prefix='tp-', dir='/tmp') as temporary:
             ctl('shot', 'project-actions')
             ctl('key', 'Enter')
             wait(lambda: 'Passed' in tree('[data-role="run-status"]'))
+            native_panel('elide-tern-project')
             assert str(project.resolve()) in tree('[data-role="subject"]')
             assert ctl('state')['focused']['cwd'] == str(project.resolve())
             ctl('carly', 'lua', 'project_binding = await(plugins.elide.project_open(' + json.dumps(str(project.resolve()), ensure_ascii=False) + ')); return await(plugins.elide.project_read(project_binding))')
@@ -113,23 +126,25 @@ with tempfile.TemporaryDirectory(prefix='tp-', dir='/tmp') as temporary:
             ctl('carly', 'lua', 'local ok = pcall(function() return await(plugins.elide.test_run(project_binding, ".", ' + json.dumps(str(uuid.uuid4())) + ')) end); assert(not ok); return "agent-revoked"')
             wait(lambda: 'agent-revoked' in str(ctl('state').get('carly', {}).get('last_tool', '')))
             print('PASS: built-in agent launches a native-visible run, retries without duplication, and detaches')
-            ctl('key', 'ctrl+c')
+            ctl('close')
             wait(lambda: not ctl('tree', '.sf-dock').get('nodes'))
             menu()
             ctl('key', 'ArrowDown'); ctl('key', 'Enter')
             wait(lambda: 'Ready' in tree('.sf-badge'))
+            native_panel('elide-tern-repl')
             ctl('type', '40 + 2'); ctl('key', 'Enter')
             wait(lambda: '42' in tree('.sf-json'))
             assert ctl('state')['focused']['cwd'] == str(project.resolve())
-            ctl('key', 'ctrl+d')
+            ctl('close')
             wait(lambda: not ctl('tree', '.sf-dock').get('nodes'))
             menu()
             ctl('key', 'ArrowDown'); ctl('key', 'ArrowDown'); ctl('key', 'Enter')
             wait(lambda: 'Running' in tree('[data-role="server-status"]') or 'http://127.0.0.1:' in tree('[data-role="address"]'))
+            native_panel('elide-tern-serve')
             address = re.search(r'http://127\.0\.0\.1:\d+', tree('[data-role="address"]')).group()
             with build_opener(ProxyHandler({})).open(address, timeout=5) as response:
                 assert response.read() == b'project server works'
-            ctl('key', 'ctrl+c')
+            ctl('close')
             wait(lambda: not ctl('tree', '.sf-dock').get('nodes'))
             ctl('plugins', 'run', 'plugin.elide.test')
             wait(lambda: str(project.resolve()) in tree('#pick input'))
@@ -138,12 +153,29 @@ with tempfile.TemporaryDirectory(prefix='tp-', dir='/tmp') as temporary:
             ctl('click', '[data-id="project"]')
             wait(lambda: 'Run tests' in tree('#pick'))
             ctl('key', 'Escape')
+            if args.project:
+                existing = str(Path(args.project).resolve())
+                ctl('files', 'root', existing)
+                ctl('click', '[data-id="project"]')
+                wait(lambda: 'Run tests' in tree('#pick'))
+                ctl('key', 'Enter')
+                wait(lambda: 'Passed' in tree('[data-role="run-status"]'), seconds=180)
+                assert existing in tree('[data-role="subject"]')
+                ctl('shot', 'existing-project-tests')
+                print('PASS: existing project tests run through the native project action')
+                ctl('close')
+                wait(lambda: not ctl('tree', '.sf-dock').get('nodes'))
+                ctl('files', 'root', str(nested))
             manifest.unlink()
             ctl('plugins', 'run', 'plugin.elide.project')
             wait(lambda: 'No elide.pkl' in tree('.toast'))
             wait(lambda: not ctl('tree', '.sl-plugin').get('nodes'))
+            assert 'exceeded its budget' not in (out / 'tern.log').read_text()
             print('PASS: inert/nested/symlink discovery, automatic status, native tests/REPL/static serving, cwd, defaults, Files action, invalidation')
         finally:
             server.terminate()
             try: server.wait(timeout=10)
             except subprocess.TimeoutExpired: server.kill(); server.wait()
+            daemon.terminate()
+            try: daemon.wait(timeout=10)
+            except subprocess.TimeoutExpired: daemon.kill(); daemon.wait()
