@@ -1249,6 +1249,11 @@ local function lines_view(state, starts)
   return gutter, any_virt and virt or nil, #decor > 0 and decor or nil
 end
 
+-- The tone of a file's coverage percentage, shared by the head badge and the status bar.
+local function coverage_tone(percent)
+  return percent >= 80 and "success" or percent >= 50 and "warning" or "error"
+end
+
 local function overlay_badges(state)
   local badges = {}
   if buffer.dirty(state.buf) then
@@ -1262,7 +1267,7 @@ local function overlay_badges(state)
     if coverage.state == "ready" then
       local percent = source.percent(coverage.covered, coverage.total)
       if percent then
-        local tone = percent >= 80 and "success" or percent >= 50 and "warning" or "error"
+        local tone = coverage_tone(percent)
         table.insert(badges, ui.badge(percent .. "% covered", tone))
       else
         table.insert(badges, ui.badge("No measured lines", "muted"))
@@ -1619,7 +1624,7 @@ local function status_bar(state)
     local percent = coverage.state == "ready" and source.percent(coverage.covered, coverage.total)
     overlay = {
       "Coverage" .. (percent and (" · " .. percent .. "%") or (" · " .. coverage.state)),
-      percent and "success" or "muted",
+      percent and coverage_tone(percent) or "muted",
     }
   elseif state.mode == "debug" then
     local snap = state.debug.snap
