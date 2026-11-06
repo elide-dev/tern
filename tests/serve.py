@@ -56,8 +56,8 @@ with tempfile.TemporaryDirectory(prefix='serve-', dir='/tmp') as temporary:
             except HTTPError as error: assert error.code == 404
             else: raise AssertionError('Missing path was successful')
             wait(lambda: '404' in tree('[data-role="request"]') and '200' in tree('[data-role="request"]'))
-            ctl('click', '[data-role="request"]')
-            wait(lambda: 'duration_ms' in tree('.sf-json'))
+            ctl('click', '[data-role="request"] .sf-tbl-body .sf-tbl-row')
+            wait(lambda: 'Duration' in tree('[data-role="request-detail"]'))
             ctl('shot', 'server-requests')
             ctl('click', '[data-role="stop"]')
             wait(lambda: 'Stopped' in tree())

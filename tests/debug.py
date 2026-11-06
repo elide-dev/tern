@@ -146,11 +146,11 @@ test("a debugged test", () => {
             wait(lambda: marker in json.dumps(ctl('state').get('carly', {}).get('last_tool', {})))
 
         def breakpoint(path, line):
-            click('[data-role="debug-breakpoints-tab"]')
+            click('[data-role="debug-breakpoints-tab"], [data-role="debug-tabs"] .sf-tab[data-tab="breakpoints"]')
             input_text('debug-breakpoint-input', f'{path}:{line}')
             click('[data-role="debug-breakpoint-add"]')
             wait(lambda: f'{path}:{line}' in tree('[data-role="debug-breakpoint"]'))
-            click('[data-role="debug-inspect-tab"]')
+            click('[data-role="debug-inspect-tab"], [data-role="debug-tabs"] .sf-tab[data-tab="inspect"]')
 
         def inspect_value(name):
             values = debug()['debug']['variables']

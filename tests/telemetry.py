@@ -78,6 +78,7 @@ Elide.serve({port: 0, hostname: "127.0.0.1", fetch(request) {
                 if predicate(): return
                 time.sleep(.1)
             raise AssertionError(tree())
+        TRACE = '[data-role="traces"] .sf-tbl-body .sf-tbl-row'
         def address():
             match = re.search(r'http://127\.0\.0\.1:\d+', tree('[data-role="address"]'))
             return match.group() if match else None
@@ -108,7 +109,7 @@ Elide.serve({port: 0, hostname: "127.0.0.1", fetch(request) {
             if not args.local_only:
                 command.extend([f'OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:{remote.server_port}',
                                 'OTEL_EXPORTER_OTLP_PROTOCOL=http/json'])
-            command.extend(['OTEL_SERVICE_NAME=inspection-test', str(Path(args.runtime).resolve()), 'tern', 'serve',
+            command.extend(['OTEL_SERVICE_NAME=inspection-test', str(root / 'dist/elide-tern-serve'),
                             str(Path(args.runtime).resolve()), str(state if args.static else script)])
             ctl('run', shlex.join(command))
             wait(lambda: address() is not None)
@@ -116,50 +117,50 @@ Elide.serve({port: 0, hostname: "127.0.0.1", fetch(request) {
             assert not nodes('[data-role="traces-start"]'), 'Tracing must not require restarting'
             success = request(url, '/', 10)
             failure = request(url, '/fail', 11)
-            ctl('click', '[data-role="traces-toggle"]')
-            wait(lambda: len(nodes('[data-role="trace"]')) >= 2)
+            ctl('click', '.sf-tab[data-tab="traces"]')
+            wait(lambda: len(nodes(TRACE)) >= 2)
             if not args.local_only: wait(lambda: remote_has(success) and remote_has(failure))
-            ctl('click', '[data-role="trace"]')
+            ctl('click', TRACE)
             wait(lambda: bool(nodes('[data-role="span"]')))
             if not args.static:
                 wait(lambda: 'handler' in tree('[data-role="span"]'))
                 wait(lambda: 'correlated request log' in tree('[data-role="span"]'))
-                assert len(nodes('[data-role="span-track"]')) >= 2
+                assert len(nodes('[data-role="span"] .sf-tree-node')) >= 2
             ctl('click', '[data-role="span"]')
-            wait(lambda: bool(nodes('.sf-json')))
+            wait(lambda: 'Duration' in tree('[data-role="trace-detail"]'))
             ctl('shot', 'static-trace' if args.static else 'trace-waterfall')
             ctl('appearance', 'dark')
             ctl('shot', 'static-trace-dark' if args.static else 'trace-waterfall-dark')
             ctl('appearance', 'light')
             (out / 'trace-tree.json').write_text(tree())
             ctl('click', '[data-role="traces-errors"]')
-            wait(lambda: len(nodes('[data-role="trace"]')) == 1)
+            wait(lambda: len(nodes(TRACE)) == 1)
             ctl('click', '[data-role="traces-errors"]')
-            wait(lambda: len(nodes('[data-role="trace"]')) == 2)
+            wait(lambda: len(nodes(TRACE)) == 2)
             for cycle in range(2):
                 ctl('click', '[data-role="traces-pause"]')
                 wait(lambda: 'Capture paused' in tree('[data-role="capture-status"]'))
                 time.sleep(.2)
-                retained = len(nodes('[data-role="trace"]'))
+                retained = len(nodes(TRACE))
                 paused = request(url, '/', 12 + cycle * 2)
                 if not args.local_only: wait(lambda: remote_has(paused))
                 else: time.sleep(1)
-                assert len(nodes('[data-role="trace"]')) == retained, 'Paused capture retained new traces'
+                assert len(nodes(TRACE)) == retained, 'Paused capture retained new traces'
                 assert address() == url, 'Pausing restarted the server'
                 ctl('click', '[data-role="traces-pause"]')
                 wait(lambda: 'Live capture' in tree('[data-role="capture-status"]'))
                 time.sleep(.2)
                 resumed = request(url, '/', 13 + cycle * 2)
-                wait(lambda: len(nodes('[data-role="trace"]')) == retained + 1)
+                wait(lambda: len(nodes(TRACE)) == retained + 1)
                 if not args.local_only: wait(lambda: remote_has(resumed))
                 assert address() == url, 'Resuming restarted the server'
             if not args.static:
                 assert len(sessions) == 1, 'Runtime process was replaced'
                 assert counts == sorted(set(counts)), 'Runtime state was reset'
             ctl('click', '[data-role="traces-clear"]')
-            wait(lambda: len(nodes('[data-role="trace"]')) == 0)
+            wait(lambda: len(nodes(TRACE)) == 0)
             request(url, '/', 20)
-            wait(lambda: len(nodes('[data-role="trace"]')) == 1)
+            wait(lambda: len(nodes(TRACE)) == 1)
             ctl('key', 'ctrl+c')
             wait(lambda: stopped(url))
             print('PASS:', 'static' if args.static else 'runtime', 'OTLP traces, waterfall, remote fanout, live pause/resume, clear, uninterrupted runtime, teardown')

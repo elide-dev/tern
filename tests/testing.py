@@ -58,7 +58,7 @@ test("refreshes expired sessions", {skip: true}, () => {});
             return value in tree('[data-role="run-status"]')
         try:
             wait(socket.exists)
-            ctl('run', shlex.join([runtime, 'tern', 'test', runtime, str(script)]))
+            ctl('run', shlex.join([str(root / 'dist/elide-tern-test'), runtime, str(script)]))
             wait(lambda: status('Failed') or status('Incomplete'))
             assert status('Failed'), tree()
             assert '1 passed' in tree('[data-role="totals"]')
@@ -72,11 +72,11 @@ test("refreshes expired sessions", {skip: true}, () => {});
             ctl('shot', 'tests-light')
             assert 'ms' in tree('[data-role="test-duration"]')
             assert 'example.test.mjs' in tree('[data-role="test-source"]')
-            ctl('click', '[data-role="test-failures"]')
+            ctl('click', '[data-role="test-failures"], [data-role="test-views"] [data-tab="failures"]')
             wait(lambda: 'accepts a valid request' not in tree('[data-role="test-list"]'))
-            ctl('click', '[data-role="test-output"]')
+            ctl('click', '[data-role="test-output"], [data-role="test-views"] [data-tab="output"]')
             wait(lambda: bool(ctl('tree', '[data-role="run-output"]').get('nodes')))
-            ctl('click', '[data-role="test-output"]')
+            ctl('click', '[data-role="test-output"], [data-role="test-views"] [data-tab="output"]')
             reports = list(state.glob('.dev/reports/tests/tern/*/results.tap'))
             assert len(reports) == 1
             report = reports[0].read_text()
