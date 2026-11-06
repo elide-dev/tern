@@ -114,9 +114,41 @@ function M.install(configuration, path, project)
       limit = query.limit,
     }, cx, call)
   end)
+  tern.carly.export("debug_launch", {
+    sig = "debug_launch(binding: table, subject: string, command: string, options: table) -> {generation: string}",
+    doc = "Launch a source file under the project guest debugger. Options: mode='run' or 'test', stop_on_entry=true, breakpoints={{path='file.js',line=5}}. Use a fresh UUID command and reuse it only to retry the same launch. This attachment owns control; closing it starts a 30-second grace before the target is stopped. Poll debug_read; launches are asynchronous.",
+  }, function(binding, subject, command, options, cx, call)
+    return request(
+      { op = "project_debug_launch", binding = binding, subject = subject, command = command, options = options },
+      cx,
+      call
+    )
+  end)
+  tern.carly.export("debug_read", {
+    sig = "debug_read(binding: table) -> snapshot?",
+    doc = "Read the shared debugger and renew attachment. Includes generation, stop_epoch, state, bounded stack/scopes/explicitly inspected variables, breakpoints, output, pending status and execution ownership. Values may be unavailable until explicitly inspected. Returned frame/variable handles expire at resume or restart.",
+  }, function(binding, cx, call)
+    return request({ op = "project_debug_snapshot", binding = binding, compact = true }, cx, call)
+  end)
+  tern.carly.export("debug_control", {
+    sig = "debug_control(binding: table, command: string, request: table) -> table",
+    doc = "Queue an operation with a new UUID command and {generation,stop_epoch,action}. Action is a table tagged kind: continue,next,step_in,step_out,pause,stop,stack(thread),scopes(frame),variables(reference,allow_side_effects),breakpoints(path,lines). Read the current snapshot first. Control and side-effect-capable inspection require ownership. Variables with allow_side_effects=true may run guest getters/display code: use only when explicitly intended. Poll debug_read for completion/error; acceptance is not completion.",
+  }, function(binding, command, operation, cx, call)
+    return request(
+      { op = "project_debug_request", binding = binding, command = command, request = operation },
+      cx,
+      call
+    )
+  end)
+  tern.carly.export("debug_takeover", {
+    sig = "debug_takeover(binding: table, generation: string) -> table",
+    doc = "Explicitly take execution control of this debug generation, revoking the previous attachment's queued controls. This can interrupt another user's control; invoke only when takeover is intended. Observing stacks and scopes needs no takeover.",
+  }, function(binding, generation, cx, call)
+    return request({ op = "project_debug_takeover", binding = binding, generation = generation }, cx, call)
+  end)
   tern.carly.export("project_close", {
     sig = "project_close(binding: table) -> table",
-    doc = "Release this attachment. Running tests continue to completion or their deadline; use test_cancel to stop a run explicitly.",
+    doc = "Release this attachment. Running tests continue to completion or their deadline; use test_cancel to stop a run explicitly. If this attachment controls a debugger, releasing it starts the 30-second takeover grace before the target stops.",
   }, function(binding, cx, call)
     return request({ op = "project_detach", binding = binding }, cx, call)
   end)

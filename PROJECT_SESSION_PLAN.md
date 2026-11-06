@@ -13,7 +13,7 @@ the subsequent inspection milestones below are not yet implemented by this slice
 Native workspace composition is now implemented: a project-bound action canvas,
 Tern Files and native document editor, a terminal, and adjustable result splits.
 The workspace reuses Tern's live document model; Elide document-provider/LSP hooks,
-coverage decorations, and debugger integration remain pending. Launches use the
+coverage decorations, and debugger editor overlays remain pending. Launches use the
 SDK layout API directly and are validated in an isolated desktop daemon/window.
 
 Coverage inspection now has runtime-owned immutable artifacts, bounded project-host
@@ -21,6 +21,14 @@ reads, a native Tests coverage browser, file/line navigation and paged Carly acc
 Truffle source identity comes from evaluated text; native buffer freshness and
 overlays remain host dependencies. Near-term inspection work prioritizes Truffle
 languages; HotSpot-specific debugging and tooling follow only as needed.
+
+Guest debug launch is now implemented through a project-owned Truffle DAP actor:
+JS/Python execution, file-based JS test debugging, verified breakpoints, stepping,
+stack/scope inspection, explicit value browsing, native source links, and shared
+UI/Carly control. Each pause has scoped handles; control transfer revokes queued
+mutations. Losing the controller starts a 30-second takeover grace before teardown.
+The native Debug panel uses current TSP facilities. Native editor overlays, late
+attach, arbitrary expression evaluation and JVM debugging remain future capabilities.
 
 This is the requested root-level working plan. It describes work in **Elide**, **elide-tern**, and **Tern / tern-sdk**.
 It does not claim that proposed interfaces already exist. Registry, distribution CI, and product documentation are

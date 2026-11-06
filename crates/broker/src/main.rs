@@ -1,4 +1,5 @@
 mod coverage;
+mod debug;
 mod project;
 mod protocol;
 
@@ -287,7 +288,7 @@ fn dispatch(request: Request, sessions: &Sessions, serial: &AtomicUsize, project
       return Ok(
         json!({"schema":snapshot.schema, "session":snapshot.session, "epoch":snapshot.epoch,
         "revision":snapshot.revision, "root":snapshot.root, "configuration":snapshot.configuration,
-        "attachments":snapshot.attachments, "runs":runs}),
+        "attachments":snapshot.attachments, "runs":runs, "debug":snapshot.debug}),
       );
     }
     Request::ProjectDetach { binding } => {
@@ -322,6 +323,45 @@ fn dispatch(request: Request, sessions: &Sessions, serial: &AtomicUsize, project
       return artifact.map_or(Ok(Value::Null), |artifact| {
         coverage::page(&artifact, *file, *offset, *limit)
       });
+    }
+    Request::ProjectDebugLaunch {
+      binding,
+      command,
+      subject,
+      options,
+    } => {
+      let generation =
+        projects
+          .lock()
+          .unwrap()
+          .debug_launch(binding, command, Path::new(subject), options.clone(), Instant::now())?;
+      return Ok(json!({"generation":generation}));
+    }
+    Request::ProjectDebugSnapshot { binding, compact } => {
+      let snapshot = projects.lock().unwrap().debug_snapshot(binding, Instant::now())?;
+      return if *compact {
+        snapshot.map_or(Ok(Value::Null), debug::compact)
+      } else {
+        serde_json::to_value(snapshot).map_err(err)
+      };
+    }
+    Request::ProjectDebugOperation {
+      binding,
+      command,
+      request,
+    } => {
+      projects
+        .lock()
+        .unwrap()
+        .debug_request(binding, command, request.clone(), Instant::now())?;
+      return Ok(json!({}));
+    }
+    Request::ProjectDebugTakeover { binding, generation } => {
+      projects
+        .lock()
+        .unwrap()
+        .debug_takeover(binding, generation, Instant::now())?;
+      return Ok(json!({}));
     }
     Request::ProjectCancel { binding, run } => {
       projects.lock().unwrap().cancel(binding, run, Instant::now())?;

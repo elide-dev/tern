@@ -102,6 +102,48 @@ local function launch_job(cx, kind, subject, cwd, target)
   end
 end
 
+local function launch_debug(cx, context, target)
+  if not local_host(cx) or not context then
+    return
+  end
+  local config = configuration(cx)
+  if not config then
+    return
+  end
+  local runtime = config.runtime or "elide"
+  if string.find(runtime, "/") and string.sub(runtime, 1, 1) ~= "/" then
+    runtime = path(runtime)
+  end
+  local argv = {
+    path(config.debug or "../dist/elide-tern-debug"),
+    path(config.broker or "../dist/elide-tern-broker"),
+    config.project_state or (config.state and (config.state .. "-projects")) or (tern.plugin.data .. "/projects"),
+    runtime,
+    context.root,
+  }
+  local pane = target or cx.session:focused()
+  local read = pane and cx.session:read(pane, { lines = 1, max_chars = 1 })
+  if type(read) == "table" and type(read.path) == "string" then
+    local extension = string.match(read.path, "%.([%w]+)$")
+    if
+      extension == "js"
+      or extension == "mjs"
+      or extension == "cjs"
+      or extension == "ts"
+      or extension == "mts"
+      or extension == "cts"
+      or extension == "py"
+    then
+      if read.dirty then
+        cx:toast("info", "Save this file before debugging.")
+        return
+      end
+      table.insert(argv, read.path)
+    end
+  end
+  return terminal(cx, argv, context.root, target)
+end
+
 local function runtime_action(cx, context, command, target)
   if not local_host(cx) then
     return
@@ -118,6 +160,7 @@ local function runtime_action(cx, context, command, target)
 end
 
 workspace.install({
+  debug = launch_debug,
   build = function(cx, context, target)
     return runtime_action(cx, context, "build", target)
   end,
@@ -172,6 +215,7 @@ local function project_menu(context, cx)
     placeholder = context.name or "Project",
     items = {
       { label = "Run tests", value = "test", icon = "play" },
+      { label = "Open debugger", value = "debug", icon = "bug" },
       { label = "Open REPL", value = "repl", icon = "terminal" },
       { label = "Serve static files", value = "static", icon = "server" },
       { label = "Serve a script…", value = "script", icon = "server" },
@@ -185,6 +229,8 @@ local function project_menu(context, cx)
     elseif current and item then
       if item.value == "test" then
         launch_job(current, "test", context.root, context.root)
+      elseif item.value == "debug" then
+        launch_debug(current, context)
       elseif item.value == "repl" then
         launch(current, "js", context)
       elseif item.value == "static" then
@@ -268,6 +314,20 @@ tern.command({
   icon = "folder",
   run = function(cx)
     detect(cx, project_menu)
+  end,
+})
+tern.command({
+  id = "debug",
+  title = "Debug project source",
+  icon = "bug",
+  run = function(cx)
+    detect(cx, function(context, current)
+      if context then
+        launch_debug(current, context)
+      else
+        current:toast("info", "Open a local project directory first.")
+      end
+    end)
   end,
 })
 tern.command({

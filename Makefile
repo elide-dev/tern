@@ -28,7 +28,7 @@ repl:
 	cp "$(ELIDE_SOURCE)/target/debug/examples/embedded_surface" dist/.elide-tern-repl.new
 	mv dist/.elide-tern-repl.new dist/elide-tern-repl
 
-link: build repl serve testing project
+link: build repl serve testing project debugging
 	tern plugin link "$(CURDIR)/plugin"
 
 
@@ -76,3 +76,17 @@ test-sessions: build project
 .PHONY: test-coverage
 test-coverage: build testing project
 	python3 -u tests/coverage.py $(if $(RUNTIME),--runtime "$(RUNTIME)")
+
+.PHONY: debugging test-debug
+debugging:
+	$(MAKE) -C "$(ELIDE_SOURCE)" build-debug-surface
+	mkdir -p dist
+	cp "$(ELIDE_SOURCE)/target/debug/examples/debug_surface" dist/.elide-tern-debug.new
+	mv dist/.elide-tern-debug.new dist/elide-tern-debug
+
+test-debug: build debugging
+	python3 -u tests/debug.py $(if $(RUNTIME),--runtime "$(RUNTIME)")
+
+.PHONY: test-workspace
+test-workspace: build
+	python3 -u tests/workspace.py $(if $(HEADLESS),--headless)
