@@ -79,8 +79,11 @@ The launcher currently supports local hosts; remote hosts require their own nati
 launcher and SDK installation.
 
 `plugin/config.json` is ignored. The default broker is `../dist/elide-tern-broker`;
-`repl` defaults to `../dist/elide-tern-repl`.
-Keep `elide-tern-worker` beside it. An optional `state` setting selects a short,
+keep `elide-tern-worker` beside it. Every native surface launches as
+`<runtime> tern <repl|serve|test|project|debug>`, so a runtime built from a branch with
+that command needs no separate launchers. The optional `repl`, `serve`, `test`,
+`project` and `debug` settings name an explicit launcher executable for one surface,
+which the `dist/elide-tern-*` development shims built by `make link` provide. An optional `state` setting selects a short,
 private broker directory if Tern's plugin-data path exceeds Unix socket limits.
 Never store SDK binaries or machine-specific configuration in source control.
 The native SDK is user-supplied; no archive is downloaded automatically.
@@ -111,8 +114,8 @@ previous owner. Closing the controlling view starts a 30-second grace period for
 another attachment to take over, then stops the target. Stop ends it immediately.
 Debug-test runs cannot overlap ordinary tests writing to the same project output.
 
-Build with `make debugging` (`make link` includes it). `config.debug` can override
-the launcher; runtime and project-state settings are shared with Tests.
+Build the development shim with `make debugging` (`make link` includes it).
+`config.debug` can override the launcher; runtime and project-state settings are shared with Tests.
 `make test-debug RUNTIME=/path/to/elide` validates JavaScript and Python in a real
 Tern desktop, including value browsing, source navigation, agent/UI handoff, stale
 commands, debug tests, busy-program Pause and teardown. Native editor gutter
@@ -120,8 +123,8 @@ breakpoints, expression watches, late attachment and JVM debugging remain separa
 
 ### Servers
 
-Run `make serve` and choose **Serve directory or script** in Tern's command palette.
-The launcher uses the canonical Rust serving surface, independently of REPL workers.
+Choose **Serve directory or script** in Tern's command palette, or type `elide serve`
+in any Tern terminal. Both use the canonical Rust serving surface, independently of REPL workers.
 Directories bind an available loopback port; scripts use `runtime` from
 `plugin/config.json` (default `elide` on PATH). Relative runtime paths resolve from
 the plugin directory. The `serve` setting overrides the surface launcher.
@@ -157,8 +160,9 @@ continuity and teardown. `python3 tests/telemetry.py --static` checks the static
 
 ### Tests
 
-Build the native test host with `make testing`, then choose **Run tests** in Tern.
-Enter a project directory or test file. The surface provides live results, failure
+Choose **Run tests** in Tern and enter a project directory or test file, or type
+`elide test` in any Tern terminal: the shipped binary negotiates the surface itself and
+keeps plain output for reporters and redirected output. The surface provides live results, failure
 filtering, original diagnostics, per-test output, source links, rerun and cancel.
 It uses `config.runtime`; `config.test` optionally overrides the launcher path.
 Inside a detected project, Tests attaches to a shared project host. Closing its view
@@ -175,7 +179,7 @@ run's coverage option; earlier measurements remain unchanged. JavaScript fingerp
 come from the text evaluated by Truffle. These panels show measured source versions;
 they do not claim live buffer freshness or install native editor gutters.
 
-Build this host with `make project` (`make link` includes it). `config.project`
+Build the development shim with `make project` (`make link` includes it). `config.project`
 can override the launcher and `config.project_state` selects a short private host
 directory. Development builds currently consume the shared `elide-project-session`
 crate from the sibling Elide checkout, alongside the existing surface build dependency.
