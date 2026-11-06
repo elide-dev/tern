@@ -1,4 +1,5 @@
 local project = require("./lib/project")
+local workspace = require("./lib/workspace")
 
 local function path(value)
   if string.sub(value, 1, 1) == "/" then
@@ -30,18 +31,25 @@ end
 
 require("./lib/agents").install(configuration, path, project)
 
-local function terminal(cx, argv, cwd)
+local function terminal(cx, argv, cwd, target)
   local command = {}
   for _, value in argv do
     table.insert(command, "'" .. string.gsub(value, "'", "'\"'\"'") .. "'")
   end
-  local pane = cx.layout:new_tab({ cwd = cwd, command = "exec " .. table.concat(command, " ") })
+  local spec = { cwd = cwd, command = "exec " .. table.concat(command, " ") }
+  local pane
+  if target and cx.session:pane(target) then
+    pane = cx.layout:split(target, "right", spec, { focus = true })
+  else
+    pane = cx.layout:new_tab(spec)
+  end
   if not pane then
     cx:toast("error", "Could not open the panel.")
   end
+  return pane
 end
 
-local function launch(cx, language, context)
+local function launch(cx, language, context, target)
   if not local_host(cx) then
     return
   end
@@ -59,16 +67,16 @@ local function launch(cx, language, context)
     state = config.state and (config.state .. "-" .. context.session_key)
       or (tern.plugin.data .. "/p/" .. context.session_key)
   end
-  terminal(cx, {
+  return terminal(cx, {
     path(config.repl or "../dist/elide-tern-repl"),
     path(config.broker or "../dist/elide-tern-broker"),
     path(config.sdk),
     state,
     language,
-  }, context and context.root)
+  }, context and context.root, target)
 end
 
-local function launch_job(cx, kind, subject, cwd)
+local function launch_job(cx, kind, subject, cwd, target)
   if not local_host(cx) then
     return
   end
@@ -81,18 +89,51 @@ local function launch_job(cx, kind, subject, cwd)
     runtime = path(runtime)
   end
   if kind == "test" and cwd then
-    terminal(cx, {
+    return terminal(cx, {
       path(config.project or "../dist/elide-tern-project"),
       path(config.broker or "../dist/elide-tern-broker"),
       config.project_state or (config.state and (config.state .. "-projects")) or (tern.plugin.data .. "/projects"),
       runtime,
       cwd,
       subject,
-    }, cwd)
+    }, cwd, target)
   else
-    terminal(cx, { path(config[kind] or ("../dist/elide-tern-" .. kind)), runtime, subject }, cwd)
+    return terminal(cx, { path(config[kind] or ("../dist/elide-tern-" .. kind)), runtime, subject }, cwd, target)
   end
 end
+
+local function runtime_action(cx, context, command, target)
+  if not local_host(cx) then
+    return
+  end
+  local config = configuration(cx)
+  if not config then
+    return
+  end
+  local runtime = config.runtime or "elide"
+  if string.find(runtime, "/") and string.sub(runtime, 1, 1) ~= "/" then
+    runtime = path(runtime)
+  end
+  return terminal(cx, { runtime, command }, context.root, target)
+end
+
+workspace.install({
+  build = function(cx, context, target)
+    return runtime_action(cx, context, "build", target)
+  end,
+  run = function(cx, context, target)
+    return runtime_action(cx, context, "run", target)
+  end,
+  test = function(cx, context, target)
+    return launch_job(cx, "test", context.root, context.root, target)
+  end,
+  repl = function(cx, context, target)
+    return launch(cx, "js", context, target)
+  end,
+  serve = function(cx, context, target)
+    return launch_job(cx, "serve", context.root, context.root, target)
+  end,
+})
 
 local function view_tests(context, cx)
   if not context then
@@ -136,6 +177,7 @@ local function project_menu(context, cx)
       { label = "Serve a script…", value = "script", icon = "server" },
       { label = "Open manifest", value = "manifest", icon = "file" },
       { label = "View test runs", value = "tests", icon = "list" },
+      { label = "Open project workspace", value = "workspace", icon = "folder" },
     },
   }):next(function(item, err, current)
     if err and current then
@@ -151,6 +193,8 @@ local function project_menu(context, cx)
         current:open(context.root .. "/elide.pkl")
       elseif item.value == "tests" then
         view_tests(context, current)
+      elseif item.value == "workspace" then
+        workspace.open(context, current)
       elseif item.value == "script" then
         current
           :prompt({ placeholder = "Script path relative to project", value = "", action = "serve" })
@@ -178,6 +222,15 @@ local function detect(cx, callback, explicit)
     cx:toast("info", "Open a local project directory first.")
   end
 end
+
+tern.command({
+  id = "workspace",
+  title = "Open project workspace",
+  icon = "folder",
+  run = function(cx)
+    detect(cx, workspace.open)
+  end,
+})
 
 tern.command({
   id = "repl",

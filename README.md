@@ -34,6 +34,21 @@ retains its draft, undo state and history. The entire REPL shares one notebook k
 inserts a newline. `/help` lists the shared REPL commands. Clear clears the transcript;
 it does not reset the runtime.
 
+### Project workspace
+
+Open Tern in a directory containing `elide.pkl` (or any child directory), then click
+**Workspace** in the status bar or choose **Open project workspace** in the palette.
+This creates a project tab with Tern's Files browser, native file editor, a terminal,
+and an action bar for Build, Test, Run, REPL, and static serving. All panes use Tern's
+normal adjustable splits. Opening the workspace again focuses it without resetting
+your layout. Project actions retain their original root as focus changes.
+
+The editor starts with `elide.pkl`; select source files in Files to work on code.
+Editing, undo, saving, and dirty buffers belong to Tern's native editor. Test/REPL/server
+results open beside the editor; clicking their action again focuses the existing pane.
+Build and Run currently use the runtime's terminal output and normal Tern process lifetime.
+This does not yet register Elide LSP providers, debugger decorations, or coverage gutters.
+
 The SDK executes JavaScript and Python with shared live bindings: define
 `const y = {hi: 5}` in JavaScript, switch to Python and evaluate `y.hi`.
 Statements stay silent and object results render as expandable native JSON trees.

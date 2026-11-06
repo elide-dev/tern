@@ -78,7 +78,10 @@ end
 function M.status(pane)
   local record = records[pane.pane]
   if local_host and record and record.project then
-    return { { text = record.project.name or "Project", icon = "folder", command = "plugin.elide.project" } }
+    return {
+      { text = record.project.name or "Project", icon = "folder", command = "plugin.elide.project" },
+      { text = "Workspace", icon = "folder", command = "plugin.elide.workspace" },
+    }
   end
   return nil
 end
