@@ -11,9 +11,9 @@ Tern window: palette commands
 
 Native surface tabs open through `cx.layout:new_tab({cwd, command})`; the launcher
 is the tab's initial process, never text sent into an interactive shell. The launcher
-is the runtime itself: `elide tern <surface> …` hosts the REPL, serving, test, project
-and debug surfaces, each negotiating TSP on the pane's pty and exiting with status 2
-outside Tern. `elide test` and `elide serve` typed into an ordinary Tern terminal
+is the runtime itself: `elide test` and `elide serve` host their own surfaces, and
+`elide tern <repl|project|debug> …` hosts the broker-backed ones, each negotiating TSP
+on the pane's pty and exiting with status 2 outside Tern. `elide test` and `elide serve` typed into an ordinary Tern terminal
 negotiate the same surfaces without the plugin. A host lens renders JSON output of
 `elide project` and `--json` commands as a native tree; it never touches TSP surfaces. Launch
 arguments are individually shell-quoted because this SDK field takes a command string.

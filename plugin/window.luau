@@ -37,8 +37,8 @@ local function runtime_path(config)
   return runtime
 end
 
--- The argv prefix that hosts a native surface: an explicit per-surface launcher from
--- config, or the runtime's own `elide tern <kind>` host.
+-- The argv prefix that hosts a broker-backed surface (repl, project, debug): an explicit
+-- per-surface launcher from config, or the runtime's own `elide tern <kind>` host.
 local function launcher(config, kind)
   if type(config[kind]) == "string" then
     return { path(config[kind]) }
@@ -162,9 +162,14 @@ local function launch_job(cx, kind, subject, cwd, target, opened)
       return terminal(current, command, cwd, target)
     end, opened)
   else
-    local argv = launcher(config, kind)
-    table.insert(argv, runtime)
-    table.insert(argv, subject)
+    -- `elide test` and `elide serve` negotiate their own surfaces; an explicit launcher
+    -- override still receives the runtime and subject.
+    local argv
+    if type(config[kind]) == "string" then
+      argv = { path(config[kind]), runtime, subject }
+    else
+      argv = { runtime, "--ignore-version", kind, subject }
+    end
     return host(cx, config, kind, argv, function(current, command)
       return terminal(current, command, cwd, target)
     end, opened)
