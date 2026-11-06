@@ -45,6 +45,7 @@ test("positive values", () => assert.equal(classify(1), "positive"));
     fixture_config = {'runtime': str(runtime)}
     for name in ['broker']:
         fixture_config[name] = str(root / 'dist' / ('elide-tern-' + name))
+    fixture_config['project'] = str(root / 'dist/elide-tern-project')
     (package / 'config.json').write_text(json.dumps(fixture_config))
     fixture_root = state / 'crates/tern'
     (fixture_root / 'goldens').mkdir(parents=True)
