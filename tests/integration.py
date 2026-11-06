@@ -126,10 +126,15 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
         def toast_after(url, text):
             ctl('open-url', url)
             return wait(lambda: text in tree('.toast'), 10)
+        # Sources inside a known project open the Elide source block; other files open Tern's editor.
+        def source_block(text):
+            return wait(lambda: text in tree('[data-role="source-editor"]'), 15)
         ctl('open-url', 'elide://source?path=' + str(tapp / 'two.js') + '&line=2')
-        check('source link opens', opened(tapp / 'two.js'), ctl('state').get('file_blocks'))
+        check('source link opens', source_block('three'), tree('[data-role="source-editor"]'))
         ctl('open-url', 'elide://source?root=' + str(tapp) + '&path=' + str(tapp / 'sample.test.mjs') + '&line=3')
-        check('source link with root opens', opened(tapp / 'sample.test.mjs'), ctl('state').get('file_blocks'))
+        check('source link with root opens', source_block('strictEqual'), tree('[data-role="source-editor"]'))
+        ctl('open-url', 'elide://source?root=' + str(tapp) + '&path=' + str(tapp / 'elide.pkl'))
+        check('non-source link opens the editor', opened(tapp / 'elide.pkl'), ctl('state').get('file_blocks'))
         def none_open(path):
             return not any(Path(b['path']).resolve() == path.resolve() for b in ctl('state').get('file_blocks', []))
         check('outside root rejected', toast_after('elide://source?root=' + str(tapp) + '&path=' + str(outside), 'malformed') and none_open(outside), tree('.toast'))
