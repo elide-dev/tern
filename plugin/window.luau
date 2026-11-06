@@ -46,6 +46,38 @@ local function launcher(config, kind)
   return { runtime_path(config), "tern", kind }
 end
 
+-- Whether a runtime executable supports `elide tern`, by path. An older runtime would
+-- otherwise resolve `tern` as a project script and run something unrelated.
+local supports_tern = {}
+
+-- Runs `open(argv)` once the runtime is known to host surfaces. Explicit launcher
+-- overrides skip the probe. Returns the pane when the answer is already cached.
+local function host(cx, config, kind, argv, open)
+  if type(config[kind]) == "string" then
+    return open(argv)
+  end
+  local runtime = argv[1]
+  local known = supports_tern[runtime]
+  if known == true then
+    return open(argv)
+  elseif known == false then
+    cx:toast("error", "The configured runtime has no `elide tern`; update it or set a launcher in plugin/config.json.")
+    return nil
+  end
+  local ok, problem = pcall(function()
+    tern.process.run({ runtime, "tern", "--help" }, { timeout_ms = 15000 }, function(result, current)
+      supports_tern[runtime] = result.status == 0
+      if current then
+        host(current, config, kind, argv, open)
+      end
+    end)
+  end)
+  if not ok then
+    cx:toast("error", "Could not probe the runtime: " .. tostring(problem))
+  end
+  return nil
+end
+
 require("./lib/agents").install(configuration, path, project)
 
 local function terminal(cx, argv, cwd, target)
@@ -89,7 +121,9 @@ local function launch(cx, language, context, target)
   table.insert(argv, path(config.sdk))
   table.insert(argv, state)
   table.insert(argv, language)
-  return terminal(cx, argv, context and context.root, target)
+  return host(cx, config, "repl", argv, function(command)
+    return terminal(cx, command, context and context.root, target)
+  end)
 end
 
 local function launch_job(cx, kind, subject, cwd, target)
@@ -113,12 +147,16 @@ local function launch_job(cx, kind, subject, cwd, target)
     if subject then
       table.insert(argv, subject)
     end
-    return terminal(cx, argv, cwd, target)
+    return host(cx, config, "project", argv, function(command)
+      return terminal(cx, command, cwd, target)
+    end)
   else
     local argv = launcher(config, kind)
     table.insert(argv, runtime)
     table.insert(argv, subject)
-    return terminal(cx, argv, cwd, target)
+    return host(cx, config, kind, argv, function(command)
+      return terminal(cx, command, cwd, target)
+    end)
   end
 end
 
@@ -159,7 +197,9 @@ local function launch_debug(cx, context, target)
       table.insert(argv, read.path)
     end
   end
-  return terminal(cx, argv, context.root, target)
+  return host(cx, config, "debug", argv, function(command)
+    return terminal(cx, command, context.root, target)
+  end)
 end
 
 local function runtime_action(cx, context, command, target)
