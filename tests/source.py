@@ -235,8 +235,9 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         ctl('type', 'z')
         check('large file takes edits', wait(lambda: len(statuses()) == 2 and 'Modified' in statuses()[-1], 10), statuses())
         check('edit stays in its block', 'Modified' not in statuses()[0], statuses())
-        check('large file says it is not highlighted', 'no highlighting' in tree('[data-role="source-lang"]'), tree('[data-role="source-lang"]'))
-        check('small file highlighted', 'no highlighting' not in json.dumps(nodes('[data-role="source-lang"]')[:1]), tree('[data-role="source-lang"]'))
+        # Past 600 lines the editor is sent without `lang`, so it is not `.code`; the small file is.
+        check('large file not highlighted', len(nodes('.sf-editor.code')) == 1 and len(nodes('.sf-editor:not(.code)')) == 1,
+              tree('.sf-editor'))
         print('     large file edit round trip: %.2fs' % (time.monotonic() - started), flush=True)
         ctl('shot', 'source-large')
         ctl('open-url', 'elide://source?root=' + str(project) + '&path=' + str(huge))
