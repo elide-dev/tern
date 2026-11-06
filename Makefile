@@ -87,6 +87,16 @@ debugging:
 test-debug: build
 	python3 -u tests/debug.py $(if $(RUNTIME),--runtime "$(RUNTIME)")
 
+.PHONY: help test-help
+help:
+	cd "$(ELIDE_SOURCE)" && PATH=/usr/bin:$$PATH cargo build -p cli --example help_surface
+	mkdir -p dist
+	cp "$(ELIDE_SOURCE)/target/debug/examples/help_surface" dist/.elide-tern-help.new
+	mv dist/.elide-tern-help.new dist/elide-tern-help
+
+test-help:
+	python3 tests/help.py --runtime "$(RUNTIME)"
+
 .PHONY: test-workspace
 test-workspace: build
 	python3 -u tests/workspace.py $(if $(HEADLESS),--headless)
