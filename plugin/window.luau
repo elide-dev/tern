@@ -1,5 +1,6 @@
 local links = require("./lib/links")
 local project = require("./lib/project")
+local source = require("./lib/source")
 local workspace = require("./lib/workspace")
 
 local function path(value)
@@ -235,6 +236,33 @@ local function runtime_action(cx, context, command, target)
   return terminal(cx, { runtime_path(config), command }, context.root, target)
 end
 
+-- Opens the `elide.source` block on `path` (absolute, inside `root`), beside `target` or the
+-- focused pane. Returns its pane, or nil with a toast.
+local function open_source(cx, path, root, line, target)
+  if not source.lang(path) then
+    cx:toast("info", "Elide source shows JavaScript, TypeScript, Python and Kotlin files.", path)
+    return nil
+  end
+  local args = { path, root or "" }
+  if line then
+    table.insert(args, tostring(line))
+  end
+  local pane = cx:new_block("elide.source", args, "beside", target and { target = target } or nil)
+  if not pane then
+    cx:toast("error", "Could not open Elide source.")
+  end
+  return pane
+end
+
+-- The file shown in `pane` when it is a saved source file inside `root`, else nil.
+local function source_in(cx, pane, root)
+  local read = pane and cx.session:read(pane, { lines = 1, max_chars = 1 })
+  if type(read) == "table" and type(read.path) == "string" and links.within(read.path, root) then
+    return read.path
+  end
+  return nil
+end
+
 workspace.install({
   debug = launch_debug,
   build = function(cx, context, target)
@@ -251,6 +279,16 @@ workspace.install({
   end,
   serve = function(cx, context, target, opened)
     return launch_job(cx, "serve", context.root, context.root, target, opened)
+  end,
+  -- Not remembered as the toolbar's result pane: each click opens the editor's current file.
+  source = function(cx, context, target)
+    local file = source_in(cx, target, context.root)
+    if not file then
+      cx:toast("info", "Open a project source file in the editor first.")
+    else
+      open_source(cx, file, context.root, nil, target)
+    end
+    return nil
   end,
 })
 
@@ -282,6 +320,29 @@ local function prompt_job(cx, kind, placeholder)
   end)
 end
 
+-- Opens the Elide source block on the focused file, or on a path asked for relative to the project.
+local function prompt_source(cx, context)
+  local focused = project.context(cx)
+  local file = focused and source_in(cx, focused.pane, context.root)
+  if file then
+    open_source(cx, file, context.root)
+    return
+  end
+  cx:prompt({ placeholder = "Source path relative to project", value = "", icon = "file", action = "open" })
+    :next(function(subject, problem, fresh)
+      if problem and fresh then
+        fresh:toast("error", problem)
+      elseif fresh and subject and subject ~= "" then
+        local path = links.absolute(string.sub(subject, 1, 1) == "/" and subject or (context.root .. "/" .. subject))
+        if not path or not links.within(path, context.root) or not tern.fs.exists(path) then
+          fresh:toast("info", "No such file in this project.", subject)
+        else
+          open_source(fresh, path, context.root)
+        end
+      end
+    end)
+end
+
 local function project_menu(context, cx)
   if not context then
     cx:toast("info", "No elide.pkl found in this directory or its parents.")
@@ -292,6 +353,7 @@ local function project_menu(context, cx)
     items = {
       { label = "Run tests", value = "test", icon = "play" },
       { label = "Open debugger", value = "debug", icon = "bug" },
+      { label = "Open Elide source…", value = "source", icon = "file" },
       { label = "Open REPL", value = "repl", icon = "terminal" },
       { label = "Serve static files", value = "static", icon = "server" },
       { label = "Serve a script…", value = "script", icon = "server" },
@@ -307,6 +369,8 @@ local function project_menu(context, cx)
         launch_job(current, "test", context.root, context.root)
       elseif item.value == "debug" then
         launch_debug(current, context)
+      elseif item.value == "source" then
+        prompt_source(current, context)
       elseif item.value == "repl" then
         launch(current, "js", context)
       elseif item.value == "static" then
@@ -402,6 +466,20 @@ tern.command({
         launch_debug(current, context)
       else
         current:toast("info", "Open a local project directory first.")
+      end
+    end)
+  end,
+})
+tern.command({
+  id = "source",
+  title = "Open Elide source view",
+  icon = "file",
+  run = function(cx)
+    detect(cx, function(context, current)
+      if context then
+        prompt_source(current, context)
+      else
+        current:toast("info", "Open a file inside an Elide project first.")
       end
     end)
   end,
@@ -505,6 +583,23 @@ tern.route.link(function(request, cx)
     return { handled = true }
   end
   if target.action == "source" then
+    -- The source block when the file sits in a known project and is a source it shows;
+    -- otherwise Tern's own editor.
+    local root = target.root
+    if not root then
+      for _, candidate in project.roots() do
+        if links.within(target.path, candidate) and (not root or #candidate > #root) then
+          root = candidate
+        end
+      end
+    end
+    if root and source.lang(target.path) and configuration() then
+      local args = { target.path, root }
+      if target.line then
+        table.insert(args, tostring(target.line))
+      end
+      return { block = "elide.source", args = args }
+    end
     cx.docs:open(target.path, { line = target.line })
   elseif target.action == "debug" then
     launch_debug(cx, { root = target.root }, nil, nil, target.path)

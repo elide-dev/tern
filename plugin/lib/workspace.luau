@@ -53,6 +53,7 @@ local function controls(context)
     ui.node("row", { grow = 1 }),
     separator(),
     ui.node("buttons", { variant = "toolbar", label = "Project tools", role = "project-tools" }, {
+      button("Source", "source", "file"),
       button("Open REPL", "repl", "terminal"),
       button("Serve project files", "serve", "server"),
       button("Show project files", "files", "folder"),
