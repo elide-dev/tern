@@ -241,6 +241,12 @@ local DISK_POLL_MS = 2000
 -- Unsaved text up to this size survives a plugin reload or daemon restart through `save`.
 local MAX_DRAFT = 64 * 1024
 local MAX_MATCHES = 2000
+-- Tern's highlighter recolors the whole text on every change to the editor node, so its cost grows
+-- faster than the file (measured per keystroke: 0.1 s at 300 lines, 0.3-0.6 s at 900, 3.5 s at
+-- 2,000, over 10 s at 5,000). Larger files are shown as plain text.
+local HIGHLIGHT_LINES = 600
+-- Accenting the caret line's number resends the whole gutter on every line move.
+local ACCENT_LINES = 2000
 local OVERLAYS = { "none", "coverage", "debug", "hotness" }
 local HOTNESS_REASON = "Profiles are not source-located yet: the broker has no project_profile_page operation."
 local SIGNS = {
@@ -1190,7 +1196,7 @@ local function lines_view(state, starts)
       points[line] = true
     end
   end
-  local caret = buf.cursor.l
+  local caret = count <= ACCENT_LINES and buf.cursor.l or nil
   for line = 1, shown do
     local glyph, tone, note = " ", nil, ""
     if marks then
@@ -1630,9 +1636,20 @@ local function status_bar(state)
     segs,
     ui.node("seg", { key = "pos", role = "source-position", side = "right", text = position, priority = 7 })
   )
+  local language = LANG_NAMES[state.lang or ""] or "Plain text"
+  local plain = state.lang and #buf.lines > HIGHLIGHT_LINES
   table.insert(
     segs,
-    ui.node("seg", { key = "lang", side = "right", text = LANG_NAMES[state.lang or ""] or "Plain text", priority = 3 })
+    ui.node("seg", {
+      key = "lang",
+      role = "source-lang",
+      side = "right",
+      text = plain and (language .. " · no highlighting") or language,
+      title = plain
+          and ("Files over " .. HIGHLIGHT_LINES .. " lines are not highlighted: Tern recolors the whole text on every edit.")
+        or nil,
+      priority = 3,
+    })
   )
   table.insert(
     segs,
@@ -1991,7 +2008,8 @@ tern.block.define("source", {
         text = buffer.text(buf),
         cursor = buffer.offset(buf, buf.cursor),
         anchor = a and buffer.offset(buf, buf.anchor) or nil,
-        lang = state.lang,
+        -- Even `highlight = false` keeps part of the cost, so large files drop `lang` entirely.
+        lang = #buf.lines <= HIGHLIGHT_LINES and state.lang or nil,
         nowrap = not state.wrap,
         maxLines = visible(state, cx),
         topline = top,
