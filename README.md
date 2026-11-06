@@ -126,6 +126,14 @@ reconnects to recent results, and another view can observe the same run without
 launching it again. Recent runs are selectable in the native UI.
 Whole-project runs include JVM tests; individual paths remain explicit test filters.
 
+**Run with coverage** collects a measured artifact for that invocation. The
+**Coverage** tab shows file coverage and covered/uncovered line details, with branch
+counters where the runtime supplies them. Select a line and follow **Open current
+source** into Tern's native editor, then save and rerun. Reruns preserve the selected
+run's coverage option; earlier measurements remain unchanged. JavaScript fingerprints
+come from the text evaluated by Truffle. These panels show measured source versions;
+they do not claim live buffer freshness or install native editor gutters.
+
 Build this host with `make project` (`make link` includes it). `config.project`
 can override the launcher and `config.project_state` selects a short private host
 directory. Development builds currently consume the shared `elide-project-session`
@@ -137,16 +145,23 @@ Run `make test-sessions RUNTIME=/path/to/elide` for two-window attachment, live 
 results, duplicate-command protection, reconnect, rerun and cancellation checks.
 `make test-project PROJECT=/path/to/project` opens an isolated desktop Tern window
 and verifies native tab launches, REPL, serving, and tests in that existing project.
+`make test-coverage RUNTIME=/path/to/elide` exercises coverage, native source/line
+navigation, editing, reruns and paged agent reads in an isolated desktop window.
 
 ### Built-in agent project tools
 
-Carly receives a cached project hint and five asynchronous exports:
+Carly receives a cached project hint and asynchronous exports:
 `project_open(root)`, `project_read(binding)`, `test_run(binding, subject, command)`,
 `test_cancel(binding, run)`, and `project_close(binding)` under `plugins.elide`.
 Opening returns an explicit project binding; changing focused tabs cannot retarget
 it. Reads renew the 60-second attachment lease and return bounded run/failure summaries.
 Use a fresh UUID command for an intentional run and retain it for retries. Native
 Tests views observe agent-started runs through the same project host.
+
+`test_cover(binding, subject, command)` starts tests with coverage.
+`coverage_read(binding, run, {})` lists measured files; pass `{file=N}` for the
+zero-based file index's lines. Both forms accept `offset` and `limit` (maximum 100)
+and return `next` for pagination. `project_read` includes coverage state and totals.
 
 This bridge uses Tern's callable exports and local IPC. It does not claim WebSocket
 MCP or automatic attachment to other agent harnesses. `make test-project` exercises

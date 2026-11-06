@@ -65,6 +65,12 @@ subscriptions outside the presentation layer. Existing TSP views and native sour
 navigation consume those records now; a later native provider consumes the same
 records. Neither adapter owns another editable source buffer.
 
+The initial coverage workflow is implemented: run-local immutable artifacts,
+validated shared reads, a paged native Tests browser, current-source/line links,
+reruns, and bounded agent reads. Truffle fingerprints identify evaluated text;
+historical source text is not yet retained. Native buffer observation and overlays
+remain proposed. Truffle languages take priority over further HotSpot-specific work.
+
 | Workflow | Implement with current facilities | Requires new Tern facilities |
 | --- | --- | --- |
 | Coverage | Collection options, accurate JS/JVM artifacts, file/line/branch browser, native source reveal and rerun | Native gutter layers and continuous buffer freshness |

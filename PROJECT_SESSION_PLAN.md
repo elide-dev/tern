@@ -16,6 +16,12 @@ The workspace reuses Tern's live document model; Elide document-provider/LSP hoo
 coverage decorations, and debugger integration remain pending. Launches use the
 SDK layout API directly and are validated in an isolated desktop daemon/window.
 
+Coverage inspection now has runtime-owned immutable artifacts, bounded project-host
+reads, a native Tests coverage browser, file/line navigation and paged Carly access.
+Truffle source identity comes from evaluated text; native buffer freshness and
+overlays remain host dependencies. Near-term inspection work prioritizes Truffle
+languages; HotSpot-specific debugging and tooling follow only as needed.
+
 This is the requested root-level working plan. It describes work in **Elide**, **elide-tern**, and **Tern / tern-sdk**.
 It does not claim that proposed interfaces already exist. Registry, distribution CI, and product documentation are
 separate workstreams; this plan supplies their eventual compatibility requirements.

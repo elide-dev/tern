@@ -87,6 +87,33 @@ function M.install(configuration, path, project)
   }, function(binding, run, cx, call)
     return request({ op = "project_cancel", binding = binding, run = run }, cx, call)
   end)
+  tern.carly.export("test_cover", {
+    sig = "test_cover(binding: table, subject: string, command: string) -> {run: string}",
+    doc = "Run tests with coverage. Use a new UUID for an intentional run; reuse it only for the same subject and coverage option after a lost response. Poll project_read for coverage state; coverage_read reads the measured artifact.",
+  }, function(binding, subject, command, cx, call)
+    return request(
+      { op = "project_test", binding = binding, subject = subject, command = command, options = { coverage = true } },
+      cx,
+      call
+    )
+  end)
+  tern.carly.export("coverage_read", {
+    sig = "coverage_read(binding: table, run: string, query: table) -> page?",
+    doc = "Read immutable coverage for this run. Pass {} to list files; {file=N} reads a zero-based file index. offset defaults to 0; limit defaults to 50 (max 100). next is the next offset or null. A missing sourceDigest means source identity is unavailable, not current. Returns null while no artifact is available; inspect project_read for the reason.",
+  }, function(binding, run, query, cx, call)
+    if type(query) ~= "table" then
+      call:fail("Coverage query must be a table.")
+      return
+    end
+    return request({
+      op = "project_coverage_page",
+      binding = binding,
+      run = run,
+      file = query.file,
+      offset = query.offset,
+      limit = query.limit,
+    }, cx, call)
+  end)
   tern.carly.export("project_close", {
     sig = "project_close(binding: table) -> table",
     doc = "Release this attachment. Running tests continue to completion or their deadline; use test_cancel to stop a run explicitly.",
