@@ -190,4 +190,29 @@ function M.uuid(random)
   )
 end
 
+local COMMENTS = { javascript = "//", typescript = "//", kotlin = "//", python = "#" }
+
+-- The line comment prefix for `path`'s language.
+function M.comment(path)
+  return COMMENTS[M.lang(path) or ""]
+end
+
+-- `s` (valid UTF-8) as UTF-16BE bytes: the encoding coverage artifacts digest source identity in.
+function M.utf16be(s)
+  local out = {}
+  local function unit(u)
+    out[#out + 1] = string.char(math.floor(u / 256), u % 256)
+  end
+  for _, cp in utf8.codes(s) do
+    if cp >= 0x10000 then
+      local v = cp - 0x10000
+      unit(0xD800 + math.floor(v / 1024))
+      unit(0xDC00 + v % 1024)
+    else
+      unit(cp)
+    end
+  end
+  return table.concat(out)
+end
+
 return M

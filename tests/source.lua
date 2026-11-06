@@ -62,6 +62,133 @@ local id = source.uuid(math.random)
 check("uuid shape", string.find(id, "^%x%x%x%x%x%x%x%x%-%x%x%x%x%-4%x%x%x%-[89ab]%x%x%x%-%x+$") ~= nil, true)
 check("uuid length", #id, 36)
 
+check("utf16be ascii", source.utf16be("A"), "\0A")
+check("utf16be astral", source.utf16be("😀"), "\216\061\222\000")
+check("comment js", source.comment("/p/a.ts"), "//")
+check("comment py", source.comment("/p/a.py"), "#")
+
+-- Buffer: UTF-16 positions, edits, undo, line maps.
+local buffer = dofile(here .. "/../plugin/lib/buffer.luau")
+local function key(name, extra)
+  local k = { name = name, ctrl = false, alt = false, shift = false, meta = false }
+  for field, value in pairs(extra or {}) do
+    k[field] = value
+  end
+  return k
+end
+check("byte astral", buffer.byte("a😀b", 3), 6)
+check("byte inside pair rounds down", select(2, buffer.byte("a😀b", 2)), 1)
+check("column astral", buffer.column("a😀b", 6), 3)
+local b = buffer.new("a😀b\nλx\n")
+check("length", buffer.length(b), 8)
+check("position after astral", buffer.position(b, 3).c, 3)
+check("position next line", buffer.position(b, 5).l, 2)
+check("offset roundtrip", buffer.offset(b, buffer.position(b, 6)), 6)
+b.cursor = { l = 1, c = 1 }
+buffer.horizontal(b, 1, false, false)
+check("right over astral", b.cursor.c, 3)
+buffer.horizontal(b, -1, true, false)
+check("shift-left selects astral", buffer.slice(b, buffer.selection(b)), "😀")
+buffer.insert(b, "Z")
+check("typing replaces selection", b.lines[1], "aZb")
+buffer.insert(b, "Y")
+check("typing merges", #b.undo, 1)
+buffer.undo(b)
+check("undo restores astral", b.lines[1], "a😀b")
+check("undo restores caret", b.cursor.c, 1)
+buffer.redo(b)
+check("redo", b.lines[1], "aZYb")
+check("dirty after edit", buffer.dirty(b), true)
+buffer.mark_saved(b)
+check("clean after save", buffer.dirty(b), false)
+buffer.undo(b)
+check("dirty after undo past save", buffer.dirty(b), true)
+buffer.redo(b)
+check("clean after redo to save", buffer.dirty(b), false)
+
+local e = buffer.new("x\n😀y")
+check("edit len guard", buffer.apply(e, { from = 0, to = 0, text = "q", cursor = 1, len = 99 }), nil)
+buffer.apply(e, { from = 2, to = 4, text = "", cursor = 2, len = 5 })
+check("native edit deletes astral", e.lines[2], "y")
+check("native caret move", buffer.apply(e, { from = 1, to = 1, text = "", cursor = 2, len = 3 }), false)
+check("native caret line", e.cursor.l, 2)
+
+local crlf = buffer.new("a\r\nb\r\n")
+check("crlf lines", crlf.lines[2], "b")
+check("crlf disk", buffer.disk(crlf), "a\r\nb\r\n")
+
+local c = buffer.new("function f() {\n  return 1\n}")
+c.cursor = { l = 1, c = 14 }
+buffer.newline(c, "  ")
+check("auto-indent after brace", c.lines[2], "  ")
+check("auto-indent caret", c.cursor.c, 2)
+c.cursor = { l = 3, c = 10 }
+buffer.newline(c, "  ")
+check("auto-indent copies", c.lines[4], "  ")
+c.anchor, c.cursor = { l = 3, c = 0 }, { l = 4, c = 2 }
+buffer.indent(c, "  ")
+check("indent selection", c.lines[3], "    return 1")
+buffer.outdent(c, "  ")
+check("outdent selection", c.lines[3], "  return 1")
+c.anchor, c.cursor = nil, { l = 3, c = 4 }
+buffer.comment(c, "//")
+check("comment", c.lines[3], "  // return 1")
+check("comment keeps caret on text", c.cursor.c, 7)
+buffer.comment(c, "//")
+check("uncomment", c.lines[3], "  return 1")
+c.cursor = { l = 3, c = 2 }
+buffer.delete(c, -1, false, false, "  ")
+check("backspace to indent stop", c.lines[3], "return 1")
+c.cursor = { l = 3, c = 6 }
+buffer.delete(c, -1, true, false, "  ")
+check("word backspace", c.lines[3], " 1")
+c.cursor = { l = 1, c = 0 }
+buffer.horizontal(c, 1, false, true)
+check("word move", c.cursor.c, 8)
+buffer.line_below(c)
+check("line below", c.cursor.l, 2)
+buffer.select_all(c)
+check("select all", buffer.slice(c, buffer.selection(c)), buffer.text(c))
+check("unit spaces", buffer.unit(buffer.new("a\n    b\n  c")), "  ")
+check("unit tab", buffer.unit(buffer.new("a\n\tb")), "\t")
+
+-- Line maps follow edits: inserting above shifts, edits in place keep, deletes drop.
+local m = buffer.new("one\ntwo\nthree")
+m.maps.base = { 1, 2, 3 }
+m.cursor = { l = 2, c = 0 }
+buffer.insert(m, "new\n")
+check("map shifted", m.maps.base[3], 2)
+check("map inserted line", m.maps.base[2], false)
+check("map kept", m.maps.base[1], 1)
+m.anchor, m.cursor = { l = 3, c = 0 }, { l = 4, c = 0 }
+buffer.insert(m, "")
+check("map after delete", m.maps.base[3], 3)
+buffer.undo(m)
+check("map after undo", m.maps.base[4], 3)
+local edit = { first = 2, last = 2, count = 3, tail = true }
+check("translate after", buffer.translate(edit, 5), 7)
+check("translate tail", buffer.translate(edit, 2), 4)
+check("remap", table.concat(buffer.remap({ 1, 2, 5 }, edit), ","), "1,4,7")
+
+local f = buffer.new("Foo foo\nfoo😀foo")
+local hits = buffer.find(f, "foo")
+check("find folds", #hits, 4)
+check("find astral columns", hits[4].from, 5)
+check("find case", #buffer.find(f, "Foo"), 1)
+check("next match", buffer.next_match(hits, { l = 1, c = 1 }, 1), 2)
+check("previous match wraps", buffer.next_match(hits, { l = 1, c = 0 }, -1), 4)
+
+local field = { text = "", cursor = 0 }
+buffer.field_key(field, key("1", { text = "1" }))
+buffer.field_key(field, key("😀", { text = "😀" }))
+check("field typing", field.text, "1😀")
+check("field cursor", field.cursor, 3)
+buffer.field_key(field, key("backspace"))
+check("field backspace astral", field.text, "1")
+check("field ignores", buffer.field_key(field, key("f5")), false)
+buffer.field_edit(field, { from = 0, to = 1, text = "42", cursor = 2, len = 1 })
+check("field native edit", field.text, "42")
+
 if failures > 0 then
   print(failures .. " failed")
   os.exit(1)

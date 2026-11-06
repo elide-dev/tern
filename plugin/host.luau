@@ -226,15 +226,27 @@ tern.lens.define("tap", {
   end,
 })
 
--- `elide.source`: a read-only view of one source file in Tern's `editor` node, with coverage and
--- debugger overlays from the shared project session (docs/architecture.md, "Source block").
--- Launch arguments: the absolute file, then optionally the project root and a one-based line.
+-- `elide.source`: Elide's code editor block. One source file in Tern's `editor` node, edited by the
+-- program (plugin/lib/buffer.luau), with coverage and debugger overlays from the shared project
+-- session drawn in its gutter, end-of-line notes and decorations (docs/architecture.md, "Source
+-- block"). Launch arguments: the absolute file, then optionally the project root and a line.
 local broker = require("./lib/broker")
+local buffer = require("./lib/buffer")
 local source = require("./lib/source")
 
 local RENEW_MS = 30000
 local DEBUG_POLL_MS = 500
 local RUN_POLL_MS = 1000
+local DISK_POLL_MS = 2000
+-- Unsaved text up to this size survives a plugin reload or daemon restart through `save`.
+local MAX_DRAFT = 64 * 1024
+local MAX_MATCHES = 2000
+-- Tern's highlighter recolors the whole text on every change to the editor node, so its cost grows
+-- faster than the file (measured per keystroke: 0.1 s at 300 lines, 0.3-0.6 s at 900, 3.5 s at
+-- 2,000, over 10 s at 5,000). Larger files are shown as plain text.
+local HIGHLIGHT_LINES = 600
+-- Accenting the caret line's number resends the whole gutter on every line move.
+local ACCENT_LINES = 2000
 local OVERLAYS = { "none", "coverage", "debug", "hotness" }
 local HOTNESS_REASON = "Profiles are not source-located yet: the broker has no project_profile_page operation."
 local SIGNS = {
@@ -250,6 +262,8 @@ local DEBUG_WORDS = {
   exited = { "Exited", "muted" },
   failed = { "Failed", "error" },
 }
+local LANG_NAMES = { javascript = "JavaScript", typescript = "TypeScript", python = "Python", kotlin = "Kotlin" }
+local FIELDS = { find = "dock.find.query", go = "dock.go.line" }
 
 math.randomseed(math.floor(tern.now() * 1000) % 2147483647)
 
@@ -319,6 +333,52 @@ local function same(state, candidate)
   return state.relative ~= nil and source.same(candidate, state.path, state.relative, { state.root, state.canonical })
 end
 
+local function identity(count)
+  local map = {}
+  for i = 1, count do
+    map[i] = i
+  end
+  return map
+end
+
+-- Current line -> line of a measurement's source (overlay `name`), or nil for lines added since.
+local function base_line(state, name, line)
+  local map = state.buf.maps[name]
+  local base = map and map[line]
+  return base or nil
+end
+
+-- Measurement line -> current line, for marks the broker reports by measured line.
+local function current_line(state, name, line)
+  local map = state.buf.maps[name]
+  if not map then
+    return line
+  end
+  for i, base in map do
+    if base == line then
+      return i
+    end
+  end
+  return nil
+end
+
+local function focus(state, cx, field)
+  state.focus = field
+  local id = FIELDS[field] or "main.editor"
+  tern.timer(0, function()
+    if alive(state) then
+      cx:frame({ { "focus", id } })
+    end
+  end)
+end
+
+-- Scrolls the program's way once (go to line, find, a new stop): the next view sends `topline`.
+local function reveal(state, line)
+  state.jump = line
+end
+
+-- Project attachment ---------------------------------------------------------------------------
+
 local function absorb(state, snapshot)
   if type(snapshot) ~= "table" then
     return
@@ -332,8 +392,10 @@ end
 local function fail(state, cx, problem)
   state.attach, state.attach_error, state.binding = "error", tostring(problem or "Project request failed."), nil
   for name, timer in state.timers do
-    timer:cancel()
-    state.timers[name] = nil
+    if name ~= "disk" then
+      timer:cancel()
+      state.timers[name] = nil
+    end
   end
   state.debug.polling = false
   cx:render()
@@ -341,7 +403,6 @@ end
 
 local load_coverage, poll_debug
 
--- Starts the active overlay's work once the project is attached.
 local function enter(state, cx)
   if state.attach ~= "ready" then
     return
@@ -432,7 +493,6 @@ local function coverage_run(state)
   return nil
 end
 
--- Polls the snapshot while the coverage run started from this block (or seen running) finishes.
 local function poll_run(state, cx)
   if state.timers.run then
     return
@@ -468,7 +528,38 @@ local function poll_run(state, cx)
   end)
 end
 
--- Fetches this file's measured lines from the newest coverage run, paging through `next`.
+-- Compares the artifact's measured source identity with the file on disk (sha256 of its UTF-16BE
+-- text, hashed by the system's shasum/sha256sum): a mismatch marks every measured line stale.
+local function check_identity(state, cx, digest, token)
+  local coverage = state.coverage
+  if
+    type(digest) ~= "table"
+    or (digest.algorithm ~= "sha256" and digest.algorithm ~= "sha256-utf16be")
+    or type(digest.value) ~= "string"
+  then
+    return
+  end
+  local encoded = tern.base64.encode(source.utf16be(state.disk))
+  pcall(function()
+    tern.process.run({
+      "/bin/sh",
+      "-c",
+      "base64 -d | { command -v shasum >/dev/null 2>&1 && shasum -a 256 || sha256sum; }",
+    }, { stdin = encoded, timeout_ms = 10000 }, function(result)
+      if not alive(state) or coverage.token ~= token or result.status ~= 0 then
+        return
+      end
+      local value = string.match(result.stdout or "", "^(%x+)")
+      if value and string.lower(value) ~= string.lower(digest.value) then
+        coverage.stale = true
+        cx:render()
+      end
+    end)
+  end)
+end
+
+-- Fetches this file's measured lines from the newest coverage run, paging through `next`. The marks
+-- are anchored to the text on disk when they land and follow edits from there.
 function load_coverage(state, cx, force)
   local coverage = state.coverage
   if state.attach ~= "ready" or not state.relative then
@@ -493,7 +584,7 @@ function load_coverage(state, cx, force)
   if not force and coverage.run == run.id and (coverage.state == "ready" or coverage.state == "loading") then
     return
   end
-  coverage.state, coverage.run, coverage.error = "loading", run.id, nil
+  coverage.state, coverage.run, coverage.error, coverage.stale = "loading", run.id, nil, false
   local token = {}
   coverage.token = token
   local function current()
@@ -503,12 +594,12 @@ function load_coverage(state, cx, force)
     coverage.state, coverage.error = "error", tostring(err or "Invalid coverage page.")
     cx:render()
   end
-  local function lines(index, offset, found)
+  local function lines(file, offset, found)
     broker.project({
       op = "project_coverage_page",
       binding = state.binding,
       run = run.id,
-      file = index,
+      file = file.index,
       offset = offset,
       limit = 100,
     }, function(page, err)
@@ -523,12 +614,17 @@ function load_coverage(state, cx, force)
         table.insert(found, line)
       end
       if type(page.next) == "number" and page.next > offset then
-        lines(index, page.next, found)
+        lines(file, page.next, found)
         return
       end
       coverage.marks, coverage.covered, coverage.total = source.coverage(found)
       coverage.complete = page.complete ~= false
       coverage.state = "ready"
+      -- Measured against the file on disk. Marks follow later edits by line; lines whose text
+      -- differs from the measured text (unsaved edits included) draw dimmed.
+      coverage.lines = buffer.new(state.disk).lines
+      state.buf.maps.coverage = identity(#state.buf.lines)
+      check_identity(state, cx, file.sourceDigest, token)
       cx:render()
     end)
   end
@@ -549,7 +645,7 @@ function load_coverage(state, cx, force)
       end
       for _, file in page.files do
         if type(file) == "table" and same(state, file.path) and type(file.index) == "number" then
-          lines(file.index, 0, {})
+          lines(file, 0, {})
           return
         end
       end
@@ -594,8 +690,11 @@ local function active(debug)
   return snap ~= nil and snap.debug.state ~= "exited" and snap.debug.state ~= "failed"
 end
 
-local function move(state, line)
-  state.caret = math.max(1, math.min(line, state.index.count))
+local function move_to(state, line)
+  local buf = state.buf
+  line = math.max(1, math.min(line, #buf.lines))
+  buffer.go(buf, { l = line, c = 0 }, false)
+  buffer.home(buf, false)
 end
 
 local function absorb_debug(state, snap)
@@ -605,29 +704,38 @@ local function absorb_debug(state, snap)
     return
   end
   local target = snap.debug
+  if target.generation ~= debug.generation then
+    -- A target launched elsewhere ran the file on disk; anchor its lines there.
+    if not debug.launched_here then
+      state.buf.maps.debug = identity(#state.buf.lines)
+    end
+    debug.launched_here = false
+  end
   debug.snap, debug.stop, debug.elsewhere = snap, nil, nil
   local frame = type(target.frames) == "table" and target.frames[1] or nil
   if target.state == "stopped" and type(frame) == "table" then
     if same(state, frame.path) then
-      debug.stop = frame.line
+      debug.stop = current_line(state, "debug", frame.line)
     else
       debug.elsewhere = tostring(frame.path or "?") .. ":" .. tostring(frame.line or "?")
     end
   end
   if debug.stop and target.stop_epoch ~= debug.epoch then
-    move(state, debug.stop)
+    move_to(state, debug.stop)
+    reveal(state, debug.stop)
   end
   debug.epoch = target.stop_epoch
   local verified, requested = {}, {}
   for _, point in (type(target.breakpoints) == "table" and target.breakpoints or {}) do
     if type(point) == "table" and same(state, point.path) then
-      verified[point.requested_line] = point
-      table.insert(requested, point.requested_line)
+      local line = current_line(state, "debug", point.requested_line)
+      if line then
+        verified[line] = point
+        table.insert(requested, line)
+      end
     end
   end
   debug.verified = verified
-  -- A new target adopts the breakpoints it reports for this file (set here, by the Debug surface
-  -- or by an agent).
   if target.generation ~= debug.generation then
     debug.generation = target.generation
     if #requested > 0 then
@@ -707,12 +815,21 @@ local function request(state, cx, target, action)
   end)
 end
 
+-- Breakpoint lines in the target's coordinates (lines added since its launch have none).
+local function target_lines(state)
+  local lines = {}
+  for _, line in state.breakpoints do
+    local base = base_line(state, "debug", line)
+    if base then
+      table.insert(lines, base)
+    end
+  end
+  table.sort(lines)
+  return lines
+end
+
 local function launch(state, cx)
   local debug = state.debug
-  if not source.debuggable(state.path) then
-    cx:toast("info", "Debugging takes JavaScript, TypeScript or Python sources.")
-    return
-  end
   if state.attach ~= "ready" or debug.launching then
     return
   end
@@ -722,7 +839,8 @@ local function launch(state, cx)
   end
   local lang = source.lang(state.path)
   local test = source.test_file(state.path) and (lang == "javascript" or lang == "typescript")
-  debug.launching, debug.error = true, nil
+  debug.launching, debug.error, debug.launched_here = true, nil, true
+  state.buf.maps.debug = identity(#state.buf.lines)
   command(state, {
     op = "project_debug_launch",
     binding = state.binding,
@@ -735,9 +853,170 @@ local function launch(state, cx)
   end)
 end
 
+local function toggle_breakpoint(state, cx)
+  if not source.debuggable(state.path) then
+    cx:toast("info", "Debugging takes JavaScript, TypeScript or Python sources.")
+    return
+  end
+  local line = state.buf.cursor.l
+  local target = nil
+  if active(state.debug) then
+    target = controllable(state, cx)
+    if not target then
+      return
+    end
+    if not base_line(state, "debug", line) then
+      cx:toast("info", "This line was added after the target launched; save and launch again to break on it.")
+      return
+    end
+  end
+  state.breakpoints = source.toggle(state.breakpoints, line)
+  if target then
+    request(state, cx, target, {
+      kind = "breakpoints",
+      path = state.relative,
+      lines = tern.json.array(target_lines(state)),
+    })
+  end
+end
+
+-- Saving and the disk --------------------------------------------------------------------------
+
+local function read(path)
+  local ok, text = pcall(tern.fs.read, path, source.MAX_BYTES)
+  if not ok then
+    local message = tostring(text)
+    local lowered = string.lower(message)
+    if string.find(lowered, "large") or string.find(lowered, "exceed") or string.find(lowered, "limit") then
+      return nil,
+        {
+          title = "File too large",
+          text = "Elide source edits files up to "
+            .. (source.MAX_BYTES // 1024)
+            .. " KiB, the size it reads whole; open this one in Tern's editor.",
+          large = true,
+        }
+    end
+    return nil, { title = "Can't read this file", text = message }
+  end
+  if not source.text(text) then
+    return nil,
+      { title = "Not a text file", text = "Elide source edits UTF-8 text; this file is binary or another encoding." }
+  end
+  return text, nil
+end
+
+-- Writes the buffer. Returns true when written.
+local function write(state, cx)
+  local text = buffer.disk(state.buf)
+  local ok, problem = pcall(tern.fs.write, state.path, text)
+  if not ok then
+    cx:toast("error", "Couldn't save " .. state.name, tostring(problem))
+    return false
+  end
+  state.disk, state.missing = text, false
+  buffer.mark_saved(state.buf)
+  return true
+end
+
+-- ⌘S: asks before overwriting a file that changed on disk since it was loaded or saved.
+local function save(state, cx)
+  local current = read(state.path)
+  if current and current ~= state.disk then
+    state.confirm = {
+      kind = "overwrite",
+      title = state.name .. " changed on disk",
+      text = "Saving replaces the version on disk with yours.",
+      action = "Overwrite",
+    }
+    return
+  end
+  write(state, cx)
+end
+
+-- Replaces the buffer with the file on disk as one undoable step.
+local function reload(state, text)
+  local buf = state.buf
+  local fresh = buffer.new(text)
+  local last = #buf.lines
+  local cursor = buf.cursor
+  local edit = buffer.replace(
+    buf,
+    { l = 1, c = 0 },
+    { l = last, c = buf.lens[last] },
+    table.concat(fresh.lines, "\n"),
+    "reload"
+  )
+  buf.ending = fresh.ending
+  state.breakpoints = buffer.remap(state.breakpoints, edit)
+  buf.cursor = buffer.clamp(buf, cursor)
+  state.disk = text
+  buffer.mark_saved(buf)
+end
+
+local function watch(state, cx)
+  state.timers.disk = tern.timer(DISK_POLL_MS, function()
+    state.timers.disk = nil
+    if not alive(state) then
+      close(state)
+      return
+    end
+    if not tern.fs.exists(state.path) then
+      if not state.missing then
+        state.missing = true
+        cx:render()
+      end
+    else
+      local text = read(state.path)
+      if state.missing then
+        state.missing = false
+        cx:render()
+      end
+      if text and text ~= state.disk and not state.confirm then
+        if buffer.dirty(state.buf) then
+          state.pending_disk = text
+          state.confirm = {
+            kind = "reload",
+            title = state.name .. " changed on disk",
+            text = "Reloading discards your unsaved changes; keep editing to save over it later.",
+            action = "Reload",
+          }
+        else
+          reload(state, text)
+          cx:toast("info", "Reloaded " .. state.name .. " from disk.")
+        end
+        cx:render()
+      end
+    end
+    watch(state, cx)
+  end)
+end
+
+-- Runs `go` now when the buffer is saved, else after a "Save and …" confirm.
+local function saved_then(state, label, go)
+  if not buffer.dirty(state.buf) then
+    go()
+    return
+  end
+  state.confirm = {
+    kind = "run",
+    title = "Save " .. state.name .. " first?",
+    text = "The project runs the file on disk, not your unsaved changes.",
+    action = "Save and " .. label,
+    tone = "accent",
+    go = go,
+  }
+end
+
 local function step(state, cx, kind)
   if kind == "continue" and not active(state.debug) then
-    launch(state, cx)
+    if not source.debuggable(state.path) then
+      cx:toast("info", "Debugging takes JavaScript, TypeScript or Python sources.")
+      return
+    end
+    saved_then(state, "launch", function()
+      launch(state, cx)
+    end)
     return
   end
   local target = controllable(state, cx)
@@ -750,29 +1029,44 @@ local function step(state, cx, kind)
   request(state, cx, target, { kind = kind })
 end
 
-local function toggle_breakpoint(state, cx)
-  if not source.debuggable(state.path) then
-    cx:toast("info", "Debugging takes JavaScript, TypeScript or Python sources.")
+local function start_coverage(state, cx)
+  saved_then(state, "run", function()
+    run_coverage(state, cx)
+  end)
+end
+
+local function confirmed(state, cx)
+  local confirm = state.confirm
+  state.confirm = nil
+  if not confirm then
     return
   end
-  local target = nil
-  if active(state.debug) then
-    target = controllable(state, cx)
-    if not target then
-      return
+  if confirm.kind == "close" then
+    close(state)
+    cx:exit(0)
+  elseif confirm.kind == "reload" then
+    reload(state, state.pending_disk or state.disk)
+    state.pending_disk = nil
+  elseif confirm.kind == "overwrite" then
+    write(state, cx)
+  elseif confirm.kind == "run" then
+    if write(state, cx) then
+      confirm.go()
     end
-  end
-  state.breakpoints = source.toggle(state.breakpoints, state.caret)
-  if target then
-    request(state, cx, target, {
-      kind = "breakpoints",
-      path = state.relative,
-      lines = tern.json.array(state.breakpoints),
-    })
   end
 end
 
--- Overlay switching ---------------------------------------------------------------------------
+local function cancelled(state)
+  local confirm = state.confirm
+  state.confirm = nil
+  if confirm and confirm.kind == "reload" then
+    -- Keep editing: the disk version is now the one a save replaces.
+    state.disk = state.pending_disk or state.disk
+    state.pending_disk = nil
+  end
+end
+
+-- Overlays, find and go to line ----------------------------------------------------------------
 
 local function set_mode(state, cx, mode)
   if mode == "hotness" then
@@ -794,26 +1088,107 @@ local function set_mode(state, cx, mode)
   enter(state, cx)
 end
 
-local function cycle(state, cx, direction)
-  local usable = { "none", "coverage", "debug" }
-  local at = table.find(usable, state.mode) or 1
-  set_mode(state, cx, usable[(at - 1 + direction) % #usable + 1])
+local function refind(state)
+  local find = state.find
+  if not find then
+    return
+  end
+  find.matches = buffer.find(state.buf, find.text, MAX_MATCHES)
+  find.index = nil
+end
+
+-- Selects the next (`dir` 1) or previous match and scrolls it into view.
+local function find_step(state, dir)
+  local find = state.find
+  if not find or #find.matches == 0 then
+    return
+  end
+  local from = state.buf.cursor
+  if dir < 0 then
+    local a = buffer.selection(state.buf)
+    from = a or from
+  end
+  local index = buffer.next_match(find.matches, from, dir)
+  local match = find.matches[index]
+  find.index = index
+  state.buf.anchor = { l = match.l, c = match.from }
+  state.buf.cursor = { l = match.l, c = match.to }
+  state.buf.goal = nil
+  reveal(state, match.l)
+end
+
+local function open_find(state, cx)
+  local buf = state.buf
+  local a, b = buffer.selection(buf)
+  local text = state.find and state.find.text or ""
+  if a and a.l == b.l then
+    text = buffer.slice(buf, a, b)
+  end
+  state.find = { text = text, cursor = buffer.units(text), matches = {}, index = nil }
+  state.go = nil
+  refind(state)
+  focus(state, cx, "find")
+end
+
+local function close_fields(state, cx)
+  state.find, state.go = nil, nil
+  focus(state, cx, "editor")
+end
+
+local function go_to(state, cx)
+  local field = state.go
+  if not field then
+    return
+  end
+  local line, col = string.match(field.text, "^%s*(%d+)%s*:?%s*(%d*)%s*$")
+  line = tonumber(line)
+  if not line then
+    return
+  end
+  local buf = state.buf
+  line = math.max(1, math.min(line, #buf.lines))
+  buffer.go(buf, { l = line, c = math.max(0, (tonumber(col) or 1) - 1) }, false)
+  reveal(state, line)
+  close_fields(state, cx)
+end
+
+-- After an edit: breakpoints follow their lines, find results follow the text.
+local function edited(state, edit)
+  if edit then
+    state.breakpoints = buffer.remap(state.breakpoints, edit)
+    refind(state)
+  end
 end
 
 -- View -----------------------------------------------------------------------------------------
 
-local function visible(cx)
-  return math.max(5, (cx.rows or 24) - 10)
+-- Lines the editor shows: the pane's rows less the head, overlay bar, dock fields and status bar.
+local function visible(state, cx)
+  local chrome = 7
+  if state.mode ~= "none" then
+    chrome += 3
+  end
+  if state.find or state.go then
+    chrome += 3
+  end
+  if state.confirm then
+    chrome += 4
+  end
+  return math.max(4, (cx.rows or 24) - chrome)
 end
 
-local function lines_view(state)
-  local index = state.index
-  local width = #tostring(index.count)
+local function lines_view(state, starts)
+  local buf = state.buf
+  local count = #buf.lines
+  -- The editor draws no line after a trailing newline, so neither does the gutter.
+  local shown = (count > 1 and buf.lines[count] == "") and count - 1 or count
+  local width = #tostring(shown)
   local gutter, virt, decor = {}, {}, {}
   local any_virt = false
   local coverage = state.coverage
   local marks = state.mode == "coverage" and coverage.state == "ready" and coverage.marks or nil
   local debugging = state.mode == "debug"
+  local signs = state.mode ~= "none"
   local debug = state.debug
   local points = {}
   if debugging then
@@ -821,20 +1196,25 @@ local function lines_view(state)
       points[line] = true
     end
   end
-  for line = 1, index.count do
+  local caret = count <= ACCENT_LINES and buf.cursor.l or nil
+  for line = 1, shown do
     local glyph, tone, note = " ", nil, ""
-    if marks and marks[line] then
-      local mark = marks[line]
-      glyph, tone = SIGNS[mark.state][1], SIGNS[mark.state][2]
-      if mark.state == "partial" and mark.branches then
-        note = { ui.span("  " .. mark.branches.covered .. "/" .. mark.branches.total .. " branches", "warning") }
+    if marks then
+      local base = base_line(state, "coverage", line)
+      local mark = base and marks[base]
+      if mark then
+        local stale = coverage.stale or coverage.lines[base] ~= buf.lines[line]
+        glyph, tone = SIGNS[mark.state][1], stale and "dim" or SIGNS[mark.state][2]
+        if mark.state == "partial" and mark.branches and not stale then
+          note = { ui.span("  " .. mark.branches.covered .. "/" .. mark.branches.total .. " branches", "warning") }
+        end
       end
     elseif debugging then
       if debug.stop == line then
         glyph, tone = "▶", "accent"
         local reason = debug.snap and debug.snap.debug.reason
         note = { ui.span("  ◀ paused" .. (type(reason) == "string" and (" · " .. reason) or ""), "accent") }
-        table.insert(decor, { from = index.starts[line], to = index.starts[line] + index.lengths[line], s = "mark" })
+        table.insert(decor, { from = starts[line], to = starts[line] + buf.lens[line], s = "mark" })
       elseif points[line] then
         local point = debug.verified and debug.verified[line]
         if point and not point.verified and active(debug) then
@@ -847,31 +1227,54 @@ local function lines_view(state)
         end
       end
     end
-    gutter[line] = {
-      ui.span(source.number(line, width), line == state.caret and "accent" or "dim"),
-      ui.span(" "),
-      tone and ui.span(glyph, tone) or ui.span(glyph),
-      ui.span(" "),
-    }
+    local entry = { ui.span(source.number(line, width), line == caret and "accent" or "dim"), ui.span(" ") }
+    if signs then
+      table.insert(entry, tone and ui.span(glyph, tone) or ui.span(glyph))
+      table.insert(entry, ui.span(" "))
+    end
+    gutter[line] = entry
     virt[line] = note
     any_virt = any_virt or note ~= ""
+  end
+  local find = state.find
+  if find and find.text ~= "" then
+    for index, match in find.matches do
+      table.insert(decor, {
+        from = starts[match.l] + match.from,
+        to = starts[match.l] + match.to,
+        s = index == find.index and "mark accent" or "mark",
+      })
+    end
   end
   return gutter, any_virt and virt or nil, #decor > 0 and decor or nil
 end
 
+-- The tone of a file's coverage percentage, shared by the head badge and the status bar.
+local function coverage_tone(percent)
+  return percent >= 80 and "success" or percent >= 50 and "warning" or "error"
+end
+
 local function overlay_badges(state)
   local badges = {}
+  if buffer.dirty(state.buf) then
+    table.insert(badges, ui.badge("Unsaved", "warning"))
+  end
+  if state.missing then
+    table.insert(badges, ui.badge("Deleted on disk", "error"))
+  end
   if state.mode == "coverage" then
     local coverage = state.coverage
     if coverage.state == "ready" then
       local percent = source.percent(coverage.covered, coverage.total)
       if percent then
-        local tone = percent >= 80 and "success" or percent >= 50 and "warning" or "error"
+        local tone = coverage_tone(percent)
         table.insert(badges, ui.badge(percent .. "% covered", tone))
       else
         table.insert(badges, ui.badge("No measured lines", "muted"))
       end
-      if not coverage.complete then
+      if coverage.stale then
+        table.insert(badges, ui.badge("Measured an older version", "muted"))
+      elseif not coverage.complete then
         table.insert(badges, ui.badge("Incomplete", "warning"))
       end
     elseif coverage.state == "running" then
@@ -887,27 +1290,32 @@ local function overlay_badges(state)
   end
   for index, badge in badges do
     badge.p.key = "badge" .. index
+    badge.p.role = "source-badge"
   end
   return badges
 end
 
 local function head(state)
-  -- The file name is the title; the meta adds its folders inside the project and the project.
-  local facts = state.relative or state.path
+  local folder = state.relative and string.match(state.relative, "^(.*)/[^/]*$")
+  local facts = {}
+  if folder then
+    table.insert(facts, folder)
+  end
   if state.project then
-    facts = (facts ~= state.name and (facts .. " · ") or "") .. state.project
+    table.insert(facts, state.project)
+  end
+  if not state.relative then
+    table.insert(facts, string.match(state.path, "^(.*)/[^/]*$") or "")
   end
   local right = overlay_badges(state)
   table.insert(
     right,
-    ui.button("Edit in Tern", {
-      key = "edit",
-      role = "source-edit",
-      icon = "file",
-      keys = { "e" },
-      title = "Open " .. state.path .. " in Tern's editor at line " .. state.caret,
-      href = source.file_url(state.path, state.caret),
-      actions = { click = "open" },
+    ui.button("Save", {
+      key = "save",
+      role = "source-save",
+      keys = { "cmd", "s" },
+      disabled = not buffer.dirty(state.buf) and "No unsaved changes" or nil,
+      actions = { click = "save" },
     })
   )
   table.insert(
@@ -925,8 +1333,7 @@ local function head(state)
       },
     })
   )
-  -- Both halves wrap rather than overflow a narrow pane.
-  local title = ui.text({ ui.span(state.name, "title"), ui.span("   " .. facts, "muted") })
+  local title = ui.text({ ui.span(state.name, "title"), ui.span("   " .. table.concat(facts, " · "), "muted") })
   title.p.basis = "content"
   return ui.node("row", { key = "head", justify = "between", align = "center", gap = "md", wrap = true }, {
     title,
@@ -936,7 +1343,7 @@ end
 
 local function error_card(title, message, act)
   return ui.card(title, {
-    ui.button("Retry", { key = "end", icon = "repeat", keys = { "r" }, actions = { click = act } }),
+    ui.button("Retry", { key = "end", icon = "repeat", actions = { click = act } }),
     ui.code(message),
   }, { key = "status", role = "source-error", tone = "error", ["end"] = "main.status.end" })
 end
@@ -956,7 +1363,7 @@ local function run_button(variant)
     variant = variant,
     size = "sm",
     icon = "play",
-    keys = { "t" },
+    keys = { "f5" },
     actions = { click = "run_coverage" },
   })
 end
@@ -993,12 +1400,16 @@ local function coverage_status(state)
   elseif coverage.state == "error" then
     return error_card("Couldn't fetch coverage", coverage.error or "", "refresh")
   end
-  return bar({
+  local description = {
     ui.span("Run ", "muted"),
-    ui.span(tostring(coverage.run), "mono"),
+    ui.span(string.sub(tostring(coverage.run), 1, 8), "mono"),
     ui.span(" · " .. coverage.covered .. " of " .. coverage.total .. " measured lines covered", "muted"),
-  }, {
-    ui.button("Refresh", { key = "refresh", icon = "repeat", keys = { "r" }, actions = { click = "refresh" } }),
+  }
+  if coverage.stale then
+    table.insert(description, ui.span(" · the file changed since; marks are dimmed", "muted"))
+  end
+  return bar(description, {
+    ui.button("Refresh", { key = "refresh", icon = "repeat", keys = { "f6" }, actions = { click = "refresh" } }),
     run_button("default"),
   })
 end
@@ -1019,7 +1430,7 @@ local function debug_status(state)
     local count = #state.breakpoints
     description = {
       ui.span(count == 0 and "No breakpoints" or (count .. (count == 1 and " breakpoint" or " breakpoints")), "muted"),
-      ui.span(" · launch runs " .. state.relative, "muted"),
+      ui.span(" · F9 toggles one on the caret line", "muted"),
     }
   elseif target.state == "stopped" then
     description = debug.stop and { ui.span("Paused at line ", "muted"), ui.span(tostring(debug.stop), "mono") }
@@ -1099,38 +1510,179 @@ local function status(state)
   return debug_status(state)
 end
 
-local LEGENDS = {
-  none = { { { "up", "down" }, "line" }, { { "tab" }, "overlay" }, { { "e" }, "edit" }, { { "q" }, "close" } },
-  coverage = {
-    { { "up", "down" }, "line" },
-    { { "tab" }, "overlay" },
-    { { "t" }, "run with coverage" },
-    { { "r" }, "refresh" },
-    { { "e" }, "edit" },
-    { { "esc" }, "no overlay" },
-  },
-  debug = {
-    { { "up", "down" }, "line" },
-    { { "b" }, "breakpoint" },
-    { { "f5" }, "launch/continue" },
-    { { "f10" }, "over" },
-    { { "f11" }, "in" },
-    { { "shift+f11" }, "out" },
-    { { "g" }, "stop line" },
-    { { "tab" }, "overlay" },
-    { { "esc" }, "no overlay" },
-  },
+local function confirm_strip(state)
+  local confirm = state.confirm
+  local tone = confirm.tone or "error"
+  return ui.card(confirm.title, {
+    ui.node("row", { key = "end", gap = "sm" }, {
+      ui.button("Cancel", { key = "cancel", variant = "quiet", keys = { "esc" }, actions = { click = "cancel" } }),
+      ui.button(confirm.action, {
+        key = "go",
+        role = "source-confirm",
+        variant = tone == "error" and "danger" or "primary",
+        keys = { "enter" },
+        actions = { click = "confirm" },
+      }),
+    }),
+    ui.text({ ui.span(confirm.text, "muted") }),
+  }, { key = "confirm", role = "source-confirm-strip", tone = tone, ["end"] = "dock.confirm.end" })
+end
+
+local function find_row(state)
+  local find = state.find
+  local count = #find.matches
+  local summary = find.text == "" and ""
+    or count == 0 and "No matches"
+    or (
+      (find.index and (find.index .. " of ") or "")
+      .. (count >= MAX_MATCHES and (count .. "+") or count)
+      .. (count == 1 and " match" or " matches")
+    )
+  return ui.node("row", { key = "find", role = "source-find", gap = "sm", align = "center" }, {
+    ui.node("input", {
+      key = "query",
+      role = "source-find-input",
+      icon = "search",
+      placeholder = "Find",
+      text = find.text,
+      cursor = find.cursor,
+      grow = 1,
+    }),
+    ui.text({ ui.span(summary, count == 0 and find.text ~= "" and "warning" or "muted") }),
+    ui.node("buttons", { key = "nav", label = "Matches" }, {
+      ui.button("", {
+        key = "prev",
+        icon = "chev-u",
+        title = "Previous match",
+        aria = "Previous match",
+        keys = { "shift", "enter" },
+        actions = { click = "find_prev" },
+      }),
+      ui.button("", {
+        key = "next",
+        icon = "chev-d",
+        title = "Next match",
+        aria = "Next match",
+        keys = { "enter" },
+        actions = { click = "find_next" },
+      }),
+    }),
+    ui.button("Done", { key = "close", variant = "quiet", keys = { "esc" }, actions = { click = "close_fields" } }),
+  })
+end
+
+local function go_row(state)
+  local field = state.go
+  return ui.node("row", { key = "go", role = "source-go", gap = "sm", align = "center" }, {
+    ui.node("input", {
+      key = "line",
+      role = "source-go-input",
+      prompt = { ui.span("Line ", "muted") },
+      placeholder = "line or line:column, 1–" .. #state.buf.lines,
+      text = field.text,
+      cursor = field.cursor,
+      grow = 1,
+    }),
+    ui.button("Go", { key = "go", keys = { "enter" }, actions = { click = "go" } }),
+    ui.button("Cancel", { key = "close", variant = "quiet", keys = { "esc" }, actions = { click = "close_fields" } }),
+  })
+end
+
+local HINTS = {
+  none = "⌘S save · ⌘F find · ⌃G line · ⌘/ comment · ⌥1–3 overlays",
+  coverage = "F5 run with coverage · F6 refresh · ⌘F find · ⌃G line · ⌥1 no overlay",
+  debug = "F9 breakpoint · F5 launch/continue · F10 over · F11 in · ⇧F11 out · F6 stop line",
 }
 
-local function legend(state)
-  local spans = {}
-  for _, entry in LEGENDS[state.mode] or LEGENDS.none do
-    for _, name in entry[1] do
-      table.insert(spans, ui.span(name, "key"))
-    end
-    table.insert(spans, ui.span(" " .. entry[2] .. "  ", "muted"))
+local function status_bar(state)
+  local buf = state.buf
+  local a, b = buffer.selection(buf)
+  local position = "Ln " .. buf.cursor.l .. ", Col " .. (buf.cursor.c + 1)
+  if a then
+    local chars = buffer.units(buffer.slice(buf, a, b))
+    position ..= " (" .. chars .. " selected)"
   end
-  return ui.node("text", { key = "keys", role = "source-keys", spans = spans })
+  local segs = {
+    ui.node("seg", {
+      key = "path",
+      spans = { ui.span(state.relative or state.path, "path") },
+      title = state.path,
+      min = { w = "12ch" },
+      priority = 5,
+    }),
+  }
+  if buffer.dirty(buf) then
+    table.insert(
+      segs,
+      ui.node("seg", { key = "dirty", role = "source-modified", text = "Modified", tone = "warning", priority = 6 })
+    )
+  end
+  table.insert(segs, ui.node("seg", { key = "hints", text = HINTS[state.mode] or HINTS.none, priority = 0 }))
+  local overlay = nil
+  if state.mode == "coverage" then
+    local coverage = state.coverage
+    local percent = coverage.state == "ready" and source.percent(coverage.covered, coverage.total)
+    overlay = {
+      "Coverage" .. (percent and (" · " .. percent .. "%") or (" · " .. coverage.state)),
+      percent and coverage_tone(percent) or "muted",
+    }
+  elseif state.mode == "debug" then
+    local snap = state.debug.snap
+    local word = snap and DEBUG_WORDS[snap.debug.state] or { "Idle", "muted" }
+    overlay = { "Debug · " .. word[1], word[2] }
+  end
+  if overlay then
+    table.insert(
+      segs,
+      ui.node("seg", { key = "overlay", side = "right", text = overlay[1], tone = overlay[2], priority = 4 })
+    )
+  end
+  table.insert(
+    segs,
+    ui.node("seg", { key = "pos", role = "source-position", side = "right", text = position, priority = 7 })
+  )
+  local language = LANG_NAMES[state.lang or ""] or "Plain text"
+  local plain = state.lang and #buf.lines > HIGHLIGHT_LINES
+  table.insert(
+    segs,
+    ui.node("seg", {
+      key = "lang",
+      role = "source-lang",
+      side = "right",
+      text = plain and (language .. " · no highlighting") or language,
+      title = plain
+          and ("Files over " .. HIGHLIGHT_LINES .. " lines are not highlighted: Tern recolors the whole text on every edit.")
+        or nil,
+      priority = 3,
+    })
+  )
+  table.insert(
+    segs,
+    ui.node("seg", {
+      key = "indent",
+      side = "right",
+      text = state.unit == "\t" and "Tabs" or ("Spaces: " .. #state.unit),
+      priority = 1,
+    })
+  )
+  table.insert(segs, ui.node("seg", { key = "encoding", side = "right", text = "UTF-8", priority = 1 }))
+  table.insert(
+    segs,
+    ui.node("seg", { key = "eol", side = "right", text = buf.ending == "\r\n" and "CRLF" or "LF", priority = 2 })
+  )
+  table.insert(
+    segs,
+    ui.node("seg", {
+      key = "wrap",
+      role = "source-wrap",
+      side = "right",
+      text = state.wrap and "Wrap" or "No wrap",
+      title = "Toggle soft wrap (⌥Z)",
+      priority = 2,
+      actions = { click = "wrap" },
+    })
+  )
+  return ui.node("status", { key = "bar", role = "source-status" }, segs)
 end
 
 local function problem_view(state)
@@ -1144,7 +1696,7 @@ local function problem_view(state)
         text = state.problem.text,
         grow = 1,
       }, {
-        ui.button("Edit in Tern", {
+        ui.button("Open in Tern's editor", {
           key = "edit",
           icon = "file",
           href = source.file_url(state.path),
@@ -1153,27 +1705,6 @@ local function problem_view(state)
       }),
     }),
   }
-end
-
-local function read(path)
-  local ok, text = pcall(tern.fs.read, path, source.MAX_BYTES)
-  if not ok then
-    local message = tostring(text)
-    local lowered = string.lower(message)
-    if string.find(lowered, "large") or string.find(lowered, "exceed") or string.find(lowered, "limit") then
-      return nil,
-        {
-          title = "File too large",
-          text = "Elide source shows files up to " .. (source.MAX_BYTES // 1024) .. " KiB; edit it in Tern instead.",
-        }
-    end
-    return nil, { title = "Can't read this file", text = message }
-  end
-  if not source.text(text) then
-    return nil,
-      { title = "Not a text file", text = "Elide source shows UTF-8 text; this file is binary or another encoding." }
-  end
-  return text, nil
 end
 
 -- The nearest folder holding elide.pkl, from the file's folder up.
@@ -1191,8 +1722,209 @@ local function find_root(path)
   return nil
 end
 
+-- Keys --------------------------------------------------------------------------------------------
+
+local function field_keys(state, cx, key)
+  local name = key.name
+  local field = state.focus == "find" and state.find or state.go
+  if name == "escape" then
+    close_fields(state, cx)
+  elseif name == "enter" then
+    if state.focus == "find" then
+      find_step(state, key.shift and -1 or 1)
+    else
+      go_to(state, cx)
+    end
+  elseif name == "paste" then
+    buffer.field_key(field, { name = "paste", text = string.gsub(key.text or "", "[\r\n].*", "") })
+    if state.focus == "find" then
+      refind(state)
+    end
+  elseif buffer.field_key(field, key) then
+    if state.focus == "find" then
+      refind(state)
+      if #state.find.matches > 0 then
+        find_step(state, 1)
+      end
+    end
+  else
+    return false
+  end
+  return true
+end
+
+-- Keys the editor leaves to the program. `cmd` is ⌘ on macOS and Ctrl on other keyboards.
+local function editor_keys(state, cx, key, cmd)
+  local buf = state.buf
+  local name = key.name
+  local shift = key.shift
+  local word = key.alt or (key.ctrl and not key.meta)
+  if name == "paste" then
+    edited(state, buffer.insert(buf, string.gsub(key.text or "", "\r\n", "\n"), "paste"))
+  elseif name == "enter" then
+    if cmd then
+      edited(state, buffer.line_below(buf))
+    else
+      edited(state, buffer.newline(buf, state.unit))
+    end
+  elseif name == "tab" then
+    edited(state, shift and buffer.outdent(buf, state.unit) or buffer.indent(buf, state.unit))
+  elseif name == "backspace" or name == "delete" then
+    edited(state, buffer.delete(buf, name == "backspace" and -1 or 1, word, key.meta, state.unit))
+  elseif name == "left" or name == "right" then
+    local dir = name == "left" and -1 or 1
+    if key.meta then
+      if dir < 0 then
+        buffer.home(buf, shift)
+      else
+        buffer.line_end(buf, shift)
+      end
+    else
+      buffer.horizontal(buf, dir, shift, word)
+    end
+  elseif name == "up" or name == "down" then
+    local dir = name == "up" and -1 or 1
+    if key.meta then
+      buffer.go(buf, dir < 0 and { l = 1, c = 0 } or { l = #buf.lines, c = buf.lens[#buf.lines] }, shift)
+    else
+      buffer.vertical(buf, dir, shift)
+    end
+  elseif name == "home" or name == "end" then
+    if key.ctrl or key.meta then
+      buffer.go(buf, name == "home" and { l = 1, c = 0 } or { l = #buf.lines, c = buf.lens[#buf.lines] }, shift)
+    elseif name == "home" then
+      buffer.home(buf, shift)
+    else
+      buffer.line_end(buf, shift)
+    end
+  elseif name == "page_up" or name == "page_down" then
+    buffer.vertical(buf, (name == "page_up" and -1 or 1) * (visible(state, cx) - 1), shift)
+  elseif cmd and name == "a" then
+    buffer.select_all(buf)
+  elseif cmd and name == "/" then
+    local prefix = source.comment(state.path)
+    if not prefix then
+      return false
+    end
+    edited(state, buffer.comment(buf, prefix))
+  elseif cmd and (name == "c" or name == "x") then
+    local a, b = buffer.selection(buf)
+    if not a then
+      a, b = { l = buf.cursor.l, c = 0 }, { l = buf.cursor.l, c = buf.lens[buf.cursor.l] }
+      cx:copy(buffer.slice(buf, a, b) .. "\n")
+      if name == "x" then
+        local last = #buf.lines
+        local stop = buf.cursor.l < last and { l = buf.cursor.l + 1, c = 0 } or b
+        edited(state, buffer.replace(buf, a, stop, "", "delete"))
+      end
+    else
+      cx:copy(buffer.slice(buf, a, b))
+      if name == "x" then
+        edited(state, buffer.insert(buf, "", "delete"))
+      end
+    end
+    return name == "x"
+  elseif key.text and key.text ~= "" and not key.ctrl and not key.meta then
+    edited(state, buffer.insert(buf, key.text, "type"))
+  else
+    return false
+  end
+  return true
+end
+
+local function overlay_keys(state, cx, key)
+  local name = key.name
+  if state.mode == "coverage" and state.attach == "ready" then
+    if name == "f5" then
+      start_coverage(state, cx)
+    elseif name == "f6" then
+      load_coverage(state, cx, true)
+    else
+      return false
+    end
+    return true
+  end
+  if state.mode == "debug" and state.attach == "ready" then
+    if name == "f9" then
+      toggle_breakpoint(state, cx)
+    elseif name == "f5" then
+      step(state, cx, key.shift and "stop" or "continue")
+    elseif name == "f10" then
+      step(state, cx, "next")
+    elseif name == "f11" then
+      step(state, cx, key.shift and "step_out" or "step_in")
+    elseif name == "f6" and state.debug.stop then
+      move_to(state, state.debug.stop)
+      reveal(state, state.debug.stop)
+    else
+      return false
+    end
+    return true
+  end
+  return false
+end
+
+local function key_handler(state, key, cx)
+  if state.problem then
+    return false
+  end
+  local name = key.name
+  local cmd = key.meta or (key.ctrl and not key.alt and name ~= "g" and name ~= "y")
+  if state.confirm then
+    if name == "enter" then
+      confirmed(state, cx)
+    elseif name == "escape" then
+      cancelled(state)
+    else
+      return false
+    end
+    return true
+  end
+  if cmd and name == "s" then
+    save(state, cx)
+  elseif cmd and name == "f" then
+    open_find(state, cx)
+  elseif key.ctrl and name == "g" then
+    state.go = { text = "", cursor = 0 }
+    state.find = nil
+    focus(state, cx, "go")
+  elseif key.alt and not key.meta and (name == "z" or name == "Ω") then
+    state.wrap = not state.wrap
+  elseif key.alt and not key.meta and string.find(name, "^[1-4]$") then
+    set_mode(state, cx, OVERLAYS[tonumber(name)])
+  elseif (cmd and name == "z" and not key.shift) and state.focus == "editor" then
+    edited(state, buffer.undo(state.buf))
+  elseif ((cmd and name == "z" and key.shift) or (key.ctrl and name == "y")) and state.focus == "editor" then
+    edited(state, buffer.redo(state.buf))
+  elseif string.find(name, "^f%d+$") then
+    return overlay_keys(state, cx, key)
+  elseif state.focus ~= "editor" then
+    return field_keys(state, cx, key)
+  elseif name == "escape" then
+    if state.mode ~= "none" then
+      set_mode(state, cx, "none")
+    elseif buffer.dirty(state.buf) then
+      state.confirm = {
+        kind = "close",
+        title = "Close " .. state.name .. " without saving?",
+        text = "Your unsaved changes are lost.",
+        action = "Discard",
+      }
+    else
+      close(state)
+      cx:exit(0)
+    end
+  else
+    return editor_keys(state, cx, key, cmd)
+  end
+  return true
+end
+
+-- The block ---------------------------------------------------------------------------------------
+
 tern.block.define("source", {
   font = "sans",
+  features = { "edit", "undo" },
   init = function(cx, args, saved)
     local path = args[1] or ""
     if string.sub(path, 1, 1) ~= "/" and cx.cwd then
@@ -1213,8 +1945,9 @@ tern.block.define("source", {
       project = root and string.match(root, "([^/]+)$"),
       lang = source.lang(path),
       mode = table.find(OVERLAYS, saved.mode) and saved.mode ~= "hotness" and saved.mode or "none",
+      wrap = saved.wrap == true,
+      focus = "editor",
       breakpoints = {},
-      caret = 1,
       attach = "idle",
       coverage = { state = "idle" },
       debug = { verified = {} },
@@ -1227,143 +1960,160 @@ tern.block.define("source", {
     end
     table.sort(state.breakpoints)
     local text, problem = read(path)
-    state.text, state.problem = text or "", problem
-    state.index = source.index(state.text)
-    move(state, tonumber(args[3]) or saved.caret or 1)
-    state.top = source.scroll(0, state.caret, visible(cx), state.index.count)
+    state.problem, state.disk = problem, text or ""
+    state.buf = buffer.new(state.disk)
+    state.unit = buffer.unit(state.buf, state.lang == "python" and 4 or 2)
     blocks[cx.pane] = state
-    if not problem then
-      attach(state, cx)
-      tern.timer(0, function()
-        if alive(state) then
-          cx:frame({ { "focus", "main.editor" } })
-        end
-      end)
+    if problem then
+      return state
     end
+    -- An unsaved draft from before a reload or restart comes back as one undoable edit.
+    if type(saved.draft) == "string" and saved.draft ~= buffer.text(state.buf) and source.text(saved.draft) then
+      local last = #state.buf.lines
+      buffer.replace(state.buf, { l = 1, c = 0 }, { l = last, c = state.buf.lens[last] }, saved.draft, "draft")
+    end
+    local line = tonumber(args[3]) or saved.line or 1
+    move_to(state, line)
+    if line > 1 then
+      reveal(state, state.buf.cursor.l)
+    end
+    attach(state, cx)
+    watch(state, cx)
+    focus(state, cx, "editor")
     return state
   end,
   title = function(state)
-    return state.name
+    return state.name .. (state.buf and buffer.dirty(state.buf) and " ●" or "")
   end,
   view = function(state, cx)
     if state.problem then
       return problem_view(state)
     end
-    local shown = visible(cx)
-    state.top = source.scroll(state.top or 0, state.caret, shown, state.index.count)
-    local gutter, virt, decor = lines_view(state)
+    local buf = state.buf
+    local starts = buffer.starts(buf)
+    local gutter, virt, decor = lines_view(state, starts)
     local children = { head(state) }
     local note = status(state)
     if note then
       table.insert(children, note)
     end
+    local top = nil
+    if state.jump then
+      -- Program moves put the line a few rows below the top; afterwards Tern follows the caret.
+      top = math.max(0, state.jump - 4)
+      state.jump = nil
+    end
+    local a = buffer.selection(buf)
     table.insert(
       children,
       ui.node("editor", {
         key = "editor",
         role = "source-editor",
         aria = state.name,
-        text = state.text,
-        cursor = state.index.starts[state.caret],
-        readonly = true,
-        lang = state.lang,
-        nowrap = true,
-        maxLines = shown,
-        topline = state.top,
-        followCursor = false,
+        text = buffer.text(buf),
+        cursor = buffer.offset(buf, buf.cursor),
+        anchor = a and buffer.offset(buf, buf.anchor) or nil,
+        -- Even `highlight = false` keeps part of the cost, so large files drop `lang` entirely.
+        lang = #buf.lines <= HIGHLIGHT_LINES and state.lang or nil,
+        nowrap = not state.wrap,
+        maxLines = visible(state, cx),
+        topline = top,
         gutter = gutter,
         virt = virt,
         decor = decor,
       })
     )
+    local dock = {}
+    if state.confirm then
+      table.insert(dock, confirm_strip(state))
+    end
+    if state.find then
+      table.insert(dock, find_row(state))
+    elseif state.go then
+      table.insert(dock, go_row(state))
+    end
+    table.insert(dock, status_bar(state))
     return {
       main = ui.node("col", { gap = "md" }, children),
-      dock = ui.col({ legend(state) }),
+      dock = ui.col(dock),
     }
   end,
-  key = function(state, key, cx)
-    if key.meta or key.ctrl or key.alt or state.problem then
-      return false
-    end
-    local name = key.name
-    local page = visible(cx) - 1
-    if name == "tab" then
-      cycle(state, cx, key.shift and -1 or 1)
-    elseif name == "up" or name == "k" then
-      move(state, state.caret - 1)
-    elseif name == "down" or name == "j" then
-      move(state, state.caret + 1)
-    elseif name == "page_up" then
-      move(state, state.caret - page)
-    elseif name == "page_down" then
-      move(state, state.caret + page)
-    elseif name == "home" then
-      move(state, 1)
-    elseif name == "end" then
-      move(state, state.index.count)
-    elseif name == "e" then
-      cx:open(source.file_url(state.path, state.caret))
-      return false
-    elseif name == "escape" then
-      if state.mode == "none" then
-        return false
-      end
-      set_mode(state, cx, "none")
-    elseif name == "q" then
-      close(state)
-      cx:exit(0)
-    elseif name == "r" and state.attach == "error" then
-      attach(state, cx)
-    elseif state.mode == "coverage" and name == "r" then
-      load_coverage(state, cx, true)
-    elseif state.mode == "coverage" and name == "t" then
-      run_coverage(state, cx)
-    elseif state.mode == "debug" and state.attach == "ready" then
-      if name == "b" then
-        toggle_breakpoint(state, cx)
-      elseif (name == "f5" and key.shift) or name == "x" then
-        step(state, cx, "stop")
-      elseif name == "f5" or name == "c" then
-        step(state, cx, "continue")
-      elseif name == "f10" or name == "n" then
-        step(state, cx, "next")
-      elseif (name == "f11" and key.shift) or name == "o" then
-        step(state, cx, "step_out")
-      elseif name == "f11" or name == "s" then
-        step(state, cx, "step_in")
-      elseif name == "g" and state.debug.stop then
-        move(state, state.debug.stop)
-      else
-        return false
-      end
-    else
-      return false
-    end
-    return true
-  end,
+  key = key_handler,
   event = function(state, ev, cx)
-    if ev.ev == "select" and ev.id == "main.head.end.overlay" then
-      set_mode(state, cx, ev.item)
+    if state.problem then
+      if ev.ev == "action" and ev.act == "open" then
+        cx:open(source.file_url(state.path))
+      end
+      return
+    end
+    if ev.ev == "edit" then
+      if ev.id == "main.editor" then
+        local result = buffer.apply(state.buf, ev)
+        if result then
+          edited(state, result)
+        end
+      elseif ev.id == FIELDS.find and state.find then
+        buffer.field_edit(state.find, ev)
+        refind(state)
+      elseif ev.id == FIELDS.go and state.go then
+        buffer.field_edit(state.go, ev)
+      end
+    elseif ev.ev == "undo" then
+      if ev.id == "main.editor" then
+        edited(state, buffer.undo(state.buf))
+      end
     elseif ev.ev == "focus" then
-      cx:frame({ { "focus", "main.editor" } })
+      if ev.id == FIELDS.find and state.find then
+        focus(state, cx, "find")
+      elseif ev.id == FIELDS.go and state.go then
+        focus(state, cx, "go")
+      else
+        focus(state, cx, "editor")
+      end
+    elseif ev.ev == "select" and ev.id == "main.head.end.overlay" then
+      set_mode(state, cx, ev.item)
     elseif ev.ev == "action" then
       local act = ev.act
       if act == "open" then
-        cx:open(source.file_url(state.path, state.caret))
+        cx:open(source.file_url(state.path, state.buf.cursor.l))
+      elseif act == "save" then
+        save(state, cx)
+      elseif act == "confirm" then
+        confirmed(state, cx)
+      elseif act == "cancel" then
+        cancelled(state)
+      elseif act == "find_next" or act == "find_prev" then
+        find_step(state, act == "find_next" and 1 or -1)
+      elseif act == "close_fields" then
+        close_fields(state, cx)
+      elseif act == "go" then
+        go_to(state, cx)
+      elseif act == "wrap" then
+        state.wrap = not state.wrap
       elseif act == "retry" then
         attach(state, cx)
       elseif act == "refresh" then
         load_coverage(state, cx, true)
       elseif act == "run_coverage" then
-        run_coverage(state, cx)
+        start_coverage(state, cx)
       elseif act == "launch" then
-        launch(state, cx)
+        step(state, cx, "continue")
       elseif act == "continue" or act == "next" or act == "step_in" or act == "step_out" or act == "stop" then
         step(state, cx, act)
       end
     end
   end,
   save = function(state)
-    return { mode = state.mode, caret = state.caret, breakpoints = tern.json.array(state.breakpoints) }
+    if not state.buf then
+      return nil
+    end
+    local text = buffer.text(state.buf)
+    return {
+      mode = state.mode,
+      wrap = state.wrap,
+      line = state.buf.cursor.l,
+      breakpoints = tern.json.array(state.breakpoints),
+      draft = buffer.dirty(state.buf) and #text <= MAX_DRAFT and text or nil,
+    }
   end,
 })

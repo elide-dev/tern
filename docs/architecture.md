@@ -133,66 +133,109 @@ harness shows built-in lenses only.
 
 ### Source block
 
-`elide.source` is a host-half plugin block (`plugin/host.luau`, pure helpers in
-`plugin/lib/source.luau`, unit-tested by `lua tests/source.lua`). Tern draws every pane
-from the surface node tree, so no foreign editor widget can be embedded; the block sends
-the file to Tern's `editor` node instead: `readonly`, `lang` for Tern's highlighter,
-`nowrap`, `maxLines` sized from the pane's rows, a program-owned `topline`, a per-line
-`gutter` (line number, then the overlay sign), `virt` end-of-line notes and `decor`
-ranges. Offsets are UTF-16 code units. Files over 512 KiB, unreadable files and
-non-UTF-8 files get an `empty` state instead of the editor.
+`elide.source` is Elide's code editor: a host-half plugin block (`plugin/host.luau`) over a pure
+text model (`plugin/lib/buffer.luau`) and helpers (`plugin/lib/source.luau`), both unit-tested
+under plain Lua by `lua tests/source.lua`, non-BMP text included. Tern draws every pane from the
+surface node tree, so no foreign editor widget can be embedded; the block owns the text and draws
+it in Tern's `editor` node with `lang`, a per-line `gutter`, `virt` notes and `decor` ranges.
+Offsets are UTF-16 code units.
 
-- **Arguments.** The absolute file, then optionally the project root and a one-based
-  line. Without a root the block looks for the nearest `elide.pkl` above the file.
-- **Opening.** `elide://source` (above), the workspace toolbar's **Source** button
-  (the workspace editor's file), the project menu's **Open Elide source…** and the
-  `plugin.elide.source` command (the focused file, else a prompted project path), and
-  "Open with Elide source" from the `files` globs in `plugin.toml`. It is not in the
-  palette: it always needs a file.
-- **Attachment.** With a root the block attaches through the same broker state as the
-  native project surfaces (`project_attach`), renews its lease with `project_snapshot`
-  every 30 s, and detaches on `pane_exited` or when a background callback finds its pane
-  gone (blocks have no close hook). The binding is not saved; a restarted block attaches
-  again. Saved state is the overlay, caret line and breakpoint lines.
-- **Overlays.** A segmented `tabs` strip: None, Coverage, Debug, Hotness. Tab and ⇧Tab
-  cycle, Escape returns to None, `q` closes the block. Only the caret line takes line
-  actions (gutter spans are not clickable, and a `readonly` editor gets no native
-  caret-moving edits); ↑/↓, j/k, Page Up/Down, Home and End move it.
+- **Arguments.** The absolute file, then optionally the project root and a one-based line.
+  Without a root the block looks for the nearest `elide.pkl` above the file.
+- **Opening.** `elide://source` (above), the workspace toolbar's **Source** button (the workspace
+  editor's file), the project menu's **Open Elide source…** and the `plugin.elide.source` command
+  (the focused file, else a prompted project path), and "Open with Elide source" from the `files`
+  globs in `plugin.toml`. It is not in the palette: it always needs a file.
+- **Editing.** The block opts into the `edit` and `undo` features. With Tern's native editing on,
+  clicks, drags, ⇧-arrow selection, plain ↑/↓ and ⌘←/⌘→ arrive as `edit` events and Tern draws
+  its own selection; everything else, and every key with native editing off, is handled by the
+  block: typing and paste, Enter with the line's indentation (one unit more after `{`, `[`, `(` or a
+  colon), Tab/⇧Tab indent and outdent (selected lines, or a unit at the caret), Backspace/Delete
+  (⌥ or Ctrl for words, ⌘ to the line start; Backspace in leading spaces goes back to the indent
+  stop), arrows with ⇧ selection drawn through `anchor`, ⌥/Ctrl word moves, Home (first non-blank,
+  then column 0), End, ⌘←/⌘→, ⌘↑/⌘↓, Ctrl+Home/End, Page Up/Down, ⌘A, ⌘C/⌘X (the line without a
+  selection), ⌘/ to toggle `//` or `#` comments, ⌘Enter for a new line below. The indent unit is
+  the file's own (a tab, or its smallest space indent). Undo and redo (⌘Z, ⌘⇧Z, Ctrl+Y, or Tern's
+  `undo` event) keep up to 1,000 steps; consecutive typing within a word is one step. Native
+  selections are Tern's, so Tab and ⌘/ with a native selection act on the caret line only.
+- **Saving and the disk.** ⌘S (or **Save**) writes through `tern.fs.write`, keeping the file's
+  CRLF or LF endings, and asks before overwriting a file that changed on disk since it was loaded.
+  Unsaved changes show as an **Unsaved** badge, a **Modified** status segment and a `●` in the
+  pane title. `tern.fs` has no `stat`, so the block re-reads the file every 2 s and compares it with
+  the text it last loaded or saved: a clean buffer reloads (as one undoable step, with a toast), a
+  dirty one gets an error-toned confirm strip in the dock (Reload with Enter, keep editing with
+  Escape). Running coverage or launching the debugger with unsaved changes asks to save first
+  (accent strip, **Save and run**/**Save and launch**). Escape backs out one layer (confirm strip,
+  find or go-to-line, the overlay) and then closes the block, asking first when there are unsaved
+  changes. Tern has no block-close hook, so closing the pane itself cannot ask; unsaved text up to
+  64 KiB is kept in the block's saved state and restored as one undoable edit after a plugin reload
+  or daemon restart.
+- **Find and go to line.** ⌃F or ⌘F opens a find field in the dock (`input` with the search icon;
+  in the desktop harness ⌘F did not reach the block, presumably taken by a window binding, so
+  the harness uses ⌃F). Matches are
+  `mark` decorations (the current one `mark accent`), case-insensitive unless the query has a
+  capital, at most 2,000; Enter and ⇧Enter select the next and previous match; Escape closes it.
+  `/` is not a find key, because it types a slash in the editor. ⌃G opens go to line
+  (`line` or `line:column`). Program moves (find, go to line, a new debugger stop, a linked line)
+  set `topline` for one frame; otherwise Tern keeps the caret in view.
+- **Chrome.** A sans head row (file name, folders and project, badges, **Save**, the overlay
+  switch), the overlay's bar, the editor sized from the pane's rows, and a `status` bar in the dock
+  with segments for the path, Modified, the overlay and its state, `Ln, Col` (and the selection
+  size), language, indentation, UTF-8, LF/CRLF and soft wrap (click it or ⌥Z). Line numbers are
+  right-aligned; the caret line's number is accented. ⌥1 to ⌥4 pick an overlay.
+- **Large files.** The block sends the whole text, because the node needs it for offsets, and
+  refuses files over 512 KiB (the `tern.fs.read` limit it passes) with an `empty` state that says
+  so; unreadable and non-UTF-8 files get the same. Tern's highlighter recolors the whole text on
+  every change to the editor node, which measured 0.1 s per keystroke at 300 lines, 0.3 to 0.6 s at
+  900, 3.5 s at 2,000 and over 10 s at 5,000. Files over 600 lines are therefore shown without
+  `lang` (the status bar says "no highlighting"), which keeps 5,000 lines at about 0.05 to 0.4 s,
+  and the caret-line accent (which resends the gutter) stops past 2,000 lines. This is a Tern
+  limitation worth fixing upstream: highlighting incrementally, or not re-highlighting on caret-only
+  prop changes, would let the threshold go.
+- **Attachment.** With a root the block attaches through the same broker state as the native
+  project surfaces (`project_attach`), renews its lease with `project_snapshot` every 30 s, and
+  detaches on `pane_exited` or when a background callback finds its pane gone. The binding is not
+  saved; a restarted block attaches again.
+- **Overlays survive edits.** Each overlay keeps a line map in the buffer (current line to the line
+  of the text it was measured against), updated by every edit: lines inserted above shift the
+  marks, edited lines keep theirs, deleted lines drop theirs. Breakpoint lines move the same way.
+  A coverage mark whose line text differs from the measured text draws `dim`, and when the
+  artifact's `sourceDigest` (sha256 of the UTF-16BE source, checked with the system's
+  `shasum`/`sha256sum`) does not match the file on disk every mark dims and the head row says
+  "Measured an older version".
 - **Coverage.** The newest snapshot run with `options.coverage` is paged through
-  `project_coverage_page` until the file whose path matches (relative to the root, or
-  absolute under the given or canonical root), then its lines are paged through `next`.
-  Covered lines get a `success` dot, uncovered an `error` dot, covered lines with fewer
-  covered than total branches a `warning` half dot and a branch count in `virt`; the head
-  row shows the file's percentage. The artifact records only covered/uncovered and
-  branch counts, so there are no hit counts to show. With no coverage run the block
-  offers **Run with coverage** (`project_test` on the root with `coverage: true`) and
-  polls the snapshot each second until that run finishes.
-- **Debug.** While active the block polls `project_debug_snapshot` (`compact`) every
-  500 ms and re-renders only when the revision, pending flag, controller or error
-  changes. The stop location in this file is a `▶` `accent` sign, a `mark` decoration on
-  the line and a `virt` note; the caret jumps to each new stop, and `g` returns to it.
-  Breakpoints are `●` (`○` with the adapter's message while unverified). `b` toggles one
-  on the caret line: before a launch it is kept locally and passed to
-  `project_debug_launch`; with a live target it sends the file's replacement `lines`
-  through `project_debug_request` `breakpoints`. F5/`c` launches when no target is live
-  (test files in `test` mode, `stop_on_entry` false) and continues otherwise; F10/`n`,
-  F11/`s`, ⇧F11/`o` and ⇧F5/`x` step over, in, out and stop. Control needs
-  `controller == "you"`; observers get a toast and disabled buttons. Every command
-  carries a fresh UUID and is resent with the same UUID and payload only when no response
-  arrived. A new target's reported breakpoints for this file replace the local list.
+  `project_coverage_page` until the file whose path matches, then its lines through `next`.
+  Covered lines get a `success` dot, uncovered an `error` dot, covered lines with fewer covered
+  than total branches a `warning` half dot and a branch count in `virt`; the head row shows the
+  percentage. The artifact records only covered/uncovered and branch counts, so there are no hit
+  counts. With no coverage run the block offers **Run with coverage** (F5; `project_test` on the
+  root with `coverage: true`) and polls each second until it finishes; F6 refreshes.
+- **Debug.** While active the block polls `project_debug_snapshot` (`compact`) every 500 ms and
+  re-renders only when the revision, pending flag, controller or error changes. The stop is a `▶`
+  `accent` sign, a `mark` line and a `virt` note; the caret jumps to each new stop and F6 returns
+  to it. Breakpoints are `●` (`○` with the adapter's message while unverified). F9 toggles one on
+  the caret line: before a launch it is kept locally and passed to `project_debug_launch`; with a
+  live target the file's replacement `lines` (mapped back to the launched text) go through
+  `project_debug_request` `breakpoints`. F5 launches when no target is live (test files in `test`
+  mode, `stop_on_entry` false) and continues otherwise; F10, F11, ⇧F11 and ⇧F5 step over, in, out
+  and stop. Letters type, so the debugger keys are function keys. Control needs `controller ==
+  "you"`; observers get a toast and disabled buttons. Every command carries a fresh UUID and is
+  resent with the same UUID and payload only when no response arrived.
 - **Hotness** is shown disabled: selecting it toasts the reason. Neither the broker nor
   `elide-project-session` keeps source-located profile samples, so a read-only
-  `project_profile_page` op cannot be added from existing data. The missing piece is a
-  profile collector in the project session that records samples by `{path, line}` for a
-  run, and a `project_profile_page` op paging per-line sample counts like
-  `project_coverage_page`; the block would then draw per-line share as `▁▂▃▅▇` gutter
-  glyphs toned `warning`/`error`. Tern's `tabs` items take no `disabled` prop, so the tab
-  is drawn `dim` and refused in the handler.
+  `project_profile_page` op cannot be added from existing data. The missing piece is a profile
+  collector in the project session that records samples by `{path, line}` for a run, and a
+  `project_profile_page` op paging per-line sample counts like `project_coverage_page`; the block
+  would then draw per-line share as `▁▂▃▅▇` gutter glyphs toned `warning`/`error`. Tern's `tabs`
+  items take no `disabled` prop, so the tab is drawn `dim` and refused in the handler.
 
-`python3 tests/source.py --runtime /path/to/elide [--sdk /path/to/embedder]` opens the block
-from an `elide://source` link in an isolated desktop window, runs coverage from the block and
-checks the covered and uncovered gutter marks, then sets a breakpoint with `b`, launches with
-F5, and checks the stop marker against the broker's own snapshot.
+`python3 tests/source.py --runtime /path/to/elide [--sdk /path/to/embedder]` opens the block from
+an `elide://source` link in an isolated desktop window and drives it by keys: go to line, typing,
+save (checked on disk), undo and redo, auto-indent, a reload after an outside write, find, a
+coverage run from the block with covered and uncovered marks and their behavior across an unsaved
+edit, a breakpoint with F9 and a launch with F5 checked against the broker's own snapshot, a large
+file taking edits without highlighting, and an oversized file's empty state. It takes light and
+dark screenshots.
 
 ### Why workspaces don't use `cx.layout:tab`
 
