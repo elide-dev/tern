@@ -113,6 +113,8 @@ Rules, implemented by the pure parser `plugin/lib/links.luau` (unit-tested by
 - `root` and `path` must be absolute with no empty, `.` or `..` segments (a trailing
   slash is dropped), and `root` cannot be `/`. `line` and `col` are positive integers;
   `col` needs `line`.
+- Paths are compared as written, so emit canonical (symlink-resolved) paths, as the
+  project probe reports roots: `/tmp/x` does not match a root at `/private/tmp/x`.
 - `path` must lie strictly inside `root`. A `root` must contain `elide.pkl`. Without
   `root` (`source` only), `path` must lie inside a project this window already
   detected. The linked file must exist. Links act on local hosts only.
@@ -122,6 +124,11 @@ Rules, implemented by the pure parser `plugin/lib/links.luau` (unit-tested by
   line only), `debug`'s `line` is validated but not applied (the debug launcher takes
   no breakpoint), and confinement is lexical: `tern.fs` cannot resolve symlinks, so a
   symlink inside the project that points outside it is followed.
+
+`python3 tests/integration.py --runtime /path/to/elide` drives the lenses, links (through
+`tern ctl open-url`, the path the system takes), chrome and `command_finished` in an isolated
+desktop window. Plugin lenses need the daemon-backed window; the in-process `tern serve`
+harness shows built-in lenses only.
 
 ### Why workspaces don't use `cx.layout:tab`
 

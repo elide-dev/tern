@@ -212,7 +212,8 @@ results. Both fall back to the raw output when nothing parses or the output is v
 debugger or project test runs. Elide prints them; any program can, as OSC 8 hyperlinks.
 Links that leave their project root are ignored. See
 [the contract](docs/architecture.md#elide-links). Run `lua tests/links.lua` for the
-parser's unit tests.
+parser's unit tests and `python3 tests/integration.py --runtime /path/to/elide` for the
+lenses, links and status line in an isolated window.
 
 ### Built-in agent project tools
 
