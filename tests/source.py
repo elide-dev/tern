@@ -115,6 +115,67 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
               for n in nodes('.sf-editor .sf-ed-gutter .sf-t-accent')), 10), tree('.sf-editor .sf-ed-gutter'))
         click('[data-role="source-editor"]')
 
+        def editor_text():
+            found = nodes('[data-role="source-editor"] .sf-ed-text')
+            return found[0].get('text', '') if found else ''
+        def position():
+            return tree('[data-role="source-position"]')
+        def go_line(n):
+            ctl('key', 'Control+g')
+            wait(lambda: nodes('[data-role="source-go-input"]'), 10)
+            ctl('type', str(n))
+            ctl('key', 'Enter')
+            return wait(lambda: f'Ln {n},' in position(), 10)
+
+        # Editing: go to a line, type, save, undo and redo.
+        check('go to line', go_line(6), position())
+        ctl('key', 'End')
+        ctl('key', 'Enter')
+        ctl('type', '// edited')
+        check('typing edits the buffer', wait(lambda: '// edited' in editor_text(), 10), editor_text())
+        check('modified shown', wait(lambda: 'Modified' in tree('[data-role="source-modified"]')
+              and 'Unsaved' in tree('[data-role="source-badge"]'), 10), tree('.sf-main'))
+        ctl('key', 'Meta+s')
+        check('save writes the file', wait(lambda: source.read_text().splitlines()[6] == '// edited', 10), source.read_text())
+        check('clean after save', wait(lambda: not nodes('[data-role="source-modified"]'), 10), tree('.sf-dock'))
+        ctl('key', 'Meta+z')
+        check('undo', wait(lambda: '// edited' not in editor_text(), 10), editor_text())
+        check('undo dirties', wait(lambda: nodes('[data-role="source-modified"]'), 10), tree('.sf-dock'))
+        ctl('key', 'Meta+Shift+z')
+        check('redo', wait(lambda: '// edited' in editor_text() and not nodes('[data-role="source-modified"]'), 10),
+              editor_text())
+        # Auto-indent: Enter inside the function keeps its indentation.
+        go_line(2)
+        ctl('key', 'End')
+        ctl('key', 'Enter')
+        ctl('type', 'x;')
+        ctl('key', 'Meta+s')
+        check('auto-indent', wait(lambda: '    x;' in source.read_text().splitlines(), 10), source.read_text())
+        # Typing and the newline are separate undo steps.
+        ctl('key', 'Meta+z')
+        ctl('key', 'Meta+z')
+        wait(lambda: nodes('[data-role="source-modified"]'), 10)
+        ctl('key', 'Meta+s')
+        check('saved without the undone line', wait(lambda: len(source.read_text().splitlines()) == 8 and not nodes('[data-role="source-modified"]'), 10),
+              source.read_text())
+
+        # The file changes underneath a clean buffer: the block reloads it.
+        source.write_text(source.read_text() + '// external\n')
+        check('reload from disk', wait(lambda: '// external' in editor_text(), 15), editor_text())
+
+        # Find marks matches and selects the next one; go to line moves the caret.
+        ctl('key', 'Control+f')
+        wait(lambda: nodes('[data-role="source-find-input"]'), 10)
+        ctl('type', 'return')
+        check('find counts matches', wait(lambda: '2 matches' in tree('[data-role="source-find"]'), 10), tree('[data-role="source-find"]'))
+        check('find marks matches', wait(lambda: len([n for n in nodes('[data-role="source-editor"] .sf-t-mark')
+              if 'return' in (n.get('text') or '')]) >= 2, 10), tree('[data-role="source-editor"] .sf-t-mark'))
+        ctl('key', 'Enter')
+        check('find selects next', wait(lambda: 'selected' in position(), 10), position())
+        ctl('shot', 'source-find')
+        ctl('key', 'Escape')
+        check('find closes', wait(lambda: not nodes('[data-role="source-find"]'), 10), tree('.sf-dock'))
+
         # Coverage: the empty state offers a run; its result marks lines.
         click('[data-role="source-overlays"] .sf-tab[data-tab="coverage"]')
         check('coverage empty state', wait(lambda: 'No coverage yet' in tree('[data-role="source-empty"]'), 60),
@@ -124,14 +185,26 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         check('uncovered line marked', signed(5, '●', 'error'), gutter())
         check('coverage badge', wait(lambda: '% covered' in tree('.sf-main .sf-badge'), 10), tree('.sf-main .sf-badge'))
         ctl('shot', 'source-coverage')
+        # An unsaved edit above shifts the marks with their lines and dims the edited line.
+        go_line(1)
+        ctl('key', 'Home')
+        ctl('type', '/* a */ ')
+        check('marks dim on edited line', wait(lambda: any((n.get('text') or '').strip() == '●' for n in nodes('.sf-editor .sf-ed-gutter .sf-t-dim')), 10)
+              or not gutter().get(1), gutter())
+        check('marks kept on untouched lines', signed(3, '●', 'success') and signed(5, '●', 'error'), gutter())
+        for _ in range(6):
+            if not nodes('[data-role="source-modified"]'):
+                break
+            ctl('key', 'Meta+z')
+            time.sleep(.3)
+        check('undo back to the saved text', wait(lambda: '/* a */' not in editor_text() and not nodes('[data-role="source-modified"]'), 10), editor_text())
 
-        # Debug: `b` on the caret line, F5 launches, the stop marker lands on that line.
+        # Debug: F9 on the caret line, F5 launches, the stop marker lands on that line.
         click('[data-role="source-overlays"] .sf-tab[data-tab="debug"]')
         check('debug launch offered', wait(lambda: nodes('[data-role="source-debug-launch"]'), 30), tree('.sf-main'))
         click('[data-role="source-editor"]')
-        ctl('key', 'j')
-        wait(lambda: any('3' == (n.get('text') or '').strip() for n in nodes('.sf-editor .sf-ed-gutter .sf-t-accent')), 10)
-        ctl('key', 'b')
+        go_line(3)
+        ctl('key', 'F9')
         check('breakpoint sign', wait(lambda: signed(3, '●', 'error'), 10), gutter())
         ctl('key', 'F5')
         check('stop marker', wait(lambda: signed(3, '▶', 'accent'), 120), tree('.sf-main'))
@@ -140,7 +213,10 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         snapshot = broker('project_debug_snapshot', binding=binding, compact=True)
         check('broker agrees on stop', snapshot and snapshot['debug']['state'] == 'stopped'
               and snapshot['debug']['frames'][0]['line'] == 3, snapshot and snapshot['debug'])
-        ctl('shot', 'source-debug')
+        ctl('shot', 'source-debug-light')
+        ctl('prefs', 'preview', 'dark-nord')
+        ctl('shot', 'source-debug-dark')
+        ctl('prefs', 'close')
         ctl('key', 'F5')
         check('continue runs to exit', wait(lambda: 'Exited' in tree('.sf-main .sf-badge'), 60), tree('.sf-main'))
         ctl('open-url', 'elide://source?root=' + str(project) + '&path=' + str(project / 'notes.txt'))
@@ -164,5 +240,5 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         shutil.copytree(out, saved, dirs_exist_ok=True)
 
 failed = [n for n, ok in results if not ok]
-print(('FAIL: ' + ', '.join(failed)) if failed else 'PASS: source block, coverage marks, breakpoint and stop marker')
+print(('FAIL: ' + ', '.join(failed)) if failed else 'PASS: source editor editing, save, reload, undo, find, go to line, coverage and debug overlays')
 sys.exit(1 if failed else 0)
