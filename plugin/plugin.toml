@@ -9,3 +9,11 @@ host = "host.luau"
 [[lenses]]
 id = "json"
 match = ["elide project *", "elide * --json", "elide * --json *", "elide --json *"]
+
+[[lenses]]
+id = "build"
+match = ["elide build", "elide build *"]
+
+[[lenses]]
+id = "tap"
+match = ["elide test --reporter=tap*", "elide test * --reporter=tap*"]
