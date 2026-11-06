@@ -515,7 +515,7 @@ tern.route.link(function(request, cx)
 end)
 
 -- `elide.pkl` chosen from the palette opens its project workspace (or focuses the open one).
--- Opens inside a workspace tab were already redirected to its editor by the workspace route.
+-- Other palette opens stay with Tern; only Files opens are redirected into a workspace editor.
 tern.route.open(function(request, cx)
   if request.origin ~= "palette" or not string.find(request.path, "/elide%.pkl$") then
     return nil
