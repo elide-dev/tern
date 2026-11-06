@@ -61,7 +61,7 @@ test-testing: testing
 
 .PHONY: test-project
 test-project: build repl serve testing project
-	python3 tests/project.py $(if $(SDK),--sdk "$(SDK)") $(if $(RUNTIME),--runtime "$(RUNTIME)")
+	python3 -u tests/project.py $(if $(SDK),--sdk "$(SDK)") $(if $(RUNTIME),--runtime "$(RUNTIME)") $(if $(PROJECT),--project "$(PROJECT)")
 
 .PHONY: project test-sessions
 project:

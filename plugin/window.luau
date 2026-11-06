@@ -1,9 +1,5 @@
 local project = require("./lib/project")
 
-local function quote(value)
-  return "'" .. string.gsub(value, "'", "'\"'\"'") .. "'"
-end
-
 local function path(value)
   if string.sub(value, 1, 1) == "/" then
     return value
@@ -35,13 +31,13 @@ end
 require("./lib/agents").install(configuration, path, project)
 
 local function terminal(cx, argv, cwd)
-  for i, value in argv do
-    argv[i] = quote(value)
+  local command = {}
+  for _, value in argv do
+    table.insert(command, "'" .. string.gsub(value, "'", "'\"'\"'") .. "'")
   end
-  -- Supplying a launcher in new_tab can exhaust Tern's native-call budget.
-  local pane = cx.layout:new_tab({ cwd = cwd })
-  if pane then
-    cx:run(pane, "exec " .. table.concat(argv, " ") .. "\r")
+  local pane = cx.layout:new_tab({ cwd = cwd, command = "exec " .. table.concat(command, " ") })
+  if not pane then
+    cx:toast("error", "Could not open the panel.")
   end
 end
 
