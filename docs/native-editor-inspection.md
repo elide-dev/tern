@@ -5,6 +5,8 @@ plugin declarations on 2026-11-05. None of the proposed APIs below are implement
 or advertised by this plugin. This refines the document/inspection milestones in
 [the project session plan](../PROJECT_SESSION_PLAN.md).
 
+Upstream proposal: [stencil-hq/tern-sdk#263](https://github.com/stencil-hq/tern-sdk/issues/263).
+
 The integration should enhance Tern's existing file editor. Tern owns buffers,
 undo, editing, navigation, layout, accessibility, and rendering. Elide owns test
 measurements, debugger control, source attribution, and instrumentation. Luau
