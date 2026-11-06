@@ -7,6 +7,15 @@ or advertised by this plugin. This refines the document/inspection milestones in
 
 Upstream proposal: [stencil-hq/tern-sdk#263](https://github.com/stencil-hq/tern-sdk/issues/263).
 
+Language grammar contribution request:
+[stencil-hq/tern-sdk#267](https://github.com/stencil-hq/tern-sdk/issues/267).
+The requested registry would share plugin-contributed grammars across native files,
+TSP code/editor nodes, diffs and Markdown fences. Pkl is the first acceptance case;
+the REPL already sends its language ID. The installed SDK exposes no grammar
+registration API, so source decoration remains a TSP-only fallback, not native
+file-editor highlighting. Grammar contributions are independent of LSP semantics
+and the revision-checked annotation-provider request.
+
 The integration should enhance Tern's existing file editor. Tern owns buffers,
 undo, editing, navigation, layout, accessibility, and rendering. Elide owns test
 measurements, debugger control, source attribution, and instrumentation. Luau
@@ -19,7 +28,7 @@ connects providers to the project session; it does not own another source buffer
 | Native documents | `cx.docs:open/read/edit/save`, native undo and dirty state | Exposed revisions, atomic snapshot/change subscription, annotation providers |
 | Native profiling | `cx.procs:profile(pid, {seconds})` opens Tern's profile block | Returned function counts have no source URI/line identity |
 | TSP editor nodes | Decoration, gutter, and virtual-line primitives | They belong to program-owned editor nodes, not native file buffers |
-| Guest debugging | Elide Graal DAP/CDP launch facilities | Project-owned adapter client, stop state, native breakpoint/stack UI |
+| Guest debugging | Project-owned Truffle DAP actor, native breakpoint/stack/value UI, JS/Python and JS test launch | Native gutter toggles, execution markers, inline values and source revision matching |
 | JVM debugging | JDWP launch for run/test | A JVM debugger adapter behind the shared controller |
 | Coverage | JS LCOV and JaCoCo analysis | Versioned line/branch projection, correct union/deduplication, native provider |
 | Source profiling | Elide OTLP guest profile source locations | Loaded-source identity, completeness, aggregation, native heat provider |
@@ -70,6 +79,12 @@ validated shared reads, a paged native Tests browser, current-source/line links,
 reruns, and bounded agent reads. Truffle fingerprints identify evaluated text;
 historical source text is not yet retained. Native buffer observation and overlays
 remain proposed. Truffle languages take priority over further HotSpot-specific work.
+
+Guest debugging now follows the same approach: a native Debug panel consumes the
+independent project DAP actor, with source links into the existing editor. UI and
+Carly share one target and explicit control ownership. Values require explicit
+inspection because the current DAP adapter may execute guest formatting/getters.
+No proposed native document-provider APIs are required or advertised by this slice.
 
 | Workflow | Implement with current facilities | Requires new Tern facilities |
 | --- | --- | --- |

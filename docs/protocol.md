@@ -79,3 +79,46 @@ are stable within the immutable run artifact. File pages also cap encoded entrie
 
 This layer reports configuration as `discovered`. It does not evaluate manifests,
 resolve workspace dependencies, provide streaming subscriptions, or implement MCP.
+
+## Shared debugging
+
+These operations use the same project binding. Source paths are canonicalized
+inside its root. One target may be active per project/runtime session.
+
+| Operation | Fields | Result |
+| --- | --- | --- |
+| `project_debug_launch` | `binding`, UUID `command`, `subject`, optional `options` | `{generation}` |
+| `project_debug_snapshot` | `binding`, optional `compact` | `{debug, controls, controller, grace_seconds}`, or null |
+| `project_debug_request` | `binding`, UUID `command`, `request` | empty object; accepted asynchronously |
+| `project_debug_takeover` | `binding`, `generation` | empty object; explicit control transfer |
+
+Launch options default to `{mode:"run", stop_on_entry:true, breakpoints:[]}`.
+Mode `test` runs the selected JS test file. Breakpoints are `{path, line}` entries
+with one-based lines. Debug tests share ordinary tests' output-writer exclusion
+across overlapping roots and different runtimes.
+
+A request contains `{generation, stop_epoch, action}`. Action uses a `kind` tag:
+`continue`, `next`, `step_in`, `step_out`, `pause`, `stop`,
+`stack` with `thread`, `scopes` with `frame`, `variables` with `reference` and
+`allow_side_effects`, or `breakpoints` with `path` and replacement `lines`.
+Generation IDs belong to launches; stop epochs belong to pauses. Never reuse frame
+or value handles after resume. Retain the UUID and exact payload for transport
+retries; observe snapshot `last_command`, `pending`, `error`, state and revision
+for execution completion. Acknowledgement alone does not mean a step completed.
+
+Snapshots include bounded frames, scopes, values, breakpoint verification, output,
+capabilities and explicit truncation. `compact:true` caps encoded snapshots at
+512 KiB and may remove trailing entries. `project_summary` includes a small debug
+summary. These remain local operations, not a WebSocket MCP implementation.
+
+`controls` is attachment-local; `controller` is `you`, `another attachment` or
+`unclaimed`, never another attachment's lease ID. Only the controller may change
+execution/breakpoints or request side-effect-capable values. Observers may read
+stacks/scopes. `passive_variables:false` requires explicit `allow_side_effects:true`
+for values; the current adapter may run guest getters or formatting code. No
+automatic watches, arbitrary evaluation or setters are exposed.
+
+Controller detach/lease expiry revokes queued controls and starts 30 seconds for
+takeover, then stops the supervised process group. Stop remains available under
+queue backpressure. Native UI and Carly use this same model through
+`plugins.elide.debug_launch`, `debug_read`, `debug_control`, and `debug_takeover`.

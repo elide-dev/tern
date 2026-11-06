@@ -41,6 +41,28 @@ pub enum Request {
     #[serde(default = "coverage_page_limit")]
     limit: usize,
   },
+  ProjectDebugLaunch {
+    binding: elide_project_session::Binding,
+    command: String,
+    subject: String,
+    #[serde(default)]
+    options: elide_project_session::debug::LaunchOptions,
+  },
+  ProjectDebugSnapshot {
+    binding: elide_project_session::Binding,
+    #[serde(default)]
+    compact: bool,
+  },
+  #[serde(rename = "project_debug_request")]
+  ProjectDebugOperation {
+    binding: elide_project_session::Binding,
+    command: String,
+    request: elide_project_session::debug::Request,
+  },
+  ProjectDebugTakeover {
+    binding: elide_project_session::Binding,
+    generation: String,
+  },
   ProjectCancel {
     binding: elide_project_session::Binding,
     run: String,
