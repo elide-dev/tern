@@ -101,7 +101,7 @@ contract Elide emits against:
 
 | URL | Effect |
 | --- | --- |
-| `elide://source?path=<abs>[&root=<abs>][&line=<n>[&col=<n>]]` | Opens the file in Tern's editor at `line`. |
+| `elide://source?path=<abs>[&root=<abs>][&line=<n>[&col=<n>]]` | Opens the Elide source block on the file at `line` when it is a JavaScript, TypeScript, Python or Kotlin source in a known project (`root`, or a detected project containing `path`) and the plugin is configured; otherwise opens the file in Tern's editor at `line`. |
 | `elide://debug?root=<abs>&path=<abs>[&line=<n>]` | Launches the project debugger for `root` with `path` as its source. |
 | `elide://tests?root=<abs>` | Opens the project's test runs for `root`. |
 
@@ -130,6 +130,69 @@ Rules, implemented by the pure parser `plugin/lib/links.luau` (unit-tested by
 `tern ctl open-url`, the path the system takes), chrome and `command_finished` in an isolated
 desktop window. Plugin lenses need the daemon-backed window; the in-process `tern serve`
 harness shows built-in lenses only.
+
+### Source block
+
+`elide.source` is a host-half plugin block (`plugin/host.luau`, pure helpers in
+`plugin/lib/source.luau`, unit-tested by `lua tests/source.lua`). Tern draws every pane
+from the surface node tree, so no foreign editor widget can be embedded; the block sends
+the file to Tern's `editor` node instead: `readonly`, `lang` for Tern's highlighter,
+`nowrap`, `maxLines` sized from the pane's rows, a program-owned `topline`, a per-line
+`gutter` (line number, then the overlay sign), `virt` end-of-line notes and `decor`
+ranges. Offsets are UTF-16 code units. Files over 512 KiB, unreadable files and
+non-UTF-8 files get an `empty` state instead of the editor.
+
+- **Arguments.** The absolute file, then optionally the project root and a one-based
+  line. Without a root the block looks for the nearest `elide.pkl` above the file.
+- **Opening.** `elide://source` (above), the workspace toolbar's **Source** button
+  (the workspace editor's file), the project menu's **Open Elide source…** and the
+  `plugin.elide.source` command (the focused file, else a prompted project path), and
+  "Open with Elide source" from the `files` globs in `plugin.toml`. It is not in the
+  palette: it always needs a file.
+- **Attachment.** With a root the block attaches through the same broker state as the
+  native project surfaces (`project_attach`), renews its lease with `project_snapshot`
+  every 30 s, and detaches on `pane_exited` or when a background callback finds its pane
+  gone (blocks have no close hook). The binding is not saved; a restarted block attaches
+  again. Saved state is the overlay, caret line and breakpoint lines.
+- **Overlays.** A segmented `tabs` strip: None, Coverage, Debug, Hotness. Tab and ⇧Tab
+  cycle, Escape returns to None, `q` closes the block. Only the caret line takes line
+  actions (gutter spans are not clickable, and a `readonly` editor gets no native
+  caret-moving edits); ↑/↓, j/k, Page Up/Down, Home and End move it.
+- **Coverage.** The newest snapshot run with `options.coverage` is paged through
+  `project_coverage_page` until the file whose path matches (relative to the root, or
+  absolute under the given or canonical root), then its lines are paged through `next`.
+  Covered lines get a `success` dot, uncovered an `error` dot, covered lines with fewer
+  covered than total branches a `warning` half dot and a branch count in `virt`; the head
+  row shows the file's percentage. The artifact records only covered/uncovered and
+  branch counts, so there are no hit counts to show. With no coverage run the block
+  offers **Run with coverage** (`project_test` on the root with `coverage: true`) and
+  polls the snapshot each second until that run finishes.
+- **Debug.** While active the block polls `project_debug_snapshot` (`compact`) every
+  500 ms and re-renders only when the revision, pending flag, controller or error
+  changes. The stop location in this file is a `▶` `accent` sign, a `mark` decoration on
+  the line and a `virt` note; the caret jumps to each new stop, and `g` returns to it.
+  Breakpoints are `●` (`○` with the adapter's message while unverified). `b` toggles one
+  on the caret line: before a launch it is kept locally and passed to
+  `project_debug_launch`; with a live target it sends the file's replacement `lines`
+  through `project_debug_request` `breakpoints`. F5/`c` launches when no target is live
+  (test files in `test` mode, `stop_on_entry` false) and continues otherwise; F10/`n`,
+  F11/`s`, ⇧F11/`o` and ⇧F5/`x` step over, in, out and stop. Control needs
+  `controller == "you"`; observers get a toast and disabled buttons. Every command
+  carries a fresh UUID and is resent with the same UUID and payload only when no response
+  arrived. A new target's reported breakpoints for this file replace the local list.
+- **Hotness** is shown disabled: selecting it toasts the reason. Neither the broker nor
+  `elide-project-session` keeps source-located profile samples, so a read-only
+  `project_profile_page` op cannot be added from existing data. The missing piece is a
+  profile collector in the project session that records samples by `{path, line}` for a
+  run, and a `project_profile_page` op paging per-line sample counts like
+  `project_coverage_page`; the block would then draw per-line share as `▁▂▃▅▇` gutter
+  glyphs toned `warning`/`error`. Tern's `tabs` items take no `disabled` prop, so the tab
+  is drawn `dim` and refused in the handler.
+
+`python3 tests/source.py --runtime /path/to/elide [--sdk /path/to/embedder]` opens the block
+from an `elide://source` link in an isolated desktop window, runs coverage from the block and
+checks the covered and uncovered gutter marks, then sets a breakpoint with `b`, launches with
+F5, and checks the stop marker against the broker's own snapshot.
 
 ### Why workspaces don't use `cx.layout:tab`
 

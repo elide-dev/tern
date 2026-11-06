@@ -1,0 +1,193 @@
+-- Pure helpers for the `elide.source` block: UTF-16 line offsets for the `editor` node, coverage and
+-- breakpoint merging, scrolling and command ids. No `tern` calls, and only the subset Luau shares with
+-- Lua 5.4, so `tests/source.lua` runs under plain `lua`.
+
+local M = {}
+
+-- Files above this are refused rather than sent whole as one editor text.
+M.MAX_BYTES = 512 * 1024
+
+local LANGS = {
+  js = "javascript",
+  mjs = "javascript",
+  cjs = "javascript",
+  ts = "typescript",
+  mts = "typescript",
+  cts = "typescript",
+  py = "python",
+  kt = "kotlin",
+  kts = "kotlin",
+}
+
+-- Sources the project debugger launches (JavaScript, TypeScript, Python).
+local DEBUGGABLE = { js = true, mjs = true, cjs = true, ts = true, mts = true, cts = true, py = true }
+
+function M.extension(path)
+  return string.lower(string.match(path, "%.([%w]+)$") or "")
+end
+
+function M.lang(path)
+  return LANGS[M.extension(path)]
+end
+
+function M.debuggable(path)
+  return DEBUGGABLE[M.extension(path)] == true
+end
+
+-- Whether a source file is a test file, which the debugger launches in `test` mode.
+function M.test_file(path)
+  local name = string.match(path, "([^/]+)$") or path
+  return string.find(name, "%.test%.[%w]+$") ~= nil
+    or string.find(name, "%.spec%.[%w]+$") ~= nil
+    or string.find(name, "^test_.+%.py$") ~= nil
+end
+
+-- UTF-16 code units in a UTF-8 string: one per character, two for those above U+FFFF (4-byte
+-- sequences). Stray continuation bytes count as nothing; callers reject invalid UTF-8 first.
+function M.units(s)
+  local n = 0
+  for i = 1, #s do
+    local b = string.byte(s, i)
+    if b < 0x80 or b >= 0xC0 then
+      n = n + 1
+      if b >= 0xF0 then
+        n = n + 1
+      end
+    end
+  end
+  return n
+end
+
+-- Whether `s` is UTF-8 text without NUL bytes (binary files are refused).
+function M.text(s)
+  return utf8.len(s) ~= nil and string.find(s, "\0", 1, true) == nil
+end
+
+-- Logical lines of `text`, split on "\n" as the editor splits them: each line's UTF-16 start offset
+-- and length. The empty line after a trailing newline is not counted: the editor draws none.
+function M.index(text)
+  local starts, lengths = {}, {}
+  local offset, position = 0, 1
+  while true do
+    local newline = string.find(text, "\n", position, true)
+    local stop = newline and newline - 1 or #text
+    local length = M.units(string.sub(text, position, stop))
+    starts[#starts + 1] = offset
+    lengths[#lengths + 1] = length
+    if not newline or (newline == #text and #starts > 0) then
+      break
+    end
+    offset = offset + length + 1
+    position = newline + 1
+  end
+  return { starts = starts, lengths = lengths, count = #starts }
+end
+
+-- `line` right-aligned to `width` digits.
+function M.number(line, width)
+  local digits = tostring(line)
+  return string.rep(" ", width - #digits) .. digits
+end
+
+-- Zero-based top line keeping one-based `caret` among `visible` lines of `count`.
+function M.scroll(top, caret, visible, count)
+  if caret - 1 < top then
+    top = caret - 1
+  elseif caret - 1 >= top + visible then
+    top = caret - visible
+  end
+  return math.max(0, math.min(top, math.max(0, count - visible)))
+end
+
+-- `path` relative to `root`, or nil when it is not inside it.
+function M.relative(path, root)
+  if type(root) == "string" and root ~= "" and string.sub(path, 1, #root + 1) == root .. "/" then
+    return string.sub(path, #root + 2)
+  end
+  return nil
+end
+
+-- Whether a path the broker reported (relative to the project, or absolute under any of `roots`,
+-- such as the given and the canonical root) names this file.
+function M.same(candidate, path, relative, roots)
+  if type(candidate) ~= "string" then
+    return false
+  end
+  if candidate == path or candidate == relative then
+    return true
+  end
+  for _, root in ipairs(roots) do
+    if type(root) == "string" and candidate == root .. "/" .. relative then
+      return true
+    end
+  end
+  return false
+end
+
+-- Measured coverage lines (`{line, covered, branches?}`) as per-line marks, plus the covered and
+-- measured counts. A covered line with fewer covered than total branches is `partial`.
+function M.coverage(entries)
+  local marks, covered, total = {}, 0, 0
+  for _, entry in ipairs(entries) do
+    if type(entry) == "table" and type(entry.line) == "number" and not marks[entry.line] then
+      local state = "uncovered"
+      local branches = type(entry.branches) == "table" and entry.branches or nil
+      if entry.covered then
+        covered = covered + 1
+        state = "covered"
+        if branches and (branches.total or 0) > 0 and (branches.covered or 0) < branches.total then
+          state = "partial"
+        end
+      end
+      total = total + 1
+      marks[entry.line] = { state = state, branches = branches }
+    end
+  end
+  return marks, covered, total
+end
+
+-- Whole percent, rounded down so an incomplete file never reads 100%.
+function M.percent(covered, total)
+  if total <= 0 then
+    return nil
+  end
+  return math.floor(covered * 100 / total)
+end
+
+-- Toggles `line` in a sorted list of breakpoint lines; returns the new list and whether it was added.
+function M.toggle(lines, line)
+  local out, found = {}, false
+  for _, existing in ipairs(lines) do
+    if existing == line then
+      found = true
+    else
+      out[#out + 1] = existing
+    end
+  end
+  if not found then
+    out[#out + 1] = line
+    table.sort(out)
+  end
+  return out, not found
+end
+
+-- Percent-encodes a path for a `file://` URL.
+function M.file_url(path, line)
+  local encoded = string.gsub(path, "[^%w%-%._~/]", function(c)
+    return string.format("%%%02X", string.byte(c))
+  end)
+  return "file://" .. encoded .. (line and ("#L" .. line) or "")
+end
+
+-- A version 4 UUID from `random(lo, hi)` (math.random), for broker command ids.
+function M.uuid(random)
+  local hex = "0123456789abcdef"
+  return (
+    string.gsub("xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx", "[xy]", function(c)
+      local v = c == "x" and random(0, 15) or random(8, 11)
+      return string.sub(hex, v + 1, v + 1)
+    end)
+  )
+end
+
+return M
