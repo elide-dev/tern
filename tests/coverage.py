@@ -93,7 +93,7 @@ test("positive values", () => assert.equal(classify(1), "positive"));
         try:
             wait(socket.exists)
             ctl('plugins', 'run', 'plugin.elide.workspace')
-            wait(lambda: 'Build' in tree('[data-role="project-actions"]'))
+            wait(lambda: ctl('tree', '[data-role="project-test"]').get('nodes'))
             ctl('click', '[data-role="project-test"]')
             wait(lambda: 'Passed' in tree('[data-role="run-status"]'))
             assert not reports(), 'Ordinary tests must not implicitly collect coverage'
