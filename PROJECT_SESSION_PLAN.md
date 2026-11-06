@@ -444,6 +444,10 @@ editable buffer inside every inspector.
 
 ### Required Tern contracts — new APIs
 
+The focused [native editor inspection proposal](docs/native-editor-inspection.md)
+defines the first coverage slice, provider semantics, debugging/hotness behavior,
+and acceptance gates against the currently installed SDK.
+
 1. Document open/change/save/close events with URI, language, revision, origin and overlay identity; atomic snapshot
    subscription so the first read cannot miss changes.
 2. Snapshot reads and compare-and-swap edits by expected revision/hash. Multi-file workspace edits validate all
