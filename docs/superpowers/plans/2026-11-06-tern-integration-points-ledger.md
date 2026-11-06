@@ -46,3 +46,6 @@ Hand-off record for the plan in `2026-11-06-tern-integration-points.md`. Keep it
 - 11:00 Sam approved the Elide source block; Task 6 added and committed (`bf8f159`).
 - 11:03 This ledger created.
 - 11:04 Security review flagged W2 commits (inspect/view.rs tree fan-out; serve/surface.rs request href authority); forwarded to W2 to fix with tests before reporting.
+- 11:06 W1 done: c8a02b17d on feat/tern-tests-surface; testing/sessions/coverage PASS; merged ff into feat/tern-integration-pr. tests/testing.py lines 75/77/79 selector edits (W1, uncommitted). coverage.py needs a one-line shim change (W1 to supply). Asked W1 for truncated tail + PNG.
+- 11:10 Reviewed W1 shots: Tests page on recipe; Coverage view clipped head row in narrow pane, no meter column, text summary instead of stats. Sent W1 follow-up (5 items) for a second commit on feat/tern-tests-surface; merge again after.
+- 11:12 Controller hit its usage limit. W1 (coverage follow-up), W2 (serve/debug + two security fixes), W3 (plugin finish) still running in their worktrees. Next controller: collect their reports, merge W1 follow-up and W2 into tern-pr, commit harness edits on plugin main and merge W3, then dispatch W4 and W5 per "Integration steps".
