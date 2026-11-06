@@ -102,6 +102,10 @@ with tempfile.TemporaryDirectory(prefix='tp-', dir='/tmp') as temporary:
         def menu():
             ctl('plugins', 'run', 'plugin.elide.project')
             wait(lambda: 'Run tests' in tree('#pick'))
+        def choose(label):
+            options = ctl('tree', '#pick .tn-pk-item').get('nodes', [])
+            index = next(i for i, option in enumerate(options, 1) if option.get('text') == label)
+            ctl('click', f'#pick .tn-pk-item:nth-child({index})')
         try:
             wait(socket.exists)
             ctl('status-bar', 'on')
@@ -131,7 +135,7 @@ with tempfile.TemporaryDirectory(prefix='tp-', dir='/tmp') as temporary:
             ctl('close')
             wait(lambda: not ctl('tree', '.sf-dock').get('nodes'))
             menu()
-            ctl('key', 'ArrowDown'); ctl('key', 'Enter')
+            choose('Open REPL')
             wait(lambda: 'Ready' in tree('.sf-badge'))
             native_panel('elide-tern-repl')
             ctl('type', '40 + 2'); ctl('key', 'Enter')
@@ -140,7 +144,7 @@ with tempfile.TemporaryDirectory(prefix='tp-', dir='/tmp') as temporary:
             ctl('close')
             wait(lambda: not ctl('tree', '.sf-dock').get('nodes'))
             menu()
-            ctl('key', 'ArrowDown'); ctl('key', 'ArrowDown'); ctl('key', 'Enter')
+            choose('Serve static files')
             wait(lambda: 'Running' in tree('[data-role="server-status"]') or 'http://127.0.0.1:' in tree('[data-role="address"]'))
             native_panel('elide-tern-serve')
             address = re.search(r'http://127\.0\.0\.1:\d+', tree('[data-role="address"]')).group()
@@ -169,13 +173,13 @@ with tempfile.TemporaryDirectory(prefix='tp-', dir='/tmp') as temporary:
                 wait(lambda: not ctl('tree', '.sf-dock').get('nodes'))
                 ctl('files', 'root', str(nested))
             ctl('plugins', 'run', 'plugin.elide.workspace')
-            wait(lambda: 'Build' in tree('[data-role="project-actions"]'))
+            wait(lambda: ctl('tree', '[data-role="project-build"]').get('nodes'))
             wait(lambda: bool(ctl('state').get('file_blocks')))
             workspace_state = ctl('state')
             assert Path(workspace_state['files']['root']).resolve() == project.resolve()
             panes = len(workspace_state['panes'])
             ctl('plugins', 'run', 'plugin.elide.workspace')
-            wait(lambda: 'Build' in tree('[data-role="project-actions"]'))
+            wait(lambda: ctl('tree', '[data-role="project-build"]').get('nodes'))
             assert len(ctl('state')['panes']) == panes, 'Opening a workspace twice must preserve the layout'
             ctl('file', 'wait')
             ctl('click', '.ed-code')
@@ -191,7 +195,7 @@ with tempfile.TemporaryDirectory(prefix='tp-', dir='/tmp') as temporary:
             wait(lambda: 'Passed' in tree('[data-role="run-status"]'))
             assert len(ctl('state')['panes']) == before_probe + 1, 'Pending runtime probe opened duplicate panes'
             native_panel('elide-tern-project')
-            assert 'Build' in tree('[data-role="project-actions"]')
+            assert ctl('tree', '[data-role="project-build"]').get('nodes')
             assert ctl('state')['file_blocks'], 'Running tests must preserve the editor'
             count = len(ctl('state')['panes'])
             ctl('click', '[data-role="project-test"]')
