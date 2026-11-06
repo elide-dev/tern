@@ -97,7 +97,10 @@ function M.install(actions)
   -- Reloading an existing window does not emit window_start.
   tern.timer(0, refresh)
   tern.route.open(function(request, cx)
-    if request.origin ~= "files" or (request.how ~= "default" and request.how ~= "glimpse") then
+    if
+      (request.origin ~= "files" and request.origin ~= "palette")
+      or (request.how ~= "default" and request.how ~= "glimpse")
+    then
       return nil
     end
     local host = cx.hosts:current()

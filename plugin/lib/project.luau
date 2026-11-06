@@ -1,4 +1,6 @@
 local records = {}
+-- The last `elide test|build|run` each pane finished, for the status line.
+local results = {}
 local local_host = false
 local M = {}
 
@@ -73,17 +75,79 @@ end
 
 function M.remove(pane)
   records[pane] = nil
+  results[pane] = nil
+end
+
+-- Roots of every project detected so far in this window, without duplicates.
+function M.roots()
+  local roots, seen = {}, {}
+  for _, record in records do
+    local root = record.project and record.project.root
+    if root and not seen[root] then
+      seen[root] = true
+      table.insert(roots, root)
+    end
+  end
+  return roots
+end
+
+-- Records how an `elide <command>` line ended in `pane`; the caller refreshes the chrome.
+function M.finished(pane, command, status)
+  results[pane] = { command = command, status = status }
+end
+
+local OUTCOMES = {
+  test = { ok = "Tests passed", failed = "Tests failed", command = "plugin.elide.project_tests" },
+  build = { ok = "Built", failed = "Build failed", command = "plugin.elide.project" },
+  run = { ok = "Ran", failed = "Run failed", command = "plugin.elide.project" },
+}
+
+local function outcome(pane)
+  local result = results[pane]
+  local labels = result and OUTCOMES[result.command]
+  if not labels then
+    return nil
+  end
+  local ok = result.status == 0
+  return {
+    text = if ok then labels.ok else labels.failed,
+    icon = if ok then "check" else "x-circle",
+    tone = if ok then "ok" else "error",
+    command = labels.command,
+  }
 end
 
 function M.status(pane)
   local record = records[pane.pane]
   if local_host and record and record.project then
-    return {
+    local segments = {
       { text = record.project.name or "Project", icon = "folder", command = "plugin.elide.project" },
       { text = "Workspace", icon = "folder", command = "plugin.elide.workspace" },
     }
+    local last = outcome(pane.pane)
+    if last then
+      table.insert(segments, last)
+    end
+    return segments
   end
   return nil
+end
+
+-- Names a tab after the project its focused pane sits in; names the user gave win.
+function M.tab_title(tab)
+  if tab.name or not local_host then
+    return nil
+  end
+  local record = records[tab.pane]
+  local root = record and record.project and record.project.root
+  if not root then
+    return nil
+  end
+  local cwd = tab.cwd or ""
+  if cwd ~= "" and cwd ~= root and string.sub(cwd, 1, #root + 1) ~= root .. "/" then
+    return nil
+  end
+  return record.project.name or string.match(root, "([^/]+)$")
 end
 
 return M
