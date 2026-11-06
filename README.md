@@ -209,23 +209,26 @@ their source, and `elide test --reporter=tap` shows a pass/fail summary with a t
 results. Both fall back to the raw output when nothing parses or the output is very large.
 
 `elide://source`, `elide://debug` and `elide://tests` links open a source line (in the
-[source view](#source-view) for project sources), the debugger or project test runs. Elide prints them; any program can, as OSC 8 hyperlinks.
+[source editor](#source-editor) for project sources), the debugger or project test runs. Elide prints them; any program can, as OSC 8 hyperlinks.
 Links that leave their project root are ignored. See
 [the contract](docs/architecture.md#elide-links). Run `lua tests/links.lua` for the
 parser's unit tests and `python3 tests/integration.py --runtime /path/to/elide` for the
 lenses, links and status line in an isolated window.
 
-### Source view
+### Source editor
 
-**Open with Elide source** (from a file's menu), the workspace toolbar's **Source**
-button, or **Open Elide source…** in the project menu shows a project source file
-read-only with Tern's highlighting and three overlays: **Coverage** marks covered,
-uncovered and partially covered lines from the newest coverage run (or runs one),
-**Debug** sets breakpoints with `b` on the caret line, launches with F5 and shows where
-the target paused, and **Hotness** waits on source-located profile data the project
-session does not record yet. Press `e` to edit the file in Tern. `elide://source`
-links open this view for sources inside a project. Run `lua tests/source.lua` for its
-helpers and `python3 tests/source.py --runtime /path/to/elide` for the block itself.
+**Open with Elide source** (from a file's menu), the workspace toolbar's **Source** button,
+or **Open Elide source…** in the project menu opens a project source file in Elide's own
+editor: Tern's highlighting, undo and redo, auto-indent, indent and comment toggles, find
+(⌃F), go to line (⌃G), soft wrap (⌥Z), save with ⌘S, and a reload when the file changes on
+disk. Three overlays sit on top of the text and follow your edits: **Coverage** marks
+covered, uncovered and partially covered lines from the newest coverage run (F5 runs one),
+**Debug** sets breakpoints with F9, launches or continues with F5, steps with F10, F11 and
+⇧F11, and shows where the target paused, and **Hotness** waits on source-located profile data
+the project session does not record yet. Files over 600 lines are shown without highlighting
+to keep typing fast. `elide://source` links open this editor for sources inside a project.
+Run `lua tests/source.lua` for its text model and `python3 tests/source.py --runtime
+/path/to/elide` for the editor itself.
 
 ### Built-in agent project tools
 
