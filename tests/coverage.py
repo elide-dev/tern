@@ -43,7 +43,7 @@ test("positive values", () => assert.equal(classify(1), "positive"));
     package = fixtures / 'elide'
     shutil.copytree(root / 'plugin', package, ignore=shutil.ignore_patterns('config.json', 'tern.d.luau'))
     fixture_config = {'runtime': str(runtime)}
-    for name in ['broker', 'test', 'project']:
+    for name in ['broker']:
         fixture_config[name] = str(root / 'dist' / ('elide-tern-' + name))
     (package / 'config.json').write_text(json.dumps(fixture_config))
     fixture_root = state / 'crates/tern'

@@ -58,7 +58,7 @@ test("refreshes expired sessions", {skip: true}, () => {});
             return value in tree('[data-role="run-status"]')
         try:
             wait(socket.exists)
-            ctl('run', shlex.join([str(root / 'dist/elide-tern-test'), runtime, str(script)]))
+            ctl('run', shlex.join([runtime, 'tern', 'test', runtime, str(script)]))
             wait(lambda: status('Failed') or status('Incomplete'))
             assert status('Failed'), tree()
             assert '1 passed' in tree('[data-role="totals"]')
@@ -95,7 +95,7 @@ test("refreshes expired sessions", {skip: true}, () => {});
             wait(lambda: gone(running_pid))
             ctl('key', 'ctrl+c')
             wait(lambda: not ctl('tree', '.sf-dock').get('nodes'))
-            ctl('run', shlex.join([str(root / 'dist/elide-tern-test'), runtime, str(script)]))
+            ctl('run', shlex.join([runtime, 'test', str(script)]))
             wait(lambda: 'waiting for a service' in tree('[data-role="test-running"]'))
             running_pid, host_pid = child()
             os.kill(host_pid, signal.SIGKILL)

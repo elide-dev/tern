@@ -43,39 +43,47 @@ local function launcher(config, kind)
   if type(config[kind]) == "string" then
     return { path(config[kind]) }
   end
-  return { runtime_path(config), "tern", kind }
+  return { runtime_path(config), "--ignore-version", "tern", kind }
 end
 
 -- Whether a runtime executable supports `elide tern`, by path. An older runtime would
 -- otherwise resolve `tern` as a project script and run something unrelated.
 local supports_tern = {}
 
--- Runs `open(argv)` once the runtime is known to host surfaces. Explicit launcher
--- overrides skip the probe. Returns the pane when the answer is already cached.
-local function host(cx, config, kind, argv, open)
+-- Runs `open(cx, argv)` once the runtime is known to host surfaces. Explicit launcher
+-- overrides skip the probe. Returns false while pending, then calls `opened`.
+local function host(cx, config, kind, argv, open, opened)
   if type(config[kind]) == "string" then
-    return open(argv)
+    return open(cx, argv)
   end
   local runtime = argv[1]
   local known = supports_tern[runtime]
   if known == true then
-    return open(argv)
+    return open(cx, argv)
   elseif known == false then
     cx:toast("error", "The configured runtime has no `elide tern`; update it or set a launcher in plugin/config.json.")
     return nil
   end
   local ok, problem = pcall(function()
-    tern.process.run({ runtime, "tern", "--help" }, { timeout_ms = 15000 }, function(result, current)
-      supports_tern[runtime] = result.status == 0
-      if current then
-        host(current, config, kind, argv, open)
+    tern.process.run(
+      { runtime, "--ignore-version", "--no-color", "--help-all" },
+      { timeout_ms = 15000 },
+      function(result, current)
+        supports_tern[runtime] = result.status == 0 and string.find(result.stdout or "", "[\r\n]%s+tern%s+") ~= nil
+        if current then
+          local pane = host(current, config, kind, argv, open)
+          if opened then
+            opened(current, pane)
+          end
+        end
       end
-    end)
+    )
   end)
   if not ok then
     cx:toast("error", "Could not probe the runtime: " .. tostring(problem))
+    return nil
   end
-  return nil
+  return false
 end
 
 require("./lib/agents").install(configuration, path, project)
@@ -87,7 +95,10 @@ local function terminal(cx, argv, cwd, target)
   end
   local spec = { cwd = cwd, command = "exec " .. table.concat(command, " ") }
   local pane
-  if target and cx.session:pane(target) then
+  if target then
+    if not cx.session:pane(target) then
+      return nil
+    end
     pane = cx.layout:split(target, "right", spec, { focus = true })
   else
     pane = cx.layout:new_tab(spec)
@@ -98,7 +109,7 @@ local function terminal(cx, argv, cwd, target)
   return pane
 end
 
-local function launch(cx, language, context, target)
+local function launch(cx, language, context, target, opened)
   if not local_host(cx) then
     return
   end
@@ -121,12 +132,12 @@ local function launch(cx, language, context, target)
   table.insert(argv, path(config.sdk))
   table.insert(argv, state)
   table.insert(argv, language)
-  return host(cx, config, "repl", argv, function(command)
-    return terminal(cx, command, context and context.root, target)
-  end)
+  return host(cx, config, "repl", argv, function(current, command)
+    return terminal(current, command, context and context.root, target)
+  end, opened)
 end
 
-local function launch_job(cx, kind, subject, cwd, target)
+local function launch_job(cx, kind, subject, cwd, target, opened)
   if not local_host(cx) then
     return
   end
@@ -147,20 +158,20 @@ local function launch_job(cx, kind, subject, cwd, target)
     if subject then
       table.insert(argv, subject)
     end
-    return host(cx, config, "project", argv, function(command)
-      return terminal(cx, command, cwd, target)
-    end)
+    return host(cx, config, "project", argv, function(current, command)
+      return terminal(current, command, cwd, target)
+    end, opened)
   else
     local argv = launcher(config, kind)
     table.insert(argv, runtime)
     table.insert(argv, subject)
-    return host(cx, config, kind, argv, function(command)
-      return terminal(cx, command, cwd, target)
-    end)
+    return host(cx, config, kind, argv, function(current, command)
+      return terminal(current, command, cwd, target)
+    end, opened)
   end
 end
 
-local function launch_debug(cx, context, target)
+local function launch_debug(cx, context, target, opened)
   if not local_host(cx) or not context then
     return
   end
@@ -197,9 +208,9 @@ local function launch_debug(cx, context, target)
       table.insert(argv, read.path)
     end
   end
-  return host(cx, config, "debug", argv, function(command)
-    return terminal(cx, command, context.root, target)
-  end)
+  return host(cx, config, "debug", argv, function(current, command)
+    return terminal(current, command, context.root, target)
+  end, opened)
 end
 
 local function runtime_action(cx, context, command, target)
@@ -221,14 +232,14 @@ workspace.install({
   run = function(cx, context, target)
     return runtime_action(cx, context, "run", target)
   end,
-  test = function(cx, context, target)
-    return launch_job(cx, "test", context.root, context.root, target)
+  test = function(cx, context, target, opened)
+    return launch_job(cx, "test", context.root, context.root, target, opened)
   end,
-  repl = function(cx, context, target)
-    return launch(cx, "js", context, target)
+  repl = function(cx, context, target, opened)
+    return launch(cx, "js", context, target, opened)
   end,
-  serve = function(cx, context, target)
-    return launch_job(cx, "serve", context.root, context.root, target)
+  serve = function(cx, context, target, opened)
+    return launch_job(cx, "serve", context.root, context.root, target, opened)
   end,
 })
 

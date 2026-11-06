@@ -62,7 +62,7 @@ test("a debugged test", () => {
     shutil.copytree(root / 'plugin', package, ignore=shutil.ignore_patterns('config.json', 'tern.d.luau'))
     broker_state = state / 'projects'
     fixture_config = {'runtime': str(runtime), 'project_state': str(broker_state),
-                      'broker': str(root / 'dist/elide-tern-broker'), 'debug': str(root / 'dist/elide-tern-debug')}
+                      'broker': str(root / 'dist/elide-tern-broker')}
     (package / 'config.json').write_text(json.dumps(fixture_config))
     fixture_root = state / 'crates/tern'
     (fixture_root / 'goldens').mkdir(parents=True)

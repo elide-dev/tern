@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-06-native-tern-surfaces-in-elide-design.md`
 
-Elide work happens in `/Users/sam/workspace/elide/.worktrees/tern-native-surfaces` (`$ELIDE`). Plugin work happens in `/Users/sam/workspace/elide-tern` (`$TERN`).
+Set `$ELIDE` to the runtime checkout and `$TERN` to the plugin checkout.
 
 ## Global Constraints
 

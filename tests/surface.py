@@ -11,6 +11,7 @@ import time
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--sdk', required=True)
+parser.add_argument('--runtime')
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 tern = shutil.which('tern')
@@ -73,7 +74,8 @@ with tempfile.TemporaryDirectory(prefix='tsp-', dir='/tmp') as state:
 
         try:
             wait(socket.exists)
-            cmd = shlex.join([str(root / 'dist/elide-tern-repl'), str(root / 'dist/elide-tern-broker'),
+            host = [str(Path(args.runtime).resolve()), 'tern', 'repl'] if args.runtime else [str(root / 'dist/elide-tern-repl')]
+            cmd = shlex.join([*host, str(root / 'dist/elide-tern-broker'),
                               str(Path(args.sdk).resolve()), str(Path(state) / 'repl'), 'js'])
             ctl('run', cmd)
             ready()

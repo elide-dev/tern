@@ -1,3 +1,4 @@
+local opening = {}
 local M = {}
 local ui = tern.ui
 local entries = {}
@@ -163,10 +164,21 @@ function M.install(actions)
       if previous and cx.session:pane(previous) then
         cx.layout:focus(previous)
       else
-        local pane = actions[event.act](cx, context, target)
-        if pane then
-          workspace.results[event.act] = pane
-          tern.kv.set(key(cx, event.pane), workspace)
+        local pending = key(cx, event.pane) .. ":" .. event.act
+        if opening[pending] then
+          return true
+        end
+        opening[pending] = true
+        local function opened(current, pane)
+          opening[pending] = nil
+          if pane and current.session:pane(event.pane) then
+            workspace.results[event.act] = pane
+            tern.kv.set(key(current, event.pane), workspace)
+          end
+        end
+        local pane = actions[event.act](cx, context, target, opened)
+        if pane ~= false then
+          opened(cx, pane)
         end
       end
     else

@@ -108,7 +108,7 @@ Elide.serve({port: 0, hostname: "127.0.0.1", fetch(request) {
             if not args.local_only:
                 command.extend([f'OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:{remote.server_port}',
                                 'OTEL_EXPORTER_OTLP_PROTOCOL=http/json'])
-            command.extend(['OTEL_SERVICE_NAME=inspection-test', str(root / 'dist/elide-tern-serve'),
+            command.extend(['OTEL_SERVICE_NAME=inspection-test', str(Path(args.runtime).resolve()), 'tern', 'serve',
                             str(Path(args.runtime).resolve()), str(state if args.static else script)])
             ctl('run', shlex.join(command))
             wait(lambda: address() is not None)

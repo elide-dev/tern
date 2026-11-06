@@ -28,12 +28,12 @@ repl:
 	cp "$(ELIDE_SOURCE)/target/debug/examples/embedded_surface" dist/.elide-tern-repl.new
 	mv dist/.elide-tern-repl.new dist/elide-tern-repl
 
-link: build repl serve testing project debugging
+link: build
 	tern plugin link "$(CURDIR)/plugin"
 
 
-test-surface: build repl
-	python3 tests/surface.py --sdk "$(SDK)"
+test-surface: build $(if $(RUNTIME),,repl)
+	python3 tests/surface.py --sdk "$(SDK)" $(if $(RUNTIME),--runtime "$(RUNTIME)")
 
 .PHONY: serve test-serve
 serve:
@@ -46,7 +46,7 @@ test-serve: serve
 	python3 tests/serve.py $(if $(RUNTIME),--runtime "$(RUNTIME)")
 
 .PHONY: test-telemetry
-test-telemetry: serve
+test-telemetry:
 	python3 tests/telemetry.py --runtime "$(RUNTIME)"
 
 .PHONY: testing test-testing
@@ -56,11 +56,11 @@ testing:
 	cp "$(ELIDE_SOURCE)/target/debug/examples/test_surface" dist/.elide-tern-test.new
 	mv dist/.elide-tern-test.new dist/elide-tern-test
 
-test-testing: testing
+test-testing:
 	python3 tests/testing.py --runtime "$(RUNTIME)"
 
 .PHONY: test-project
-test-project: build repl serve testing project
+test-project: build
 	python3 -u tests/project.py $(if $(SDK),--sdk "$(SDK)") $(if $(RUNTIME),--runtime "$(RUNTIME)") $(if $(PROJECT),--project "$(PROJECT)")
 
 .PHONY: project test-sessions
@@ -74,7 +74,7 @@ test-sessions: build project
 	python3 tests/sessions.py $(if $(RUNTIME),--runtime "$(RUNTIME)")
 
 .PHONY: test-coverage
-test-coverage: build testing project
+test-coverage: build
 	python3 -u tests/coverage.py $(if $(RUNTIME),--runtime "$(RUNTIME)")
 
 .PHONY: debugging test-debug
@@ -84,7 +84,7 @@ debugging:
 	cp "$(ELIDE_SOURCE)/target/debug/examples/debug_surface" dist/.elide-tern-debug.new
 	mv dist/.elide-tern-debug.new dist/elide-tern-debug
 
-test-debug: build debugging
+test-debug: build
 	python3 -u tests/debug.py $(if $(RUNTIME),--runtime "$(RUNTIME)")
 
 .PHONY: test-workspace
