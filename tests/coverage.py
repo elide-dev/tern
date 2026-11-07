@@ -113,15 +113,23 @@ test("positive values", () => assert.equal(classify(1), "positive"));
             ctl('shot', 'coverage-initial')
             ctl('click', '[data-role="coverage-files"] .sf-tbl-body .sf-tbl-row:first-child')
             wait(lambda: 'classify.mjs' in tree('[data-role="coverage-detail"]'))
-            ctl('click', '[data-role="coverage-lines"] .sf-tbl-body .sf-tbl-row:first-child')
+            if ctl('tree', '[data-role="coverage-lines"]').get('nodes'):
+                ctl('click', '[data-role="coverage-lines"] .sf-tbl-body .sf-tbl-row:first-child')
             wait(lambda: f'line {missing}' in tree('[data-role="coverage-source"]'))
             ctl('shot', 'coverage-light')
             ctl('prefs', 'preview', 'dark-nord')
             ctl('shot', 'coverage-dark')
             ctl('prefs', 'close')
             ctl('click', '[data-role="coverage-source"]', 'meta')
+            def file_block():
+                return any(block.get('path') and Path(block['path']).resolve() == source.resolve() for block in ctl('state').get('file_blocks', []))
+            # A project source link opens Tern's editor or, with the source block, plugin.elide.source.
+            wait(lambda: file_block() or bool(ctl('tree', "[data-surface='plugin.elide.source']").get('nodes')))
+            if not file_block():
+                ctl('file', 'open', str(source))
+                ctl('file', 'goto', f'{missing}:1')
             ctl('file', 'wait')
-            wait(lambda: any(block.get('path') and Path(block['path']).resolve() == source.resolve() for block in ctl('state').get('file_blocks', [])))
+            wait(file_block)
             ctl('type', '/* reviewed */ ')
             ctl('file', 'save')
             wait(lambda: source.read_text().splitlines()[missing - 1].lstrip().startswith('/* reviewed */'))
