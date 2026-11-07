@@ -130,6 +130,9 @@ with tempfile.TemporaryDirectory(prefix='tw-', dir='/tmp') as temporary:
                 assert button.get('title') and ctl('tree', selector + '[aria-label]').get('nodes'), button
                 assert not button.get('text'), 'Toolbar actions should use native icons without repeated labels'
                 assert ctl('tree', selector + ' svg').get('nodes'), ctl('tree', selector + ' *')
+            # Controls follow the editor's file: elide.pkl has no Source view and no debug target.
+            assert not ctl('tree', '[data-role="project-source"]').get('nodes'), 'Source must hide for elide.pkl'
+            assert ctl('tree', '[data-role="project-debug"]')['nodes'][0].get('title') == 'Open debugger'
             toolbar = ctl('tree', '[data-role="project-actions"]')['nodes'][0]
             assert toolbar['rect'][3] <= 40, toolbar
             pane = next(node for node in ctl('tree', '.tn-pane')['nodes']
@@ -166,6 +169,8 @@ with tempfile.TemporaryDirectory(prefix='tw-', dir='/tmp') as temporary:
                 print('PASS: actual terminal process starts in project root with no injected command', flush=True)
             opened = open_file('one.js')
             assert opened['id'] == editor, 'Ordinary Files click must reuse the workspace editor'
+            wait(lambda: ctl('tree', '[data-role="project-source"]').get('nodes'))
+            wait(lambda: ctl('tree', '[data-role="project-debug"]')['nodes'][0].get('title') == 'Debug one.js')
             assert active_tab()['panes'] == 3
             assert open_file('two.py')['id'] == editor
             image = open_file('pixel.png')

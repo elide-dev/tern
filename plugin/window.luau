@@ -343,24 +343,43 @@ local function prompt_source(cx, context)
     end)
 end
 
+-- Whether the project host has recorded a test run: each run keeps a `run-*` report
+-- directory under the project, so a listing answers without starting a process.
+local function has_runs(root)
+  local ok, names = pcall(tern.fs.list, root .. "/.dev/reports/tests/tern")
+  if not ok then
+    return false
+  end
+  for _, name in names do
+    if string.sub(name, 1, 4) == "run-" then
+      return true
+    end
+  end
+  return false
+end
+
 local function project_menu(context, cx)
   if not context then
     cx:toast("info", "No elide.pkl found in this directory or its parents.")
     return
   end
+  local items = {
+    { label = "Run tests", value = "test", icon = "play" },
+    { label = "Open debugger", value = "debug", icon = "bug" },
+    { label = "Open Elide source…", value = "source", icon = "file" },
+    { label = "Open REPL", value = "repl", icon = "terminal" },
+    { label = "Serve static files", value = "static", icon = "server" },
+    { label = "Serve a script…", value = "script", icon = "server" },
+    { label = "Open manifest", value = "manifest", icon = "file" },
+  }
+  -- Test runs only once there is one to view.
+  if has_runs(context.root) then
+    table.insert(items, { label = "View test runs", value = "tests", icon = "list" })
+  end
+  table.insert(items, { label = "Open project workspace", value = "workspace", icon = "folder" })
   cx:pick({
     placeholder = context.name or "Project",
-    items = {
-      { label = "Run tests", value = "test", icon = "play" },
-      { label = "Open debugger", value = "debug", icon = "bug" },
-      { label = "Open Elide source…", value = "source", icon = "file" },
-      { label = "Open REPL", value = "repl", icon = "terminal" },
-      { label = "Serve static files", value = "static", icon = "server" },
-      { label = "Serve a script…", value = "script", icon = "server" },
-      { label = "Open manifest", value = "manifest", icon = "file" },
-      { label = "View test runs", value = "tests", icon = "list" },
-      { label = "Open project workspace", value = "workspace", icon = "folder" },
-    },
+    items = items,
   }):next(function(item, err, current)
     if err and current then
       current:toast("error", err)

@@ -93,6 +93,10 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
 
         # Chrome: from tapp/nested the default title would be "nested"; the project names it "tapp".
         check('status segment', wait(lambda: 'tapp' in tree('.sl-plugin')), tree('.sl-plugin'))
+        ctl('plugins', 'run', 'plugin.elide.project')
+        menu = wait(lambda: (lambda t: t if 'Run tests' in t else None)(tree('#pick')), 30) or tree('#pick')
+        check('menu hides test runs before any run', 'Run tests' in menu and 'View test runs' not in menu, menu)
+        ctl('key', 'Escape')
         # `ctl state` reports Tern's own title; the drawn tab carries the formatter's.
         check('tab title from project', wait(lambda: any((n.get('title') or '').startswith('tapp ') for n in ctl('tree', '[role=tab]').get('nodes', [])), 20),
               tree('[role=tab]'))
