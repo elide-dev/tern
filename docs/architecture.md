@@ -378,16 +378,21 @@ links. Unlike the runtime it does not canonicalize paths (the lens has no file a
 resolve symlinks), so the lens links what the compiler printed, made absolute.
 
 **Source block overlay.** `elide build` writes
-`<root>/.dev/reports/build/tern/run-*/diagnostics.json`. The block lists those runs when it
-opens and on its 2-second disk poll; when there is more than one it orders them with
-`ls -t` (run directories are named at random and the report carries no timestamp; a run's
-directory changes when its report lands), off the block's thread. The **Diagnostics** tab
+`<root>/.dev/reports/build/tern/run-*/diagnostics.json`. The block lists the run directories when it
+opens and on its 2-second disk poll, and checks a directory for its report only when it
+first appears and while the report is pending (at most 8 pending at once), not every
+directory on every poll. With more than one report, `newest_run` picks the newest; today it
+asks `ls -t` (run directories are named at random and the report carries no timestamp; a
+run's directory changes when its report lands), off the block's thread, and it is the one
+place to switch to the runtime's `latest` pointer. The **Diagnostics** tab
 appears only once a report exists. It keeps this file's diagnostics and draws, per line,
 the gutter sign (`●` error, `▲` warning, `•` note), the row band through the same
 first-character `mark` run the other overlays use, Tern's dotted `typo` underline on the
 token at the reported column, and the message as a `virt` inlay (`+N` when a line has
-several). A diagnostic whose excerpt no longer matches its line (the file changed since the
-build) is drawn `muted`. The toolbar badge and status segment show "1 error, 2 warnings";
+several). A diagnostic whose line no longer reads as its excerpt (edited since the build, so
+possibly fixed) draws nothing until the next build, checked on every edit; undo brings it
+back. Lookups go through a line map built once per edit, and reports are read up to 500
+diagnostics, as the runtime writes them. The toolbar badge and status segment show "1 error, 2 warnings";
 F8 and ⇧F8 step to the next and previous diagnostic. The plan named `n`/`p`, but the block
 is an editor where those keys type, so it uses VS Code's keys. Like every overlay, it only
 changes tokens: no text moves (`tests/diagnostics_overlay.py` checks the first keyword's
