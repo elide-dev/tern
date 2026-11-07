@@ -35,6 +35,13 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
     # Near the size limit, and one past it.
     large = project / 'large.mjs'
     large.write_text(''.join(f'export const value{i} = {i}; // padding to make the line longer than usual\n' for i in range(5000)))
+    thirteen = project / 'thirteen.mjs'
+    thirteen.write_text(''.join(f'export const value{i} = {i};\n' for i in range(1300)))
+    three = project / 'three.mjs'
+    three.write_text(''.join(f'export const t{i} = {i};\n' for i in range(150)))
+    # Line 12345 runs when the file is launched, so a breakpoint there pauses on a five-digit line.
+    five = project / 'five.mjs'
+    five.write_text('// filler\n' * 12344 + 'globalThis.fiveDigits = 12345;\n')
     huge = project / 'huge.mjs'
     huge.write_text('// x\n' * 140000)
     state = base / 'state'; (state / 'config').mkdir(parents=True)
@@ -84,17 +91,17 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         return reply['result']
 
     # Gutter runs: one per line, "<number> <sign> " with the sign in its tone's span.
-    def gutter():
+    def gutter(scope='.sf-editor'):
         found = {}
-        for node in nodes('.sf-editor .sf-ed-gutter'):
+        for node in nodes(scope + ' .sf-ed-gutter'):
             match = re.match(r'^\s*([^\d\s]?)\s*(\d+)', node.get('text') or '')
             if match:
                 found[int(match.group(2))] = match.group(1)
         return found
 
-    def signed(line, glyph, tone):
-        selector = '.sf-editor .sf-ed-gutter .sf-t-' + tone
-        return gutter().get(line) == glyph and any((n.get('text') or '').strip() == glyph for n in nodes(selector))
+    def signed(line, glyph, tone, scope='.sf-editor'):
+        selector = scope + ' .sf-ed-gutter .sf-t-' + tone
+        return gutter(scope).get(line) == glyph and any((n.get('text') or '').strip() == glyph for n in nodes(selector))
 
     def lua(code):
         marker = 'w5-' + str(uuid.uuid4()) + ':'
@@ -198,9 +205,14 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         decoded[str(path)] = lambda x, y: tuple(rows[int(y)][int(x) * channels:int(x) * channels + 3])
         return decoded[str(path)]
 
-    def gutter_rows():
+    # The tree also returns other tabs' editors, laid out off screen; only on-screen rows count.
+    def onscreen(node):
+        r = node.get('rect') or [-1, -1, 0, 0]
+        return r[0] >= 0 and r[1] >= 0
+
+    def gutter_rows(scope='.sf-editor'):
         rows = {}
-        for node in nodes('.sf-editor .sf-ed-gutter'):
+        for node in filter(onscreen, nodes(scope + ' .sf-ed-gutter')):
             match = re.match(r'^\s*[^\d\s]?\s*(\d+)', node.get('text') or '')
             if match:
                 rows[int(match.group(1))] = node['rect']
@@ -223,6 +235,112 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         visible = sum(1 for p in ink if abs(lum(p) - lum(band)) > 60) >= 4
         return tinted and visible, {'band': band, 'clear': clear, 'tinted': tinted, 'text_visible': visible}
 
+    # The hairline is one 1px column at (digits + 3) cells from the gutter's left edge: sampled at every
+    # row boundary and mid-row it must be one colour, distinct from the background beside it.
+    def hairline_ok(shot, digits, lines, scope='.sf-editor'):
+        pixel = png(out / 'live' / (shot + '.png'))
+        rows = gutter_rows(scope)
+        first = rows[min(rows)]
+        x = round((first[0] + first[2] - 2 * cell_width[0] - 0.5) * 2)
+        x = settle(pixel, x, round((first[1] + first[3] / 2) * 2))
+        samples, beside = [], []
+        for line in lines:
+            top, height = rows[line][1], rows[line][3]
+            for y in (top, top + height / 2, top + height - 0.5):
+                samples.append(pixel(x, round(y * 2)))
+                beside.append(pixel(x + 6, round(y * 2)))
+        spread = max(max(c) - min(c) for c in zip(*samples))
+        contrast = min(sum(abs(p - q) for p, q in zip(a, b)) for a, b in zip(samples, beside))
+        return spread <= 12 and contrast >= 10, {'x': x, 'spread': spread, 'contrast': contrast, 'first': samples[0], 'beside': beside[0]}
+
+    # Rects round to half pixels: settle on the darkest-or-lightest column within ±4 device pixels of
+    # the computed x, by its contrast with the background two cells away, before testing continuity.
+    def settle(pixel, x, y):
+        far = pixel(x + 12, y)
+        return max(range(x - 4, x + 5), key=lambda c: sum(abs(p - q) for p, q in zip(pixel(c, y), far)))
+
+    # The same column check from a known x and row geometry, for a file whose rows share numbers with
+    # another open editor.
+    def hairline_at(shot, x_css, top_css, pitch, count):
+        pixel = png(out / 'live' / (shot + '.png'))
+        x = settle(pixel, round(x_css * 2), round((top_css + pitch / 2) * 2))
+        samples, beside = [], []
+        for k in range(count):
+            top = top_css + k * pitch
+            for y in (top, top + pitch / 2, top + pitch - 0.5):
+                samples.append(pixel(x, round(y * 2)))
+                beside.append(pixel(x + 6, round(y * 2)))
+        spread = max(max(c) - min(c) for c in zip(*samples))
+        contrast = min(sum(abs(p - q) for p, q in zip(a, b)) for a, b in zip(samples, beside))
+        return spread <= 12 and contrast >= 10, {'x': x, 'spread': spread, 'contrast': contrast, 'first': samples[0], 'beside': beside[0]}
+
+    # A sign glyph on `line` sits inside the two-cell sign column: from the gutter's left edge to
+    # before the digits, whatever their count.
+    def sign_inside(line, glyph, scope='.sf-editor'):
+        rows = gutter_rows(scope)
+        left, top = rows[line][0], rows[line][1]
+        for node in nodes(scope + ' .sf-ed-gutter span'):
+            r = node.get('rect') or [0, 0, 0, 0]
+            if (node.get('text') or '').strip() == glyph and abs(r[1] - top) < 3:
+                return left - 0.5 <= r[0] and r[0] + r[2] <= left + 2 * cell_width[0] + 0.5, {'glyph': r, 'gutter_left': left}
+        return False, {'missing': glyph, 'line': line}
+
+    # Opens the block in a tab of its own and waits for `ready`; consecutive Carly calls sometimes
+    # do nothing, so it retries.
+    # From rects: the hairline (the gutter's right border) sits two cells after the number's right edge,
+    # and the code (the caret at column 0) two cells after the hairline.
+    # From rects: the hairline (the right edge of the bordered air run) sits two cells after the number's
+    # right edge, and the code's column 0 (the line's tint run, or the caret at column 0 in files
+    # without runs) two cells after it. The caret line's number carries no token, so the number is
+    # measured on the line below.
+    def gutter_geometry(line):
+        rows = gutter_rows()
+        gx, gy, gw, gh = rows[line]
+        ny = rows[line + 1][1]
+        def near(selector, y, text=None):
+            return next((n['rect'] for n in filter(onscreen, nodes(selector)) if abs(n['rect'][1] - y) < 4
+                         and (text is None or (n.get('text') or '').strip() == text)), None)
+        number = near('.sf-editor .sf-ed-gutter span', ny, str(line + 1))
+        air = near('.sf-editor .sf-ed-gutter .sf-t-muted', gy)
+        code = near('.sf-editor .sf-t-mark', gy) or near('.sf-editor .sf-caret', gy)
+        cell = cell_width[0]
+        detail = {'number': number, 'air': air, 'code': code, 'cell': cell}
+        if not (number and air and code):
+            return False, detail
+        hairline = air[0] + air[2]
+        detail['hairline'] = hairline
+        ok = abs(number[0] + number[2] + 2 * cell - hairline) <= 1.5 and abs(code[0] - (hairline + 2 * cell)) <= 1.5
+        return ok, detail
+
+    def sheet_errors():
+        log.flush()
+        return [l for l in (out / 'tern.log').read_text().splitlines() if 'style sheet has errors' in l]
+
+    # Long files: query only the toned gutter spans (the sign and its toned number), a handful of
+    # nodes, since the tree caps how many rows it returns. The glyph sits in the first cell of the
+    # editor and the digits start two cells in.
+    def toned_sign(line, glyph, tone, scope):
+        spans = nodes(scope + ' .sf-ed-gutter .sf-t-' + tone)
+        sign = next((n['rect'] for n in spans if (n.get('text') or '').strip() == glyph), None)
+        number = next((n['rect'] for n in spans if (n.get('text') or '').strip() == str(line)), None)
+        editor = (nodes(scope) or [{'rect': [0, 0, 0, 0]}])[0]['rect']
+        cell = cell_width[0]
+        detail = {'sign': sign, 'number': number, 'editor_left': editor[0]}
+        if not (sign and number):
+            return False, detail
+        inside = editor[0] - 0.5 <= sign[0] and sign[0] + sign[2] <= editor[0] + cell + 0.5
+        clear = number[0] >= editor[0] + 2 * cell - 0.5 and abs(sign[1] - number[1]) < 4
+        return inside and clear, detail
+
+    def open_tab(path, ready, line=None):
+        args = [str(path), str(project)] + ([str(line)] if line else [])
+        for _ in range(3):
+            lua('cx:new_block("elide.source", ' + json.dumps(args).replace('[', '{').replace(']', '}') + ', "tab")')
+            if wait(ready, 15):
+                return True
+            time.sleep(2)
+        return False
+
     def click(selector):
         enabled = selector + ':not(.disabled):not([disabled]):not([aria-disabled="true"])'
         wait(lambda: any(n.get('rect', [0, 0, 0, 0])[2] > 0 for n in nodes(enabled)), 30)
@@ -244,17 +362,21 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         check('no file block for source link', not any(Path(b['path']).resolve() == source.resolve()
               for b in ctl('state').get('file_blocks', []) if b.get('path')), ctl('state').get('file_blocks'))
         check('line numbers in gutter', wait(lambda: len(gutter()) >= 7, 10), tree('.sf-editor .sf-ed-gutter'))
+        check('stylesheet accepted (no "style sheet has errors")', not sheet_errors(), sheet_errors())
         check('caret starts on linked line', wait(lambda: 'Ln 2,' in tree('[data-role="source-position"]'), 10),
               tree('[data-role="source-position"]'))
         # The gutter is exactly sign + digits + space + hairline + two spaces: 1 + 2 + 1 + 1 + 2 cells here.
         def gutter_cells(digits):
             cell = nodes('.sf-editor .sf-t-mark')[0]['rect'][2] if nodes('.sf-editor .sf-t-mark') else cell_width[0]
             cell_width[0] = cell
-            # With two editors on screen, the widest gutter is the file with the most digits.
-            width = max(n['rect'][2] for n in nodes('.sf-editor .sf-ed-gutter'))
-            return abs(width - (5 + digits) * cell) < 1.5, {'gutter': width, 'cell': cell, 'cells': width / cell}
+            # `[sign 2][digits][2] hairline [2]`, the hairline drawn inside the last four cells; the
+            # editor's `digits-N` role scopes the measure when several editors are on screen.
+            width = max(n['rect'][2] for n in nodes('[data-role~="digits-' + str(digits) + '"] .sf-ed-gutter'))
+            return abs(width - ((6 + digits) * cell + 1)) < 1.5, {'gutter': width, 'cell': cell, 'cells': (width - 1) / cell}
         ok, detail = gutter_cells(1)
         check('gutter width, single-digit file', ok, detail)
+        ok, detail = gutter_geometry(2)
+        check('hairline 2 cells after the digits and before the code (1 digit)', ok, detail)
         click('[data-role~="source-editor"]')
 
         def editor_text():
@@ -262,12 +384,12 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
             return found[0].get('text', '') if found else ''
         def position():
             return tree('[data-role="source-position"]')
-        def go_line(n):
+        def go_line(n, seconds=10):
             ctl('key', 'Control+g')
-            wait(lambda: nodes('[data-role="source-go-input"]'), 10)
+            wait(lambda: nodes('[data-role="source-go-input"]'), seconds)
             ctl('type', str(n))
             ctl('key', 'Enter')
-            return wait(lambda: f'Ln {n},' in position(), 10)
+            return wait(lambda: f'Ln {n},' in position(), seconds)
 
         # Editing: go to a line, type, save, undo and redo.
         check('overlay toggles in a split pane', all(nodes('[data-role="source-btn-overlay-' + m + '"]')
@@ -415,6 +537,13 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         # A split pane leaves the state to the status bar while the debugger's wells show.
         check('paused state with line', wait(lambda: 'Paused at 9' in tree('[data-role="source-overlay-state"]'), 10), tree('.sf-dock'))
         shots('source-debug-split')
+        for theme in ['light', 'dark']:
+            ok, detail = hairline_ok('source-debug-split-' + theme, 2, range(1, 10))
+            check('hairline continuous over nine rows (' + theme + ')', ok, detail)
+        ok, detail = sign_inside(3, '●')
+        check('breakpoint inside the sign column', ok, detail)
+        ok, detail = sign_inside(9, '▶')
+        check('paused arrow inside the sign column', ok, detail)
         ctl('key', 'F5')
         check('second stop', wait(lambda: signed(3, '▶', 'accent'), 60), gutter())
         binding = broker('project_attach', root=str(project), runtime=runtime)
@@ -450,7 +579,60 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         ctl('open-url', 'elide://source?root=' + str(project) + '&path=' + str(project / 'notes.txt'))
         check('non-source link opens the editor', wait(lambda: any(Path(b['path']).resolve() == (project / 'notes.txt').resolve()
               for b in ctl('state').get('file_blocks', []) if b.get('path')), 15), ctl('state').get('file_blocks'))
+        # Wider gutters, each file in a tab of its own: the width is 2 + digits + 1 + 2 cells and the
+        # signs stay inside the sign column on four- and five-digit lines.
+        # Sam's case: four-digit numbers on rows 1245-1256 of a 1,300-line file.
+        check('1,300-line file opens at line 1249', open_tab(thirteen, lambda: 'Ln 1249,' in tree('[data-role="source-position"]'), 1249),
+              tree('[data-role="source-position"]'))
+        click('[data-role~="source-editor"]')
+        go_line(1250)
+        ok, geometry = gutter_geometry(1250)
+        check('hairline 2 cells after the digits and before the code (4 digits)', ok, geometry)
+        row_1250 = gutter_rows()[1250]
+        ok, detail = gutter_cells(4)
+        check('gutter width, 1,300-line file', ok, detail)
+        shots('source-1300')
+        for theme in ['light', 'dark']:
+            pitch = row_1250[3]
+            ok, detail = hairline_at('source-1300-' + theme, geometry['hairline'] - 0.5, row_1250[1] - 3 * pitch, pitch, 9)
+            check('hairline continuous over rows 1247-1255 (' + theme + ')', ok, detail)
+        check('3-digit file opens', open_tab(three, lambda: 'three.mjs' in tree('[data-role="source-path"]')), tree('.sf-main'))
+        ok, detail = gutter_cells(3)
+        check('gutter width, 3-digit file', ok, detail)
+        check('large file opens at line 1234', open_tab(large, lambda: 'Ln 1234,' in tree('[data-role="source-position"]'), 1234),
+              tree('[data-role="source-position"]'))
+        overlay('debug')
+        click('[data-role~="source-editor"]')
+        go_line(1234)
+        ctl('key', 'F9')
+        check('breakpoint on line 1234', wait(lambda: toned_sign(1234, '●', 'error', '[data-role~="digits-4"]')[0], 10),
+              toned_sign(1234, '●', 'error', '[data-role~="digits-4"]')[1])
+        ctl('shot', 'four-digits-breakpoint')
+        ok, detail = toned_sign(1234, '●', 'error', '[data-role~="digits-4"]')
+        check('breakpoint on a four-digit line inside the sign column', ok, detail)
+        ok, detail = gutter_cells(4)
+        check('gutter width unchanged by the breakpoint', ok, detail)
+        ctl('key', 'F9')
+        check('5-digit file opens at line 12345', open_tab(five, lambda: 'Ln 12345,' in tree('[data-role="source-position"]'), 12345),
+              tree('[data-role="source-position"]'))
+        overlay('debug')
+        click('[data-role~="source-editor"]')
+        check('go to line 12345', go_line(12345, 60), position())
+        ctl('key', 'F9')
+        check('breakpoint on line 12345', wait(lambda: toned_sign(12345, '●', 'error', '[data-role~="digits-5"]')[0], 60),
+              toned_sign(12345, '●', 'error', '[data-role~="digits-5"]')[1])
+        ctl('shot', 'five-digits-breakpoint')
+        ctl('key', 'F5')
+        check('paused on line 12345', wait(lambda: toned_sign(12345, '▶', 'accent', '[data-role~="digits-5"]')[0], 120),
+              toned_sign(12345, '▶', 'accent', '[data-role~="digits-5"]')[1])
+        ok, detail = toned_sign(12345, '▶', 'accent', '[data-role~="digits-5"]')
+        check('paused arrow on a five-digit line inside the sign column', ok, detail)
+        ok, detail = gutter_cells(5)
+        check('gutter width, 5-digit file', ok, detail)
+        shots('source-five-digits')
+        ctl('key', 'F5')
         check('no plugin failure toast', 'failed' not in tree('.toast'), tree('.toast'))
+        check('stylesheet still accepted at the end', not sheet_errors(), sheet_errors())
         log.flush()
         check('no budget overrun', 'exceeded' not in (out / 'tern.log').read_text(), '')
     finally:
