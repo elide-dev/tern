@@ -46,8 +46,8 @@ with tempfile.TemporaryDirectory(prefix='tw-', dir='/tmp') as temporary:
     fake_runtime.write_text('''#!/bin/sh
 case "$*" in
   *--help-all*) printf 'Commands:\\n  tern          Host a native Tern surface\\n'; exit 0 ;;
-  *--surface=probe*) echo "--surface expects inline, screen or auto, got 'probe'" >&2; exit 2 ;;
-  *build*--help*) echo "      --surface <MODE>  How to draw the build in Tern: inline, screen or auto"; exit 0 ;;
+  *test*--help*) echo "      --surface <MODE>  How the run draws inside Tern: inline, screen or auto"; exit 0 ;;
+  *build*--help*) echo "      --surface <MODE>  How the build draws inside Tern: inline, screen or auto"; exit 0 ;;
 esac
 echo "fake-elide $*"
 sleep 300
@@ -271,8 +271,8 @@ sleep 300
             ctl('click', '[data-role="project-test"]')
             page = wait(lambda: launched(str(fake_runtime) + ' --ignore-version tern project '))
             assert page.rstrip().endswith(str(other.resolve())), page
-            # Each launch's split can overrun the timer budget under `tern serve`, pausing the plugin's
-            # timers for 5 s; probes open their panes from a timer, so let the pause pass.
+            # Each launch's split can overrun the 500 ms callback budget under `tern serve`, pausing the
+            # plugin's process callbacks for 5 s; the next launch waits on a probe, so let it pass.
             time.sleep(6)
             # Outside a project, Run tests asks for a subject and opens the page with --surface=screen.
             outside_pane = lua('cx.layout:split(cx.session:focused(), "down", {cwd = ' + json.dumps(str(state)) + '})')

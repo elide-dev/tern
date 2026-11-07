@@ -324,16 +324,14 @@ Inside a project that is the shared project surface (`<runtime> tern project …
 always full-screen. Outside one it is `<runtime> test --surface=screen <subject>`, but only
 when the runtime takes `--surface`; an older runtime gets no flag.
 
-`--surface` is parsed by hand, so neither `--help-all` nor `elide test --help` lists it. The
-window half probes once per runtime and command: `<runtime> --ignore-version --no-color
-<command> --surface=probe` in an empty directory under the plugin data. A runtime that knows
-the flag refuses the value by name (`--surface expects inline, screen or auto`) before doing
-any work; an older one fails on the unknown option. The answer is cached for the window.
+The window half reads `<runtime> --ignore-version --no-color <command> --help` once per runtime
+and command (`test`, `build`) and passes `--surface=screen` only when an option line lists
+`--surface`; the answer is cached for the window. Runtimes built before the option existed
+print no such line and get no flag.
 
-Panes the plugin opens after a probe open from a timer rather than the process callback.
-Starting a pane can still take longer than 500 ms under the in-process `tern serve`
-harness, which `tests/workspace.py` tolerates only for its launch checks; desktop windows
-stay within budget.
+Starting a pane can take longer than 500 ms under the in-process `tern serve` harness, which
+`tests/workspace.py` tolerates only for its launch checks (and waits out the 5-second pause
+that follows); desktop windows stay within budget.
 
 ### Inferred coverage in the broker
 
