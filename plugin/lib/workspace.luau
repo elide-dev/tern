@@ -135,8 +135,12 @@ function M.install(actions)
     tern.on(event, follow)
   end
   tern.on("window_start", refresh)
-  -- Reloading an existing window does not emit window_start.
+  -- Reloading an existing window does not emit window_start, so the toolbars are redrawn from a
+  -- timer. A timer scheduled while the plugin loads does not wake an idle window (a headless one can
+  -- sleep until some other input arrives), so wake it: `tern.chrome.refresh` redraws the chrome on
+  -- the next frame, which runs the due timer.
   tern.timer(0, refresh)
+  pcall(tern.chrome.refresh)
   tern.route.open(function(request, cx)
     if request.origin ~= "files" or (request.how ~= "default" and request.how ~= "glimpse") then
       return nil
