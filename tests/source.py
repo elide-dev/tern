@@ -564,6 +564,11 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
             ctl('key', 'Meta+z')
             time.sleep(.3)
         check('undo back to the saved text', wait(lambda: '/* a */' not in editor_text() and not nodes('[data-role="source-modified"]'), 10), editor_text())
+        # Edits must not disturb the project lease: the next renewal (every 30 s) must still succeed.
+        # A counter that once shared its name with the snapshot revision broke it after an edit.
+        time.sleep(35)
+        check('lease renewal after edits keeps the attachment',
+              'Attach failed' not in tree('.sf-main') + tree('.sf-dock'), tree('.sf-dock'))
 
         # Switching overlays changes only colors: the first line's text stays where it was.
         overlay('none')
