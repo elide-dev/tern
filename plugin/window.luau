@@ -559,6 +559,19 @@ tern.route.link(function(request, cx)
     problem = "Ignored a malformed elide:// link."
   elseif cx.hosts:current().kind ~= "local" then
     problem = "elide:// links open on local hosts only."
+  elseif target.action == "help" then
+    -- `elide help <url>` resolves the link to its topic. The URL is rebuilt from the
+    -- validated slug, so nothing unchecked reaches the command line.
+    local config = configuration(cx)
+    if config then
+      terminal(
+        cx,
+        { runtime_path(config), "--ignore-version", "help", "elide://help?topic=" .. target.topic },
+        nil,
+        request.pane
+      )
+    end
+    return { handled = true }
   elseif target.root then
     if not tern.fs.exists(target.root .. "/elide.pkl") then
       problem = "Ignored an elide:// link whose root has no elide.pkl."

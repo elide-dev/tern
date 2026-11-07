@@ -72,6 +72,13 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
         ctl('carly', 'close')
         return value
 
+    def lua_value(expression):
+        marker = 'w3-' + str(uuid.uuid4()) + ':'
+        result = lua('print(' + json.dumps(marker) + ' .. tern.json.encode(' + expression + '))')
+        text = (result or {}).get('text', '')
+        line = next((line for line in text.splitlines() if marker in line), None)
+        return json.loads(line.split(marker, 1)[1]) if line else None
+
     def run(line):
         ctl('run', line)
 
@@ -145,6 +152,20 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
         tabs = len(ctl('state')['tabs'])
         ctl('open-url', 'elide://tests?root=' + str(tapp))
         check('tests link opens project tests', wait(lambda: len(ctl('state')['tabs']) > tabs, 60), ctl('state')['tabs'])
+        # elide://help runs `elide help <url>` in a new pane beside the link's pane, else in a new tab.
+        check('bad help topic rejected', toast_after('elide://help?topic=Bad%20Topic', 'malformed'), tree('.toast'))
+        before = {pane['pane'] for pane in lua_value('cx.session:panes()') or []}
+        ctl('open-url', 'elide://help?topic=getting-started')
+        def new_pane():
+            return next((pane for pane in lua_value('cx.session:panes()') or [] if pane['pane'] not in before), None)
+        pane = wait(new_pane, 30)
+        check('help link opens a pane', pane, lua_value('cx.session:panes()'))
+        # Pane info carries no command line; the pane execs the runtime, so its process shows it.
+        def help_process():
+            listing = subprocess.run(['ps', '-axo', 'args'], capture_output=True, text=True).stdout
+            return next((line for line in listing.splitlines()
+                         if line.startswith(runtime + ' --ignore-version help elide://help?topic=getting-started')), None)
+        check('help pane runs elide help', pane and wait(help_process, 30), pane)
         ctl('shot', 'routes')
     finally:
         ctl('quit')
