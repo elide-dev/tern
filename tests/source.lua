@@ -89,6 +89,18 @@ check("draft over its base", source.restore_plan("edited", base, base), "apply")
 check("draft over newer disk", source.restore_plan("edited", base, source.digest("disk v2")), "conflict")
 check("draft without a base", source.restore_plan("edited", nil, base), "conflict")
 
+-- Coverage measured on the disk text maps onto a dirty buffer through the common prefix and suffix.
+local map = source.line_map({ "a", "b", "c", "d" }, { "a", "new", "b", "c", "d" })
+check("line map prefix", map[1], 1)
+check("line map inserted line", map[2], false)
+check("line map shifted", map[3], 2)
+check("line map suffix", map[5], 4)
+local same_map = source.line_map({ "a", "b" }, { "a", "b" })
+check("line map identity", same_map[2], 2)
+local changed = source.line_map({ "a", "b", "c" }, { "a", "B", "c" })
+check("line map changed line unmapped", changed[2], false)
+check("line map after change", changed[3], 3)
+
 -- Buffer: UTF-16 positions, edits, undo, line maps.
 local buffer = dofile(here .. "/../plugin/lib/buffer.luau")
 local function key(name, extra)

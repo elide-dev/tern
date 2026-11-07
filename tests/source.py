@@ -523,7 +523,17 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         ctl('type', '/* a */ ')
         check('edited line muted', wait(lambda: tinted('muted', 3), 10), tree('.sf-editor .sf-t-mark'))
         check('untouched lines keep tints', tinted('error', 5) and tinted('success', 2), tree('.sf-editor .sf-t-mark'))
-        for _ in range(6):
+        # Coverage fetched while the buffer is dirty is anchored to the disk text it measured: with a
+        # line inserted above, the measured lines keep their tints on their shifted rows.
+        go_line(1)
+        ctl('key', 'End')
+        ctl('key', 'Enter')
+        ctl('type', '// above')
+        ctl('key', 'F6')
+        untinted = lambda line: not any(tinted(t, line) for t in ['success', 'error', 'warning', 'muted', 'success.sf-t-dim'])
+        check('coverage refreshed while dirty follows the inserted line', wait(lambda: tinted('error', 6)
+              and untinted(2), 30), tree('.sf-editor .sf-t-mark'))
+        for _ in range(12):
             if not nodes('[data-role="source-modified"]'):
                 break
             ctl('key', 'Meta+z')
@@ -610,6 +620,7 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
               tree('[data-role="source-position"]'))
         click('[data-role~="source-editor"]')
         go_line(1250)
+        wait(lambda: 1250 in gutter_rows() and 1251 in gutter_rows(), 15)
         ok, geometry = gutter_geometry(1250)
         check('hairline 2 cells after the digits and before the code (4 digits)', ok, geometry)
         row_1250 = gutter_rows()[1250]

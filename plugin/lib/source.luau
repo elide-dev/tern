@@ -250,4 +250,28 @@ function M.restore_plan(draft, base, disk_digest)
   return base == disk_digest and "apply" or "conflict"
 end
 
+-- Current line -> line of `base` (the text a measurement was taken on), through their common leading
+-- and trailing lines; lines in the changed middle map to false (no mark until the next measurement).
+function M.line_map(base, current)
+  local head = 0
+  while head < #base and head < #current and base[head + 1] == current[head + 1] do
+    head = head + 1
+  end
+  local tail = 0
+  while tail < #base - head and tail < #current - head and base[#base - tail] == current[#current - tail] do
+    tail = tail + 1
+  end
+  local map = {}
+  for i = 1, #current do
+    if i <= head then
+      map[i] = i
+    elseif i > #current - tail then
+      map[i] = i - #current + #base
+    else
+      map[i] = false
+    end
+  end
+  return map
+end
+
 return M

@@ -629,7 +629,8 @@ function load_coverage(state, cx, force)
       -- Measured against the file on disk. Marks follow later edits by line; lines whose text
       -- differs from the measured text (unsaved edits included) draw dimmed.
       coverage.lines = buffer.new(state.disk).lines
-      state.buf.maps.coverage = identity(#state.buf.lines)
+      -- Anchored to the disk text it measured; a dirty buffer's lines map through what changed.
+      state.buf.maps.coverage = source.line_map(coverage.lines, state.buf.lines)
       check_identity(state, cx, file.sourceDigest, token)
       cx:render()
     end)
@@ -711,9 +712,10 @@ local function absorb_debug(state, snap)
   end
   local target = snap.debug
   if target.generation ~= debug.generation then
-    -- A target launched elsewhere ran the file on disk; anchor its lines there.
+    -- A target launched elsewhere ran the file on disk; anchor its lines there, through any unsaved
+    -- edits.
     if not debug.launched_here then
-      state.buf.maps.debug = identity(#state.buf.lines)
+      state.buf.maps.debug = source.line_map(buffer.new(state.disk).lines, state.buf.lines)
     end
     debug.launched_here = false
   end
@@ -1008,7 +1010,8 @@ local function load_report(state, cx, run)
     end
     return (a.col or 0) < (b.col or 0)
   end)
-  state.buf.maps.diagnostics = identity(#state.buf.lines)
+  -- The build compiled the file on disk; anchor its lines there, through any unsaved edits.
+  state.buf.maps.diagnostics = source.line_map(buffer.new(state.disk).lines, state.buf.lines)
   diag.state, diag.error, diag.run, diag.report, diag.items, diag.counts = "ready", nil, run, report, items, counts
   for _, d in items do
     d.stale = diagnostic_stale(state, d)
