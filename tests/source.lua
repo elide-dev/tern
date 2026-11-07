@@ -79,6 +79,16 @@ check("utf16be astral", source.utf16be("😀"), "\216\061\222\000")
 check("comment js", source.comment("/p/a.ts"), "//")
 check("comment py", source.comment("/p/a.py"), "#")
 
+-- A restored draft applies only over the disk text it was based on.
+check("digest stable", source.digest("abc"), source.digest("abc"))
+check("digest differs", source.digest("abc") ~= source.digest("abd"), true)
+check("digest length", source.digest("ab") ~= source.digest("ab\0"), true)
+local base = source.digest("disk v1")
+check("no draft", source.restore_plan(nil, nil, base), "none")
+check("draft over its base", source.restore_plan("edited", base, base), "apply")
+check("draft over newer disk", source.restore_plan("edited", base, source.digest("disk v2")), "conflict")
+check("draft without a base", source.restore_plan("edited", nil, base), "conflict")
+
 -- Buffer: UTF-16 positions, edits, undo, line maps.
 local buffer = dofile(here .. "/../plugin/lib/buffer.luau")
 local function key(name, extra)

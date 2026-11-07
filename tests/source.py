@@ -433,6 +433,24 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         source.write_text(source.read_text() + '// external\n')
         check('reload from disk', wait(lambda: 'Reloaded classify.mjs' in tree('.toast') and 10 in gutter(), 15), tree('.toast'))
 
+        # An unsaved draft restored after a plugin reload, over a file that changed on disk since:
+        # the block asks instead of letting a save overwrite the newer contents.
+        click('[data-role~="source-editor"]')
+        go_line(1)
+        ctl('key', 'End')
+        ctl('type', ' // draft')
+        wait(lambda: nodes('[data-role="source-modified"]'), 10)
+        time.sleep(1)
+        source.write_text(source.read_text() + '// newer\n')
+        subprocess.run(['tern', 'plugin', 'reload', 'elide'], env=env, stdout=log, stderr=log)
+        check('restored draft over newer disk asks', wait(lambda: 'since your unsaved changes'
+              in tree('[data-role="source-confirm-strip"]'), 30), tree('.sf-dock'))
+        check('newer disk contents kept', '// newer' in source.read_text() and '// draft' not in source.read_text(),
+              source.read_text())
+        click('[data-role="source-confirm"]')
+        check('reload takes the disk version', wait(lambda: not nodes('[data-role="source-modified"]')
+              and not nodes('[data-role="source-confirm-strip"]'), 15), tree('.sf-dock'))
+
         # Find marks matches and selects the next one; go to line moves the caret.
         ctl('key', 'Control+f')
         wait(lambda: nodes('[data-role="source-find-input"]'), 10)

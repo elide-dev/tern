@@ -230,4 +230,24 @@ function M.utf16be(s)
   return table.concat(out)
 end
 
+-- A short fingerprint of `text` (its length and a rolling hash), to tell whether the disk still holds
+-- the text an unsaved draft was based on.
+function M.digest(text)
+  local h = 0
+  for i = 1, #text do
+    h = (h * 31 + string.byte(text, i)) % 4294967291
+  end
+  return string.format("%d:%d", #text, h)
+end
+
+-- What to do with an unsaved draft restored after a reload or restart: "apply" it when the disk still
+-- holds the text it was based on, "conflict" when the disk changed since (or the base is unknown), so
+-- the block asks instead of saving the draft over newer contents; "none" without a draft.
+function M.restore_plan(draft, base, disk_digest)
+  if type(draft) ~= "string" then
+    return "none"
+  end
+  return base == disk_digest and "apply" or "conflict"
+end
+
 return M

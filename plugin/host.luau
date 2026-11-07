@@ -2404,10 +2404,22 @@ tern.block.define("source", {
     if problem then
       return state
     end
-    -- An unsaved draft from before a reload or restart comes back as one undoable edit.
+    -- An unsaved draft from before a reload or restart comes back as one undoable edit. When the
+    -- file changed on disk since the draft's base, the block asks (reload or keep editing) instead
+    -- of letting a later save overwrite the newer contents unprompted.
     if type(saved.draft) == "string" and saved.draft ~= buffer.text(state.buf) and source.text(saved.draft) then
+      local plan = source.restore_plan(saved.draft, saved.draft_base, source.digest(state.disk))
       local last = #state.buf.lines
       buffer.replace(state.buf, { l = 1, c = 0 }, { l = last, c = state.buf.lens[last] }, saved.draft, "draft")
+      if plan == "conflict" then
+        state.pending_disk = state.disk
+        state.confirm = {
+          kind = "reload",
+          title = state.name .. " changed on disk since your unsaved changes",
+          text = "They are restored here. Reloading replaces them with the version on disk; keep editing to save over it.",
+          action = "Reload",
+        }
+      end
     end
     local line = tonumber(args[3]) or saved.line or 1
     move_to(state, line)
@@ -2560,12 +2572,18 @@ tern.block.define("source", {
       return nil
     end
     local text = buffer.text(state.buf)
+    local draft = buffer.dirty(state.buf) and #text <= MAX_DRAFT and text or nil
+    -- The draft's base (the disk text it edits), recomputed only when that text changes.
+    if draft and state.digest_of ~= state.disk then
+      state.digest, state.digest_of = source.digest(state.disk), state.disk
+    end
     return {
       mode = state.mode,
       wrap = state.wrap,
       line = state.buf.cursor.l,
       breakpoints = tern.json.array(state.breakpoints),
-      draft = buffer.dirty(state.buf) and #text <= MAX_DRAFT and text or nil,
+      draft = draft,
+      draft_base = draft and state.digest or nil,
     }
   end,
 })
