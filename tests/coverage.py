@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import re
 import os
 from pathlib import Path
 import shutil
@@ -45,6 +46,7 @@ test("positive values", () => assert.equal(classify(1), "positive"));
     fixture_config = {'runtime': str(runtime)}
     for name in ['broker']:
         fixture_config[name] = str(root / 'dist' / ('elide-tern-' + name))
+    fixture_config['project'] = str(root / 'dist/elide-tern-project')
     (package / 'config.json').write_text(json.dumps(fixture_config))
     fixture_root = state / 'crates/tern'
     (fixture_root / 'goldens').mkdir(parents=True)
@@ -112,15 +114,23 @@ test("positive values", () => assert.equal(classify(1), "positive"));
             ctl('shot', 'coverage-initial')
             ctl('click', '[data-role="coverage-files"] .sf-tbl-body .sf-tbl-row:first-child')
             wait(lambda: 'classify.mjs' in tree('[data-role="coverage-detail"]'))
-            ctl('click', '[data-role="coverage-lines"] .sf-tbl-body .sf-tbl-row:first-child')
+            if ctl('tree', '[data-role="coverage-lines"]').get('nodes'):
+                ctl('click', '[data-role="coverage-lines"] .sf-tbl-body .sf-tbl-row:first-child')
             wait(lambda: f'line {missing}' in tree('[data-role="coverage-source"]'))
             ctl('shot', 'coverage-light')
             ctl('prefs', 'preview', 'dark-nord')
             ctl('shot', 'coverage-dark')
             ctl('prefs', 'close')
             ctl('click', '[data-role="coverage-source"]', 'meta')
+            def file_block():
+                return any(block.get('path') and Path(block['path']).resolve() == source.resolve() for block in ctl('state').get('file_blocks', []))
+            # A project source link opens Tern's editor or, with the source block, plugin.elide.source.
+            wait(lambda: file_block() or bool(ctl('tree', "[data-surface='plugin.elide.source']").get('nodes')))
+            if not file_block():
+                ctl('file', 'open', str(source))
+                ctl('file', 'goto', f'{missing}:1')
             ctl('file', 'wait')
-            wait(lambda: any(block.get('path') and Path(block['path']).resolve() == source.resolve() for block in ctl('state').get('file_blocks', [])))
+            wait(file_block)
             ctl('type', '/* reviewed */ ')
             ctl('file', 'save')
             wait(lambda: source.read_text().splitlines()[missing - 1].lstrip().startswith('/* reviewed */'))
@@ -142,8 +152,21 @@ test("positive values", () => assert.equal(classify(1), "positive"));
             wait(lambda: '"ready"' in str(ctl('state').get('carly', {}).get('last_tool', '')))
             ctl('carly', 'lua', 'coverage_run = coverage_state.runs[#coverage_state.runs].run; coverage_files = await(plugins.elide.coverage_read(coverage_binding, coverage_run, {limit=1})); assert(#coverage_files.files == 1); assert(coverage_files.next == 1); return "coverage-page-ready"')
             wait(lambda: 'coverage-page-ready' in str(ctl('state').get('carly', {}).get('last_tool', '')))
-            ctl('carly', 'lua', 'local detail = await(plugins.elide.coverage_read(coverage_binding, coverage_run, {file=0,limit=1})); assert(#detail.lines == 1); await(plugins.elide.project_close(coverage_binding)); return "coverage-detail-ready"')
+            ctl('carly', 'lua', 'local detail = await(plugins.elide.coverage_read(coverage_binding, coverage_run, {file=0,limit=1})); assert(#detail.lines == 1); return "coverage-detail-ready"')
             wait(lambda: 'coverage-detail-ready' in str(ctl('state').get('carly', {}).get('last_tool', '')))
+            # The broker serves closers of covered blocks as `inferred`: line 4 of classify.mjs
+            # closes the covered `if`.
+            ctl('carly', 'lua', 'local listing = await(plugins.elide.coverage_read(coverage_binding, coverage_run, {limit=100})); '
+                'local index; for _, file in listing.files do if string.find(file.path, "classify%.mjs$") and not string.find(file.path, "%.test%.") then index = file.index end end; '
+                'assert(index, "classify.mjs not measured"); '
+                'local page = await(plugins.elide.coverage_read(coverage_binding, coverage_run, {file=index,limit=100})); '
+                'local inferred = {}; for _, line in page.lines do if line.state == "inferred" then table.insert(inferred, line.line) end end; '
+                'await(plugins.elide.project_close(coverage_binding)); return "coverage-inferred:" .. table.concat(inferred, ",")')
+            def inferred_reply():
+                return re.search(r'coverage-inferred:([0-9,]*)', str((ctl('state').get('carly', {}).get('last_tool') or {}).get('text', '')))
+            wait(inferred_reply)
+            inferred = inferred_reply()
+            assert '4' in inferred.group(1).split(','), inferred.group(0)
             assert 'exceeded its budget' not in (out / 'tern.log').read_text()
             print('PASS: real coverage, native source/line navigation, edit/save/rerun, immutable history, shared agent pages')
         finally:

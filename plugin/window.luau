@@ -1,3 +1,4 @@
+local diagnostics = require("./lib/diagnostics")
 local links = require("./lib/links")
 local project = require("./lib/project")
 local source = require("./lib/source")
@@ -139,6 +140,39 @@ local function launch(cx, language, context, target, opened)
   end, opened)
 end
 
+-- Whether `<runtime> <command>` takes `--surface=inline|screen|auto`, by runtime and command:
+-- `elide test --help` and `elide build --help` list the option on runtimes that have it.
+local surface_support = {}
+
+-- Runs `run(cx, supported, later)` once `<runtime> <command> --surface` support is known;
+-- returns false while the help is read, else what `run` returns. `later` is true when `run` is
+-- called from the probe's callback, where its result reaches no caller.
+local function with_surface(cx, runtime, command, run)
+  local key = runtime .. "\0" .. command
+  if surface_support[key] ~= nil then
+    return run(cx, surface_support[key])
+  end
+  local ok = pcall(function()
+    tern.process.run(
+      { runtime, "--ignore-version", "--no-color", command, "--help" },
+      { timeout_ms = 15000 },
+      function(result, current)
+        local text = "\n" .. (result.stdout or "") .. "\n" .. (result.stderr or "")
+        -- An option line (`  --surface <MODE>  …`), not a mention in prose.
+        surface_support[key] = result.status == 0 and string.find(text, "\n%s+%-%-surface[%s=<%[]") ~= nil
+        if current then
+          run(current, surface_support[key], true)
+        end
+      end
+    )
+  end)
+  if not ok then
+    surface_support[key] = false
+    return run(cx, false)
+  end
+  return false
+end
+
 local function launch_job(cx, kind, subject, cwd, target, opened)
   if not local_host(cx) then
     return
@@ -166,15 +200,31 @@ local function launch_job(cx, kind, subject, cwd, target, opened)
   else
     -- `elide test` and `elide serve` negotiate their own surfaces; an explicit launcher
     -- override still receives the runtime and subject.
-    local argv
     if type(config[kind]) == "string" then
-      argv = { path(config[kind]), runtime, subject }
-    else
-      argv = { runtime, "--ignore-version", kind, subject }
+      return host(cx, config, kind, { path(config[kind]), runtime, subject }, function(current, command)
+        return terminal(current, command, cwd, target)
+      end, opened)
     end
-    return host(cx, config, kind, argv, function(current, command)
-      return terminal(current, command, cwd, target)
-    end, opened)
+    -- Tests outside a project get the full page (`--surface=screen`) when the runtime takes
+    -- it; bare `elide test` under Tern draws inline, and older runtimes get no flag.
+    local function start(current, screen, later)
+      local argv = { runtime, "--ignore-version", kind }
+      if screen then
+        table.insert(argv, "--surface=screen")
+      end
+      table.insert(argv, subject)
+      local pane = host(current, config, kind, argv, function(fresh, command)
+        return terminal(fresh, command, cwd, target)
+      end, opened)
+      if later and pane ~= false and opened then
+        opened(current, pane)
+      end
+      return pane
+    end
+    if kind ~= "test" then
+      return start(cx, false)
+    end
+    return with_surface(cx, runtime, "test", start)
   end
 end
 
@@ -225,7 +275,7 @@ local function launch_debug(cx, context, target, opened, source)
   end, opened)
 end
 
-local function runtime_action(cx, context, command, target)
+local function runtime_action(cx, context, command, target, opened)
   if not local_host(cx) then
     return
   end
@@ -233,14 +283,30 @@ local function runtime_action(cx, context, command, target)
   if not config then
     return
   end
-  return terminal(cx, { runtime_path(config), command }, context.root, target)
+  local runtime = runtime_path(config)
+  if command ~= "build" then
+    return terminal(cx, { runtime, command }, context.root, target)
+  end
+  -- Build opens the full Build page when the runtime has one; bare `elide build` under Tern
+  -- draws inline, and older runtimes print plain output (which the build lens reads).
+  return with_surface(cx, runtime, "build", function(current, screen, later)
+    local argv = { runtime, "--ignore-version", "build" }
+    if screen then
+      table.insert(argv, "--surface=screen")
+    end
+    local pane = terminal(current, argv, context.root, target)
+    if later and opened then
+      opened(current, pane)
+    end
+    return pane
+  end)
 end
 
 -- Opens the `elide.source` block on `path` (absolute, inside `root`), beside `target` or the
 -- focused pane. Returns its pane, or nil with a toast.
 local function open_source(cx, path, root, line, target)
   if not source.lang(path) then
-    cx:toast("info", "Elide source shows JavaScript, TypeScript, Python and Kotlin files.", path)
+    cx:toast("info", "Elide source shows JavaScript, TypeScript, Python, Kotlin and Java files.", path)
     return nil
   end
   local args = { path, root or "" }
@@ -265,8 +331,8 @@ end
 
 workspace.install({
   debug = launch_debug,
-  build = function(cx, context, target)
-    return runtime_action(cx, context, "build", target)
+  build = function(cx, context, target, opened)
+    return runtime_action(cx, context, "build", target, opened)
   end,
   run = function(cx, context, target)
     return runtime_action(cx, context, "run", target)
@@ -343,24 +409,43 @@ local function prompt_source(cx, context)
     end)
 end
 
+-- Whether the project host has recorded a test run: each run keeps a `run-*` report
+-- directory under the project, so a listing answers without starting a process.
+local function has_runs(root)
+  local ok, names = pcall(tern.fs.list, root .. "/.dev/reports/tests/tern")
+  if not ok then
+    return false
+  end
+  for _, name in names do
+    if string.sub(name, 1, 4) == "run-" then
+      return true
+    end
+  end
+  return false
+end
+
 local function project_menu(context, cx)
   if not context then
     cx:toast("info", "No elide.pkl found in this directory or its parents.")
     return
   end
+  local items = {
+    { label = "Run tests", value = "test", icon = "play" },
+    { label = "Open debugger", value = "debug", icon = "bug" },
+    { label = "Open Elide source…", value = "source", icon = "file" },
+    { label = "Open REPL", value = "repl", icon = "terminal" },
+    { label = "Serve static files", value = "static", icon = "server" },
+    { label = "Serve a script…", value = "script", icon = "server" },
+    { label = "Open manifest", value = "manifest", icon = "file" },
+  }
+  -- Test runs only once there is one to view.
+  if has_runs(context.root) then
+    table.insert(items, { label = "View test runs", value = "tests", icon = "list" })
+  end
+  table.insert(items, { label = "Open project workspace", value = "workspace", icon = "folder" })
   cx:pick({
     placeholder = context.name or "Project",
-    items = {
-      { label = "Run tests", value = "test", icon = "play" },
-      { label = "Open debugger", value = "debug", icon = "bug" },
-      { label = "Open Elide source…", value = "source", icon = "file" },
-      { label = "Open REPL", value = "repl", icon = "terminal" },
-      { label = "Serve static files", value = "static", icon = "server" },
-      { label = "Serve a script…", value = "script", icon = "server" },
-      { label = "Open manifest", value = "manifest", icon = "file" },
-      { label = "View test runs", value = "tests", icon = "list" },
-      { label = "Open project workspace", value = "workspace", icon = "folder" },
-    },
+    items = items,
   }):next(function(item, err, current)
     if err and current then
       current:toast("error", err)
@@ -530,12 +615,69 @@ local function elide_command(line)
 end
 
 -- No process starts here: window event handlers share a 50 ms budget.
+-- Build report runs (`run-*` under the project's `.dev/reports/build/tern`) present when an
+-- `elide build` line started in a pane; the one new run with a report when it finishes is that
+-- build's. A directory listing and one bounded read: no process inside the 50 ms budget.
+local REPORT_BYTES = 8 * 1024 * 1024
+local build_runs = {}
+
+local function report_runs(root)
+  local dir = root .. "/.dev/reports/build/tern"
+  local ok, names = pcall(tern.fs.list, dir)
+  local runs = {}
+  for _, name in (ok and names or {}) do
+    if string.sub(name, 1, 4) == "run-" then
+      runs[name] = true
+    end
+  end
+  return runs, dir
+end
+
+-- "3 errors, 1 warning" from the report the build in `pane` wrote, or nil.
+local function build_counts(pane)
+  local before = build_runs[pane]
+  build_runs[pane] = nil
+  if not before then
+    return nil
+  end
+  local runs, dir = report_runs(before.root)
+  local fresh = nil
+  for name in runs do
+    if not before.runs[name] and tern.fs.exists(dir .. "/" .. name .. "/diagnostics.json") then
+      if fresh then
+        return nil
+      end
+      fresh = name
+    end
+  end
+  if not fresh then
+    return nil
+  end
+  local ok, decoded = pcall(function()
+    return tern.json.decode(tern.fs.read(dir .. "/" .. fresh .. "/diagnostics.json", REPORT_BYTES))
+  end)
+  local report = ok and diagnostics.report(decoded) or nil
+  return report and diagnostics.phrase(report.errors, report.warnings, report.notes) or nil
+end
+
+tern.on("command_started", function(ev)
+  if elide_command(ev.line) ~= "build" then
+    return
+  end
+  local root = project.root_of(ev.pane)
+  build_runs[ev.pane] = root and { root = root, runs = (report_runs(root)) } or nil
+end)
+
+tern.on("pane_closed", function(ev)
+  build_runs[ev.pane] = nil
+end)
+
 tern.on("command_finished", function(ev, cx)
   local command, subject = elide_command(ev.line)
   if not command then
     return
   end
-  project.finished(ev.pane, command, ev.status)
+  project.finished(ev.pane, command, ev.status, command == "build" and build_counts(ev.pane) or nil)
   tern.chrome.refresh()
   -- Statuses from 128 up are signals (an interrupt), not failing tests.
   if command == "test" and ev.status ~= 0 and ev.status < 128 then
@@ -559,6 +701,19 @@ tern.route.link(function(request, cx)
     problem = "Ignored a malformed elide:// link."
   elseif cx.hosts:current().kind ~= "local" then
     problem = "elide:// links open on local hosts only."
+  elseif target.action == "help" then
+    -- `elide help <url>` resolves the link to its topic. The URL is rebuilt from the
+    -- validated slug, so nothing unchecked reaches the command line.
+    local config = configuration(cx)
+    if config then
+      terminal(
+        cx,
+        { runtime_path(config), "--ignore-version", "help", "elide://help?topic=" .. target.topic },
+        nil,
+        request.pane
+      )
+    end
+    return { handled = true }
   elseif target.root then
     if not tern.fs.exists(target.root .. "/elide.pkl") then
       problem = "Ignored an elide:// link whose root has no elide.pkl."
@@ -610,7 +765,7 @@ tern.route.link(function(request, cx)
 end)
 
 -- `elide.pkl` chosen from the palette opens its project workspace (or focuses the open one).
--- Opens inside a workspace tab were already redirected to its editor by the workspace route.
+-- Other palette opens stay with Tern; only Files opens are redirected into a workspace editor.
 tern.route.open(function(request, cx)
   if request.origin ~= "palette" or not string.find(request.path, "/elide%.pkl$") then
     return nil

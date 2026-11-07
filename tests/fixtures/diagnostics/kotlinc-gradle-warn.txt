@@ -1,0 +1,2 @@
+w: file:///w/raw/Raw.kt:7:11 Unnecessary non-null assertion (!!) on a non-null receiver of type 'Int'.
+w: file:///w/raw/Raw.kt:7:16 'fun old(): Int' is deprecated. old.

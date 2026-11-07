@@ -141,6 +141,30 @@ test("a debugged test", () => {
             ctl('type', text)
             wait(lambda: text_is(selector, text))
 
+        def choose_target(text):
+            # The target picker where the surface has one, else the typed target field.
+            wait(lambda: ctl('tree', '[data-role="debug-choose"], .sf-input[data-role="debug-target"]').get('nodes'))
+            if not ctl('tree', '[data-role="debug-choose"]').get('nodes'):
+                return input_text('debug-target', text)
+            click('[data-role="debug-choose"]')
+            wait(lambda: ctl('tree', '[data-role="debug-targets"]').get('nodes'))
+            ctl('type', text)
+            wait(lambda: text in tree('[data-role="debug-targets"] .pk-row.sel'))
+            click('[data-role="debug-targets"] .pk-btn[data-v="choose"]')
+            wait(lambda: text_is('[data-role="debug-target"]', text))
+
+        def rect(selector):
+            found = ctl('tree', selector).get('nodes', [])
+            return found[0]['rect'] if found else None
+
+        def place(box):
+            # Where a node sits and how tall it is; its width may follow a sibling's text.
+            return box and (box[0], box[1], box[3])
+
+        # Surfaces with fixed slots (a reserved toolbar row) must not move content between
+        # states; older surfaces without one are not held to it.
+        fixed_slots = False
+
         def carly(code, marker):
             ctl('carly', 'lua', code + '; return ' + json.dumps(marker))
             wait(lambda: marker in json.dumps(ctl('state').get('carly', {}).get('last_tool', {})))
@@ -173,13 +197,20 @@ test("a debugged test", () => {
             click('[data-role="project-debug"]')
             wait(lambda: ctl('tree', '[data-role="debug-target"]').get('nodes'))
             binding = broker('project_attach', root=str(project.resolve()), runtime=str(runtime))
-            input_text('debug-target', 'main.mjs')
+            choose_target('main.mjs')
             breakpoint('main.mjs', 4)
+            fixed_slots = bool(ctl('tree', '[data-role="debug-toolbar"]').get('nodes'))
+            tabs_before = rect('[data-role="debug-tabs"]')
             click('[data-role="debug-launch-button"]')
             entry = wait(lambda: stopped())
             assert target_processes(), 'Debug target process was not found'
             click('[data-role="debug-continue"]')
             first = wait(lambda: stopped(4, entry['stop_epoch']))
+            frames_row = '[data-role="debug-frames"] .sf-tbl-body .sf-tbl-row'
+            if fixed_slots:
+                wait(lambda: rect(frames_row))
+                assert place(rect('[data-role="debug-tabs"]')) == place(tabs_before), 'Launching moved the tabs'
+                frame_row = rect(frames_row)
             wait(lambda: any(bp['verified'] and bp['line'] == 4 for bp in debug()['debug']['breakpoints']))
             wait(lambda: debug()['debug']['scopes'])
             assert not debug()['debug']['variables'], 'Rendering a pause must not evaluate guest values'
@@ -201,16 +232,36 @@ test("a debugged test", () => {
             click('[data-role="debug-read-values"]')
             wait(lambda: debug()['debug']['selected_reference'] == payload_reference and 'answer' in tree('[data-role="debug-variables"]'))
             click('[data-role="debug-source"]', 'meta')
-            ctl('file', 'wait')
-            wait(lambda: any(block.get('path') and Path(block['path']).resolve() == javascript.resolve()
-                and block.get('caret') == [first['frames'][0]['line'], max(1, first['frames'][0]['column'])]
-                for block in ctl('state').get('file_blocks', [])))
+
+            def source_opened():
+                # A file block at the paused caret (file:// links), or the Elide source block
+                # on main.mjs (elide://source links) with the paused line marked in its gutter.
+                line = first['frames'][0]['line']
+                if any(block.get('path') and Path(block['path']).resolve() == javascript.resolve()
+                       and block.get('caret') == [line, max(1, first['frames'][0]['column'])]
+                       for block in ctl('state').get('file_blocks', [])):
+                    return True
+                block = "[data-surface='plugin.elide.source']"
+                if 'main.mjs' not in json.dumps(ctl('tree', block), ensure_ascii=False):
+                    return False
+                gutter = block + ' .sf-editor .sf-ed-gutter'
+                runs = [(node.get('text') or '').split() for node in ctl('tree', gutter).get('nodes', [])]
+                accents = [(node.get('text') or '').strip() for node in ctl('tree', gutter + ' .sf-t-accent').get('nodes', [])]
+                # The stop sign when the Debug overlay is on, else the caret's accent line number;
+                # a gutter that marks neither only shows the block opened on the file.
+                if any('▶' in words for words in runs) or accents:
+                    return any(words[:2] == [str(line), '▶'] for words in runs) or str(line) in accents
+                return bool(runs)
+            wait(source_opened)
             (out / 'javascript-state.json').write_text(json.dumps(ctl('state'), indent=2, ensure_ascii=False))
             ctl('shot', 'debug-light')
             ctl('prefs', 'preview', 'dark-nord')
             ctl('shot', 'debug-dark')
             click('[data-role="debug-next"]')
             stepped = wait(lambda: stopped(5, first['stop_epoch']))
+            if fixed_slots:
+                wait(lambda: rect(frames_row))
+                assert place(rect(frames_row)) == place(frame_row), 'Stepping moved the frames'
             assert not stepped['variables'], 'Stepping must invalidate prior values'
             carly('debug_binding = await(plugins.elide.project_open(' + json.dumps(str(project), ensure_ascii=False) + ')); debug_seen = await(plugins.elide.debug_read(debug_binding)); assert(debug_seen.debug.state == "stopped"); assert(not debug_seen.controls)', 'debug-observer-ready')
             carly('await(plugins.elide.debug_takeover(debug_binding, debug_seen.debug.generation))', 'debug-controller-ready')
@@ -228,7 +279,7 @@ test("a debugged test", () => {
             wait(lambda: not target_processes())
             print('PASS: JavaScript breakpoint, scopes, explicit nested values, native source, stepping, shared agent control and stale-stop rejection')
 
-            input_text('debug-target', 'main.py')
+            choose_target('main.py')
             breakpoint('main.py', 4)
             click('[data-role="debug-launch-button"]')
             entry = wait(lambda: stopped())

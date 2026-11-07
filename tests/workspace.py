@@ -40,7 +40,21 @@ with tempfile.TemporaryDirectory(prefix='tw-', dir='/tmp') as temporary:
     (other / 'outside.txt').write_text('Other project stays separate\n')
     package = state / 'crates/plugins/fixtures/elide'
     shutil.copytree(root / 'plugin', package, ignore=shutil.ignore_patterns('config.json', 'tern.d.luau'))
-    (package / 'config.json').write_text(json.dumps({'broker': str(root / 'dist/elide-tern-broker')}))
+    # A stand-in runtime: it answers the plugin's capability probes like a current Elide, then
+    # prints its arguments and stays alive so the launched command can be read from `ps`.
+    fake_runtime = state / 'fake-elide'
+    fake_runtime.write_text('''#!/bin/sh
+case "$*" in
+  *--help-all*) printf 'Commands:\\n  tern          Host a native Tern surface\\n'; exit 0 ;;
+  *test*--help*) echo "      --surface <MODE>  How the run draws inside Tern: inline, screen or auto"; exit 0 ;;
+  *build*--help*) echo "      --surface <MODE>  How the build draws inside Tern: inline, screen or auto"; exit 0 ;;
+esac
+echo "fake-elide $*"
+sleep 300
+''')
+    fake_runtime.chmod(0o755)
+    (package / 'config.json').write_text(json.dumps({'broker': str(root / 'dist/elide-tern-broker'),
+                                                      'runtime': str(fake_runtime)}))
     fixture_root = state / 'crates/tern'
     (fixture_root / 'goldens').mkdir(parents=True)
     socket = state / 'control.sock'
@@ -130,6 +144,9 @@ with tempfile.TemporaryDirectory(prefix='tw-', dir='/tmp') as temporary:
                 assert button.get('title') and ctl('tree', selector + '[aria-label]').get('nodes'), button
                 assert not button.get('text'), 'Toolbar actions should use native icons without repeated labels'
                 assert ctl('tree', selector + ' svg').get('nodes'), ctl('tree', selector + ' *')
+            # Controls follow the editor's file: elide.pkl has no Source view and no debug target.
+            assert not ctl('tree', '[data-role="project-source"]').get('nodes'), 'Source must hide for elide.pkl'
+            assert ctl('tree', '[data-role="project-debug"]')['nodes'][0].get('title') == 'Open debugger'
             toolbar = ctl('tree', '[data-role="project-actions"]')['nodes'][0]
             assert toolbar['rect'][3] <= 40, toolbar
             pane = next(node for node in ctl('tree', '.tn-pane')['nodes']
@@ -166,6 +183,8 @@ with tempfile.TemporaryDirectory(prefix='tw-', dir='/tmp') as temporary:
                 print('PASS: actual terminal process starts in project root with no injected command', flush=True)
             opened = open_file('one.js')
             assert opened['id'] == editor, 'Ordinary Files click must reuse the workspace editor'
+            wait(lambda: ctl('tree', '[data-role="project-source"]').get('nodes'))
+            wait(lambda: ctl('tree', '[data-role="project-debug"]')['nodes'][0].get('title') == 'Debug one.js')
             assert active_tab()['panes'] == 3
             assert open_file('two.py')['id'] == editor
             image = open_file('pixel.png')
@@ -240,7 +259,42 @@ with tempfile.TemporaryDirectory(prefix='tw-', dir='/tmp') as temporary:
             ctl('shot', 'workspace-navigation')
             ctl('prefs', 'preview', 'dark-nord')
             ctl('shot', 'workspace-toolbar-dark')
-            assert 'exceeded its budget' not in (out / 'tern.log').read_text()
+            # Launching a pane under the in-process `tern serve` can overrun the 500 ms plugin budget
+            # (docs/architecture.md); the budget check covers everything before these launches.
+            before_launches = (out / 'tern.log').read_text()
+            # Run tests: a play button that opens the full Tests page for the project.
+            run_tests = ctl('tree', '[data-role="project-test"]')['nodes'][0]
+            assert run_tests.get('title') == 'Run tests', run_tests
+            def launched(prefix):
+                listing = subprocess.run(['ps', '-axo', 'args'], capture_output=True, text=True).stdout
+                return next((line for line in listing.splitlines() if prefix in line), None)
+            ctl('click', '[data-role="project-test"]')
+            page = wait(lambda: launched(str(fake_runtime) + ' --ignore-version tern project '))
+            assert page.rstrip().endswith(str(other.resolve())), page
+            # Each launch's split can overrun the 500 ms callback budget under `tern serve`, pausing the
+            # plugin's process callbacks for 5 s; the next launch waits on a probe, so let it pass.
+            time.sleep(6)
+            # Outside a project, Run tests asks for a subject and opens the page with --surface=screen.
+            outside_pane = lua('cx.layout:split(cx.session:focused(), "down", {cwd = ' + json.dumps(str(state)) + '})')
+            wait(lambda: not ctl('tree', '.sl-plugin').get('nodes'))
+            ctl('plugins', 'run', 'plugin.elide.test')
+            wait(lambda: (ctl('state').get('picker') or {}).get('mode') == 'prompt')
+            ctl('key', 'Enter')
+            screen = wait(lambda: launched(str(fake_runtime) + ' --ignore-version test --surface=screen '))
+            assert Path(screen.split(' --surface=screen ', 1)[1].strip()).resolve() == state.resolve(), (screen, outside_pane)
+            print('PASS: Run tests opens the project page, and the screen page outside a project', flush=True)
+            # Build opens the full Build page when the runtime lists --surface in `build --help`. The
+            # outside run opened its page in a new tab; focus the workspace's editor to go back.
+            lua('cx.layout:close(' + str(outside_pane) + ')')
+            time.sleep(6)
+            def toolbar_shown():
+                return any(n.get('rect', [0, 0, 0, 0])[2] > 0 for n in ctl('tree', '[data-role="project-build"]').get('nodes', []))
+            lua('cx.layout:focus(' + str(other_editor) + ')')
+            wait(toolbar_shown)
+            ctl('click', '[data-role="project-build"]')
+            assert wait(lambda: launched(str(fake_runtime) + ' --ignore-version build --surface=screen'))
+            print('PASS: Build opens the full Build page', flush=True)
+            assert 'exceeded its budget' not in before_launches
             assert 'plugin style sheet has errors' not in (out / 'tern.log').read_text()
             print('PASS: native workspace routing, modifiers, retained edits, reopening, and project isolation', flush=True)
         finally:

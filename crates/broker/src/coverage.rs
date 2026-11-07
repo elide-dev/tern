@@ -1,26 +1,90 @@
-use elide_project_session::coverage::{Artifact, File};
+use elide_project_session::coverage::{Artifact, File, LineState, line_states};
 use serde_json::{Value, json};
+use std::path::Path;
 
 const MAX_PAGE_BYTES: usize = 256 * 1024;
+/// Source files above this size are not read for inference (the Tests view's limit).
+const MAX_SOURCE_BYTES: u64 = 2 * 1024 * 1024;
+
+/// The current text of a measured file, when it lies inside `root` after resolving
+/// symlinks and is at most `MAX_SOURCE_BYTES`. Artifact paths are validated project-relative
+/// identifiers, never `..` or absolute.
+fn read_source(root: &Path, relative: &str) -> Option<String> {
+  let root = root.canonicalize().ok()?;
+  let path = root.join(relative).canonicalize().ok()?;
+  if !path.starts_with(&root) || std::fs::metadata(&path).ok()?.len() > MAX_SOURCE_BYTES {
+    return None;
+  }
+  std::fs::read_to_string(path).ok()
+}
+
+/// A file's coverage entries in line order: each measured line with its `state`, plus an
+/// entry `{line, state: "inferred"}` for every closer, blank or comment line that inherits
+/// a covered block's coverage. Inference reads the current source, so it is skipped when
+/// the source cannot be read or no longer reaches every measured line; measured entries
+/// then carry no `state`, as before.
+fn entries(file: &File, root: Option<&Path>) -> Vec<Value> {
+  let states = root.and_then(|root| read_source(root, &file.path)).and_then(|source| {
+    let states = line_states(file, &source);
+    file
+      .lines
+      .iter()
+      .all(|line| (line.line as usize) <= states.len())
+      .then_some(states)
+  });
+  let mut entries: Vec<(u32, Value)> = file
+    .lines
+    .iter()
+    .map(|line| {
+      let mut entry = json!(line);
+      if let Some(state) = states
+        .as_ref()
+        .and_then(|states| states.get((line.line as usize).checked_sub(1)?))
+      {
+        entry["state"] = json!(state);
+      }
+      (line.line, entry)
+    })
+    .collect();
+  if let Some(states) = &states {
+    for (index, state) in states.iter().enumerate() {
+      if *state == LineState::Inferred {
+        let line = u32::try_from(index + 1).unwrap_or(u32::MAX);
+        entries.push((line, json!({"line":line, "state":state})));
+      }
+    }
+  }
+  entries.sort_by_key(|(line, _)| *line);
+  entries.into_iter().map(|(_, entry)| entry).collect()
+}
 
 fn source(index: usize, file: &File) -> Value {
   json!({"index":index, "engine":file.engine, "language":file.language, "path":file.path, "sourceDigest":file.source_digest})
 }
 
-pub fn page(artifact: &Artifact, file: Option<usize>, offset: usize, limit: usize) -> Result<Value, String> {
+/// A page of the artifact: the file listing, or one file's line entries. `root` is the
+/// attached project root used to read sources for inferred lines (`None` skips inference).
+pub fn page(
+  artifact: &Artifact,
+  file: Option<usize>,
+  offset: usize,
+  limit: usize,
+  root: Option<&Path>,
+) -> Result<Value, String> {
   if !(1..=100).contains(&limit) {
     return Err("Coverage page limit must be between 1 and 100".into());
   }
   if let Some(index) = file {
     let file = artifact.files.get(index).ok_or("Unknown coverage file index")?;
-    if offset > file.lines.len() {
+    let lines = entries(file, root);
+    if offset > lines.len() {
       return Err("Coverage line offset exceeds the file's measurement".into());
     }
-    let end = offset.saturating_add(limit).min(file.lines.len());
+    let end = offset.saturating_add(limit).min(lines.len());
     return Ok(json!({
       "version":artifact.version, "complete":artifact.complete, "file":source(index,file),
-      "offset":offset, "next":(end < file.lines.len()).then_some(end),
-      "total":file.lines.len(), "lines":file.lines[offset..end],
+      "offset":offset, "next":(end < lines.len()).then_some(end),
+      "total":lines.len(), "lines":lines[offset..end],
     }));
   }
   if offset > artifact.files.len() {
@@ -66,7 +130,7 @@ mod tests {
       ]
     }))
     .unwrap();
-    let first = page(&artifact, None, 0, 1).unwrap();
+    let first = page(&artifact, None, 0, 1, None).unwrap();
     assert_eq!(first["next"], 1);
     assert_eq!(first["files"][0]["covered_lines"], 1);
     assert_eq!(first["files"][0]["sourceDigest"], Value::Null);
@@ -74,14 +138,14 @@ mod tests {
     assert_eq!(first["files"][0]["language"], "python");
     assert_eq!(first["complete"], false);
     assert!(first["files"][0].get("lines").is_none());
-    let last = page(&artifact, Some(0), 1, 1).unwrap();
+    let last = page(&artifact, Some(0), 1, 1, None).unwrap();
     assert_eq!(last["lines"][0]["line"], 5);
     assert_eq!(last["next"], Value::Null);
-    assert!(page(&artifact, Some(2), 0, 1).is_err());
-    assert!(page(&artifact, Some(0), 3, 1).is_err());
-    assert!(page(&artifact, None, 3, 1).is_err());
-    assert!(page(&artifact, None, 0, 101).is_err());
-    assert!(page(&artifact, None, 0, 0).is_err());
+    assert!(page(&artifact, Some(2), 0, 1, None).is_err());
+    assert!(page(&artifact, Some(0), 3, 1, None).is_err());
+    assert!(page(&artifact, None, 3, 1, None).is_err());
+    assert!(page(&artifact, None, 0, 101, None).is_err());
+    assert!(page(&artifact, None, 0, 0, None).is_err());
   }
 
   #[test]
@@ -96,7 +160,7 @@ mod tests {
     let mut offset = 0;
     let mut count = 0;
     loop {
-      let result = page(&artifact, None, offset, 100).unwrap();
+      let result = page(&artifact, None, offset, 100, None).unwrap();
       assert!(serde_json::to_vec(&result).unwrap().len() < MAX_PAGE_BYTES);
       let files = result["files"].as_array().unwrap();
       assert!(!files.is_empty());
@@ -113,5 +177,111 @@ mod tests {
       }
     }
     assert_eq!(count, artifact.files.len());
+  }
+
+  fn project(files: &[(&str, &str)]) -> std::path::PathBuf {
+    let root = std::env::temp_dir().join(format!(
+      "broker-coverage-{}-{}",
+      std::process::id(),
+      std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos()
+    ));
+    for (path, text) in files {
+      let path = root.join(path);
+      std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+      std::fs::write(path, text).unwrap();
+    }
+    root
+  }
+
+  #[test]
+  fn closers_of_covered_blocks_are_served_as_inferred_lines_in_order() {
+    let root = project(&[(
+      "src/a.js",
+      "function f(x) {\n  if (x) {\n    return 1;\n  }\n  return 2;\n}\n",
+    )]);
+    let artifact: Artifact = serde_json::from_value(json!({
+      "version":1, "complete":true, "files":[{"engine":"js","path":"src/a.js","lines":[
+        {"line":1,"covered":true},{"line":2,"covered":true},{"line":3,"covered":true},{"line":5,"covered":false}
+      ]}]
+    }))
+    .unwrap();
+    let result = page(&artifact, Some(0), 0, 100, Some(&root)).unwrap();
+    let lines: Vec<(u64, String)> = result["lines"]
+      .as_array()
+      .unwrap()
+      .iter()
+      .map(|line| {
+        (
+          line["line"].as_u64().unwrap(),
+          line["state"].as_str().unwrap().to_owned(),
+        )
+      })
+      .collect();
+    // Line 4 closes the covered `if`; line 6 closes a block whose last measured line (5) did
+    // not run, so it stays unmeasured and is not served.
+    assert_eq!(
+      lines,
+      [
+        (1, "covered"),
+        (2, "covered"),
+        (3, "covered"),
+        (4, "inferred"),
+        (5, "uncovered")
+      ]
+      .map(|(line, state)| (line, state.to_owned()))
+    );
+    assert_eq!(result["total"], 5);
+    assert_eq!(
+      result["lines"][3].get("covered"),
+      None,
+      "inferred lines are not measured"
+    );
+    // Paging covers the merged entries.
+    let second = page(&artifact, Some(0), 3, 1, Some(&root)).unwrap();
+    assert_eq!(second["lines"][0]["state"], "inferred");
+    assert_eq!(second["next"], 4);
+    std::fs::remove_dir_all(root).unwrap();
+  }
+
+  #[test]
+  fn unreadable_shrunk_or_escaping_sources_serve_measured_lines_only() {
+    let measured = |path: &str, line: u32| -> Artifact {
+      serde_json::from_value(json!({
+        "version":1, "complete":true, "files":[{"engine":"js","path":path,"lines":[
+          {"line":1,"covered":true},{"line":line,"covered":true}
+        ]}]
+      }))
+      .unwrap()
+    };
+    let root = project(&[("a.js", "if (x) {\n  y();\n}\n")]);
+    // A measured line past the end of the current file: the source changed, no inference.
+    let shrunk = page(&measured("a.js", 9), Some(0), 0, 100, Some(&root)).unwrap();
+    assert_eq!(shrunk["total"], 2);
+    assert!(shrunk["lines"][0].get("state").is_none());
+    // A missing file and no root behave the same way.
+    assert_eq!(
+      page(&measured("missing.js", 2), Some(0), 0, 100, Some(&root)).unwrap()["total"],
+      2
+    );
+    assert_eq!(page(&measured("a.js", 2), Some(0), 0, 100, None).unwrap()["total"], 2);
+    // A symlink that leaves the root is never read.
+    let outside = project(&[("secret.js", "if (x) {\n  y();\n}\n")]);
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(outside.join("secret.js"), root.join("link.js")).unwrap();
+    #[cfg(unix)]
+    assert_eq!(
+      page(&measured("link.js", 2), Some(0), 0, 100, Some(&root)).unwrap()["total"],
+      2
+    );
+    // Inside the root the same text infers the closer.
+    assert_eq!(
+      page(&measured("a.js", 2), Some(0), 0, 100, Some(&root)).unwrap()["total"],
+      3
+    );
+    std::fs::remove_dir_all(root).unwrap();
+    std::fs::remove_dir_all(outside).unwrap();
   }
 }

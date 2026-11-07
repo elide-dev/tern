@@ -72,6 +72,13 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
         ctl('carly', 'close')
         return value
 
+    def lua_value(expression):
+        marker = 'w3-' + str(uuid.uuid4()) + ':'
+        result = lua('print(' + json.dumps(marker) + ' .. tern.json.encode(' + expression + '))')
+        text = (result or {}).get('text', '')
+        line = next((line for line in text.splitlines() if marker in line), None)
+        return json.loads(line.split(marker, 1)[1]) if line else None
+
     def run(line):
         ctl('run', line)
 
@@ -86,6 +93,10 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
 
         # Chrome: from tapp/nested the default title would be "nested"; the project names it "tapp".
         check('status segment', wait(lambda: 'tapp' in tree('.sl-plugin')), tree('.sl-plugin'))
+        ctl('plugins', 'run', 'plugin.elide.project')
+        menu = wait(lambda: (lambda t: t if 'Run tests' in t else None)(tree('#pick')), 30) or tree('#pick')
+        check('menu hides test runs before any run', 'Run tests' in menu and 'View test runs' not in menu, menu)
+        ctl('key', 'Escape')
         # `ctl state` reports Tern's own title; the drawn tab carries the formatter's.
         check('tab title from project', wait(lambda: any((n.get('title') or '').startswith('tapp ') for n in ctl('tree', '[role=tab]').get('nodes', [])), 20),
               tree('[role=tab]'))
@@ -113,9 +124,14 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
         run('cd ' + shlex.quote(str(build)))
         run('elide build')
         check('build segment', wait(lambda: 'Build failed' in tree('.sl-plugin'), 280), tree('.sl-plugin'))
-        built = wait(lambda: (lambda t: t if 'expected' in t else None)(block_text(before)), 30) or block_text(before)
-        check('build lens diagnostic', 'expected' in built and 'Hello.java' in built and ':4:26' in built, built)
-        check('build lens excerpt', 'System.out.println' in built, built)
+        # Runtimes with the native Build surface draw it inline under Tern; older ones print plain
+        # output, which the build lens reads. Either way the error, its location and excerpt show.
+        def build_view():
+            text = block_text(before) + tree('.sf-main *')
+            return text if 'expected' in text else None
+        built = wait(build_view, 30) or ''
+        check('build diagnostic shown', 'expected' in built and 'Hello.java' in built and ':4:26' in built, built)
+        check('build excerpt shown', 'System.out.println' in built, built)
         ctl('shot', 'lenses')
         run('cd ' + shlex.quote(str(tapp)))
         wait(lambda: 'tapp' in tree('.sl-plugin'), 30)
@@ -145,6 +161,20 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
         tabs = len(ctl('state')['tabs'])
         ctl('open-url', 'elide://tests?root=' + str(tapp))
         check('tests link opens project tests', wait(lambda: len(ctl('state')['tabs']) > tabs, 60), ctl('state')['tabs'])
+        # elide://help runs `elide help <url>` in a new pane beside the link's pane, else in a new tab.
+        check('bad help topic rejected', toast_after('elide://help?topic=Bad%20Topic', 'malformed'), tree('.toast'))
+        before = {pane['pane'] for pane in lua_value('cx.session:panes()') or []}
+        ctl('open-url', 'elide://help?topic=getting-started')
+        def new_pane():
+            return next((pane for pane in lua_value('cx.session:panes()') or [] if pane['pane'] not in before), None)
+        pane = wait(new_pane, 30)
+        check('help link opens a pane', pane, lua_value('cx.session:panes()'))
+        # Pane info carries no command line; the pane execs the runtime, so its process shows it.
+        def help_process():
+            listing = subprocess.run(['ps', '-axo', 'args'], capture_output=True, text=True).stdout
+            return next((line for line in listing.splitlines()
+                         if line.startswith(runtime + ' --ignore-version help elide://help?topic=getting-started')), None)
+        check('help pane runs elide help', pane and wait(help_process, 30), pane)
         ctl('shot', 'routes')
     finally:
         ctl('quit')

@@ -92,8 +92,15 @@ function M.roots()
 end
 
 -- Records how an `elide <command>` line ended in `pane`; the caller refreshes the chrome.
-function M.finished(pane, command, status)
-  results[pane] = { command = command, status = status }
+-- `detail`, when given, follows the outcome after a middle dot ("Build failed · 3 errors").
+function M.finished(pane, command, status, detail)
+  results[pane] = { command = command, status = status, detail = detail }
+end
+
+-- The root of the project detected for `pane`, or nil.
+function M.root_of(pane)
+  local record = records[pane]
+  return record and record.project and record.project.root or nil
 end
 
 local OUTCOMES = {
@@ -109,8 +116,12 @@ local function outcome(pane)
     return nil
   end
   local ok = result.status == 0
+  local text = if ok then labels.ok else labels.failed
+  if result.detail then
+    text ..= " · " .. result.detail
+  end
   return {
-    text = if ok then labels.ok else labels.failed,
+    text = text,
     icon = if ok then "check" else "x-circle",
     tone = if ok then "ok" else "error",
     command = labels.command,

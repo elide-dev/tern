@@ -58,7 +58,8 @@ test("refreshes expired sessions", {skip: true}, () => {});
             return value in tree('[data-role="run-status"]')
         try:
             wait(socket.exists)
-            ctl('run', shlex.join([str(root / 'dist/elide-tern-test'), runtime, str(script)]))
+            # The full page; bare runs draw inline (checked at the end).
+            ctl('run', shlex.join([str(root / 'dist/elide-tern-test'), runtime, '--surface=screen', str(script)]))
             wait(lambda: status('Failed') or status('Incomplete'))
             assert status('Failed'), tree()
             assert '1 passed' in tree('[data-role="totals"]')
@@ -87,20 +88,43 @@ test("refreshes expired sessions", {skip: true}, () => {});
             wait(lambda: status('Passed'))
             assert '1 passed' in tree('[data-role="totals"]')
             script.write_text('import {test} from "node:test"; test("waiting for a service", async () => { await new Promise(resolve => setTimeout(resolve, 60000)); });')
+            # Starting a run must not move the page: the results table stays where it was.
+            header = '[data-role="test-list"] .sf-tbl-row.head'
+            def header_rect():
+                nodes = ctl('tree', header).get('nodes') or []
+                return nodes[0].get('rect') if nodes else None
+            ctl('click', '[data-role="test-views"] [data-tab="results"]')
+            wait(lambda: header_rect() is not None)
+            before = header_rect()
             ctl('click', '[data-role="test-rerun"]')
             wait(lambda: 'waiting for a service' in tree('[data-role="test-running"]'))
+            after = header_rect()
+            assert before is not None and before == after, (before, after)
             running_pid, _ = child()
             ctl('click', '[data-role="test-cancel"]')
             wait(lambda: status('Cancelled'))
             wait(lambda: gone(running_pid))
             ctl('key', 'ctrl+c')
-            wait(lambda: not ctl('tree', '.sf-dock').get('nodes'))
+            # The dock leaves when the surface closes; the process exits a moment later.
+            wait(lambda: not ctl('tree', '.sf-dock').get('nodes') and not ctl('state')['focused']['busy'])
             ctl('run', shlex.join([runtime, 'test', str(script)]))
             wait(lambda: 'waiting for a service' in tree('[data-role="test-running"]'))
             running_pid, host_pid = child()
             os.kill(host_pid, signal.SIGKILL)
             wait(lambda: gone(running_pid))
-            print('PASS: live results, failure/output/source/duration, filters, raw TAP, rerun, cancellation, teardown, host death')
+            # Bare, the run draws inline and its block stays in scrollback after it exits.
+            script.write_text('import {test} from "node:test"; import assert from "node:assert/strict"; test("inline failure", () => assert.equal(1, 2));')
+            ctl('run', shlex.join([str(root / 'dist/elide-tern-test'), runtime, str(script)]))
+            wait(lambda: status('Failed'))
+            def host_running():
+                rows = subprocess.check_output(['ps', '-axo', 'command'], text=True)
+                return any('elide-tern-test' in row and str(script) in row for row in rows.splitlines())
+            wait(lambda: not host_running())
+            time.sleep(1)
+            assert status('Failed'), tree()
+            assert ctl('tree', '.sf-main').get('nodes'), 'the inline block left scrollback'
+            assert 'inline failure' in tree('[data-role="test-list"]'), tree()
+            print('PASS: live results, failure/output/source/duration, filters, raw TAP, rerun, cancellation, teardown, host death, inline block')
         finally:
             server.terminate()
             try: server.wait(timeout=10)

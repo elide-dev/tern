@@ -1,0 +1,1 @@
+e: file:///w/raw/Raw.kt:6:19 Initializer type mismatch: expected 'String', actual 'Int'.

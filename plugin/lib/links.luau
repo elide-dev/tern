@@ -6,12 +6,14 @@ local M = {}
 
 local MAX_URL = 8192
 local MAX_NUMBER = 1000000000
+local MAX_TOPIC = 128
 
 -- Which query keys each action takes, and which it requires.
 local ACTIONS = {
   source = { keys = { path = true, root = true, line = true, col = true }, required = { "path" } },
   debug = { keys = { root = true, path = true, line = true }, required = { "root", "path" } },
   tests = { keys = { root = true }, required = { "root" } },
+  help = { keys = { topic = true }, required = { "topic" } },
 }
 
 -- Decodes `%XX` escapes; nil for a malformed escape or a decoded control character.
@@ -61,7 +63,7 @@ local function number(value)
   return n
 end
 
--- Parses `elide://<action>?<query>` into `{ action, root?, path?, line?, col? }`.
+-- Parses `elide://<action>?<query>` into `{ action, root?, path?, line?, col?, topic? }`.
 -- Returns nil for any other scheme, an unknown action, a malformed or duplicate query
 -- value, a non-absolute path, or a `path` outside the given `root`. Unknown keys are
 -- ignored so later contract versions can add some. When `root` is absent, the caller
@@ -104,6 +106,13 @@ function M.parse(url)
     end
   end
   local result = { action = action }
+  if fields.topic ~= nil then
+    -- A help topic slug: lowercase ASCII letters, digits and inner hyphens.
+    if #fields.topic > MAX_TOPIC or not string.find(fields.topic, "^[a-z0-9][a-z0-9%-]*$") then
+      return nil
+    end
+    result.topic = fields.topic
+  end
   for _, key in ipairs({ "root", "path" }) do
     if fields[key] ~= nil then
       result[key] = M.absolute(fields[key])

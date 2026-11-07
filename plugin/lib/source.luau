@@ -17,6 +17,7 @@ local LANGS = {
   py = "python",
   kt = "kotlin",
   kts = "kotlin",
+  java = "java",
 }
 
 -- Sources the project debugger launches (JavaScript, TypeScript, Python).
