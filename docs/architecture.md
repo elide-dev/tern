@@ -204,8 +204,12 @@ Offsets are UTF-16 code units.
   toolbar, the editor (the only element that grows, with `maxLines` from the pane's rows) and the
   dock, which holds only open strips (find, go to line, confirm) and a `status` bar whose segments
   appear only when they mean something: the path; the overlay state; `Ln, Col`; the selection
-  length; language; indentation; LF/CRLF; Modified. Overlay loading, empty and error states appear
-  as a strip under the toolbar. The gutter is `[sign][number] ` (one sign cell, numbers
+  length; language; indentation; LF/CRLF; Modified. Nothing is ever inserted above or below the editor, so the
+  code never moves: every overlay state (attaching, running tests, fetching coverage, no coverage
+  yet, not measured, launching, paused elsewhere, failures) is the state badge's text, with details
+  in its tooltip, and the status bar's overlay segment; actions sit in the toolbar (Run with
+  coverage, `primary` while there is no coverage; Retry after a failed attach). The harness checks
+  the first line's text rect before, during and after a coverage run. The gutter is `[sign][number] ` (one sign cell, numbers
   right-aligned to the widest, one space), identical in width on every line; the caret line's
   number is `strong`. ⌥1 to ⌥3 pick an available overlay (in the desktop harness they did not
   reach the block, presumably taken by window bindings, so the harness uses the switch).
@@ -227,7 +231,10 @@ Offsets are UTF-16 code units.
   paint over it. Other attempts left visible blocks or did not render: a background on every run
   broke at spaces and token edges; copies every 1ch seamed at fractional pixel edges; a single
   `100vw` shadow showed nothing past the text; and a `::before` band is not positioned against an
-  inline run by Tern's renderer, so every band collapsed onto the text block. `dim` is transparent. Tints fade over 140 ms (`ease-out`), not under reduced motion.
+  inline run by Tern's renderer: with `top: 0; bottom: 0; left/right: -100vw`, `z-index: -1` and an
+  isolated text block, the band covered the whole text block and painted over the text. The harness
+  checks the band in the screenshots' pixels: a tinted row differs from an untinted one past its
+  text, the neighbouring row stays untinted, and the text stays visible over it. `dim` is transparent. Tints fade over 140 ms (`ease-out`), not under reduced motion.
   Covered lines are `success`, partial `warning`, uncovered `error`, lines changed since the
   measurement `muted`, a breakpoint line `error` and the paused line a stronger `accent`.
 - **Large files.** The block sends the whole text, because the node needs it for offsets, and
