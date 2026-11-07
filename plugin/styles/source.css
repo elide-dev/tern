@@ -8,8 +8,16 @@
   padding-left: 0;
   padding-right: 0;
 }
+/* A region spaces its top-level nodes 16px apart and its root col is not drawn, so the gaps between
+   the toolbar, the editor and the dock's strips are removed here. */
 .sf-region.sf-main[data-surface="plugin.elide.source"] {
   padding-top: 0;
+  padding-bottom: 0;
+  gap: 0;
+}
+.sf-region.sf-dock[data-surface="plugin.elide.source"] {
+  padding-top: 0;
+  gap: 0;
 }
 [data-surface="plugin.elide.source"] [data-role="source-toolbar"] {
   padding: 6px 10px;
@@ -26,10 +34,14 @@
   padding: 6px 10px;
   box-shadow: inset 0 1px 0 var(--l2);
 }
+/* The code sits flush under the toolbar's hairline and against the status bar, its gutter at the
+   pane's left edge: the editor's field frame (padding, corners, hairline, focus ring) is removed. */
 [data-surface="plugin.elide.source"] .sf-editor[data-role="source-editor"],
 [data-surface="plugin.elide.source"] .sf-editor[data-role="source-editor"].focused {
+  padding: 0;
   border-radius: 0;
   box-shadow: none;
+  border: 0;
   background: transparent;
 }
 

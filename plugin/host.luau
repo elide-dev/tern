@@ -1175,9 +1175,9 @@ local function visible(state, cx)
   return math.max(4, (cx.rows or 24) - chrome)
 end
 
--- Gutter cells are `[sign] [number] │ `: one sign cell left of numbers right-aligned to the widest, so
+-- Gutter cells are `[sign][number] │  `: one sign cell left of numbers right-aligned to the widest, so
 -- every line's cell is the same width and toggling a breakpoint shifts nothing. Breakpoint lines
--- number in `error`, the paused line in `accent`, the caret line in `strong`.
+-- number in `error`, the paused line in `accent`, the caret line in the normal ink.
 --
 -- Line tints: every line carries one `mark <tone>` run on its first character at all times, `mark
 -- dim` when nothing applies, so switching overlays changes tokens and never adds or removes runs (no
@@ -1205,7 +1205,9 @@ local function lines_view(state, starts)
   local marks = state.mode == "coverage" and coverage.state == "ready" and coverage.marks or nil
   local every = count <= HIGHLIGHT_LINES
   for line = 1, shown do
-    local glyph, tone, number, note = " ", nil, line == caret and "strong" or "dim", ""
+    -- Numbers are `dim`; the caret line's is in the normal ink (not `strong`, whose weight can widen
+    -- the glyphs).
+    local glyph, tone, number, note = " ", nil, line ~= caret and "dim" or nil, ""
     local tint = "dim"
     if marks then
       local base = base_line(state, "coverage", line)
@@ -1243,14 +1245,15 @@ local function lines_view(state, starts)
       local first = string.byte(buf.lines[line], 1) >= 0xF0 and 2 or 1
       table.insert(decor, { from = starts[line], to = starts[line] + first, s = "mark " .. tint })
     end
-    -- Sign cell, a space, the right-aligned number, a space, a `dim` hairline, a space before the
-    -- code. The box-drawing glyph spans the line's full height, so the hairline reads continuous.
+    -- As VS Code and IDEA lay it out: the sign cell, the number right-aligned to the widest, a space,
+    -- a `dim` hairline (the box-drawing glyph spans the line's height, so it reads continuous) and
+    -- two cells before the code: 1 + digits + 1 + 1 + 2 cells, nothing more.
     gutter[line] = {
       tone and ui.span(glyph, tone) or ui.span(glyph),
-      ui.span(" " .. source.number(line, width), number),
+      number and ui.span(source.number(line, width), number) or ui.span(source.number(line, width)),
       ui.span(" "),
       ui.span("│", "dim"),
-      ui.span(" "),
+      ui.span("  "),
     }
     virt[line] = note
     any_virt = any_virt or note ~= ""
@@ -2207,8 +2210,8 @@ tern.block.define("source", {
     end
     table.insert(dock, status_bar(state))
     return {
-      main = ui.node("col", { gap = "sm", grow = 1 }, children),
-      dock = ui.node("col", { gap = "sm" }, dock),
+      main = ui.node("col", { gap = "none", grow = 1 }, children),
+      dock = ui.node("col", { gap = "none" }, dock),
     }
   end,
   key = key_handler,
