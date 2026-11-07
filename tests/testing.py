@@ -87,8 +87,18 @@ test("refreshes expired sessions", {skip: true}, () => {});
             wait(lambda: status('Passed'))
             assert '1 passed' in tree('[data-role="totals"]')
             script.write_text('import {test} from "node:test"; test("waiting for a service", async () => { await new Promise(resolve => setTimeout(resolve, 60000)); });')
+            # Starting a run must not move the page: the results table stays where it was.
+            header = '[data-role="test-list"] .sf-tbl-row.head'
+            def header_rect():
+                nodes = ctl('tree', header).get('nodes') or []
+                return nodes[0].get('rect') if nodes else None
+            ctl('click', '[data-role="test-views"] [data-tab="results"]')
+            wait(lambda: header_rect() is not None)
+            before = header_rect()
             ctl('click', '[data-role="test-rerun"]')
             wait(lambda: 'waiting for a service' in tree('[data-role="test-running"]'))
+            after = header_rect()
+            assert before is not None and before == after, (before, after)
             running_pid, _ = child()
             ctl('click', '[data-role="test-cancel"]')
             wait(lambda: status('Cancelled'))
