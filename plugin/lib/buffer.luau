@@ -7,6 +7,9 @@
 
 local M = {}
 
+-- The undo history's budget for the text its steps hold.
+M.MAX_UNDO_BYTES = 8 * 1024 * 1024
+
 local function size(b)
   if b < 0x80 or (b >= 0x80 and b < 0xC0) then
     return 1
@@ -322,8 +325,15 @@ function M.replace(buf, a, b, text, kind)
       inserted = text,
       was = was,
     }
-    if #buf.undo > 1000 then
-      table.remove(buf.undo, 1)
+    -- At most 1,000 steps and MAX_UNDO_BYTES of their text (a reload step holds both versions of
+    -- what changed), evicting the oldest; the newest step always stays.
+    local bytes = 0
+    for _, entry in ipairs(buf.undo) do
+      bytes = bytes + #entry.removed + #entry.inserted
+    end
+    while #buf.undo > 1 and (#buf.undo > 1000 or bytes > M.MAX_UNDO_BYTES) do
+      local oldest = table.remove(buf.undo, 1)
+      bytes = bytes - #oldest.removed - #oldest.inserted
     end
   end
   buf.redo = {}

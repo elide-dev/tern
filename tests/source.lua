@@ -234,6 +234,21 @@ local crlf_reload = buffer.new("a\nb\n")
 buffer.reload(crlf_reload, "a\r\nb\r\nc\r\n")
 check("reload takes the disk ending", buffer.disk(crlf_reload), "a\r\nb\r\nc\r\n")
 
+-- Undo keeps at most MAX_UNDO_BYTES of removed and inserted text, evicting the oldest steps.
+local big = buffer.new("")
+local chunk = string.rep("x", 1024 * 1024)
+for i = 1, 12 do
+  big.cursor = { l = 1, c = 0 }
+  buffer.replace(big, { l = 1, c = 0 }, { l = 1, c = big.lens[1] }, chunk .. i, "reload")
+end
+local held = 0
+for _, entry in ipairs(big.undo) do
+  held = held + #entry.removed + #entry.inserted
+end
+check("undo bytes bounded", held <= buffer.MAX_UNDO_BYTES, true)
+check("undo keeps the newest", big.undo[#big.undo].inserted, chunk .. 12)
+check("undo still has steps", #big.undo >= 3, true)
+
 if failures > 0 then
   print(failures .. " failed")
   os.exit(1)
