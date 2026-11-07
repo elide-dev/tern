@@ -186,36 +186,46 @@ Offsets are UTF-16 code units.
   (`line` or `line:column`). Program moves (find, go to line, a new debugger stop, a linked line)
   set `topline` for one frame; otherwise Tern keeps the caret in view.
 - **Chrome.** The block is laid out like an IDE editor and shows a control only when it can act.
-  One compact toolbar row (`gap: "sm"`): a `path` `breadcrumb` (project, folders, file; a parent
-  crumb opens that folder), a `warning` `●` while dirty, and the overlay's state `badge` ("Paused
-  at 9", "80% covered"); at the right the segmented overlay `tabs` (only the overlays that can act:
-  Coverage with a project, Debug with a project and a JavaScript, TypeScript or Python source;
-  Hotness is hidden while no profile data exists; no strip at all when only None is left), the
-  overlay's controls, an editor well of icon buttons (Save `save`, only while dirty and then the
+  One toolbar row at Tern's `md` height: a `path` `breadcrumb` (project and file, the folders
+  between folded into "…"; a parent crumb opens that folder), a `warning` `●` while dirty, and the
+  overlay's state `badge` ("Paused at 9", "80% covered"); at the right the overlay switch (only the
+  overlays that can act: Coverage with a project, Debug with a project and a JavaScript, TypeScript
+  or Python source; Hotness is hidden while no profile data exists; nothing when only None is left),
+  the overlay's controls, an editor well of icon buttons (Save `save`, only while dirty and then the
   screen's `primary` unless an overlay shows its own; Find `search`; Go to line `hash`; Soft wrap
-  `corner-down-right` with `on`; Edit in Tern `open`, which opens the file's `href` in Tern's own
-  editor as the escape hatch) and a `keyboard` `menu` listing only the shortcuts that act in the
-  current state (its rows run them). Under the toolbar the editor is the only element that grows,
-  in a `col` with no gaps, with `maxLines` from the pane's rows (an extra toolbar row is assumed
-  below about 110 columns, another for the debugger below about 150), down to a dock that holds
-  only open strips (find, go to line, confirm) and a `status` bar whose segments appear only when
-  they mean something: the path; the overlay state; "Coverage view · read-only"; `Ln, Col`; the
-  selection length; language; indentation; LF/CRLF; Modified. Overlay loading, empty and error
-  states appear as a strip under the toolbar; a ready overlay reports through the badge and status
-  bar. The gutter is `[sign][number] ` (one sign cell, numbers right-aligned to the widest, one
-  space), identical in width on every line; the caret line's number is `strong`. ⌥1 to ⌥3 pick an
-  available overlay.
+  `corner-down-right` with `on`; Edit in Tern `open`, the escape hatch to Tern's own editor) and a
+  `keyboard` `menu` listing only the shortcuts that act now (its rows run them). The editor well
+  shows its shortcuts in tooltips and that menu. Split panes (under about 150 columns) get a compact
+  row so it does not wrap: the overlay switch becomes a well of icon toggles (None `eye-off`,
+  Coverage `list-checks`, Debug `bug`, the active one `on`; a `menu` was tried, but in the harness a
+  click on its row only closed it), the editor well keeps only Save (its commands stay in the keyboard menu), the debugger's keycaps move
+  into the tooltips, and the state badge leaves it to the status bar while the debugger's wells
+  show; as a last resort the row wraps rather than clips. Below it `gap: "sm"` separates the
+  toolbar, the editor (the only element that grows, with `maxLines` from the pane's rows) and the
+  dock, which holds only open strips (find, go to line, confirm) and a `status` bar whose segments
+  appear only when they mean something: the path; the overlay state; `Ln, Col`; the selection
+  length; language; indentation; LF/CRLF; Modified. Overlay loading, empty and error states appear
+  as a strip under the toolbar. The gutter is `[sign][number] ` (one sign cell, numbers
+  right-aligned to the widest, one space), identical in width on every line; the caret line's
+  number is `strong`. ⌥1 to ⌥3 pick an available overlay (in the desktop harness they did not
+  reach the block, presumably taken by window bindings, so the harness uses the switch).
 - **Stylesheet.** `plugin/styles/source.css` (the manifest's `styles`) is scoped to
-  `[data-surface="plugin.elide.source"]` and colored only with Tern's tokens. No prop removes a
-  region's padding, so it makes the editor run full-bleed from under the toolbar to the status bar
-  and gives the toolbar, strips and dock fields their own 4 px × 8 px spacing. It draws no colors:
-  row tints come from the `code` kind (below).
-- **No toned backgrounds in the editor.** Probed in the editor kind: `mark` is the only span token
-  that paints a background, untoned, and it breaks at the gaps between runs; `ins` colors text
-  green, `del` strikes text red, the tone tokens color text, and unknown tokens are dropped (W1
-  found `toolSuccessBg`-style tokens draw nothing). So the editor marks the paused line with `mark`
-  and colors breakpoint and stop line numbers, while coverage, which needs toned rows, uses the
-  `code` kind, whose per-line `marks` take a tone and tint the whole row.
+  `[data-surface="plugin.elide.source"]` and colored only with Tern's tokens; it is the design
+  guide's sanctioned escape hatch where no prop exists. It removes the regions' side padding so the
+  editor runs full-bleed, keeps Tern's vertical rhythm with 6 px × 10 px padding on the toolbar and
+  dock fields, and draws the line tints below.
+- **Line tints, and overlays that move nothing.** Probed in the editor kind: `mark` is the only span
+  token that paints a background, untoned; `ins` colors text, `del` strikes it, tone tokens color
+  text, unknown tokens are dropped, and a run's box-shadow beyond its text did not show. Every line
+  (in files up to 600 lines; past that only tinted lines) carries one `mark <tone>` run on its first
+  character at all times, `mark dim` when no overlay applies, so switching overlays only changes a
+  token: no run, sign cell or note slot appears or disappears and no text moves (the harness checks
+  the first line's text rect across None, Coverage, Debug and None). The stylesheet gives the run an
+  opaque tint mixed into the page color and repeats it with zero-spread shadows to the
+  right every 0.9ch (overlapping, so no seams show), a one-row band the scroller clips and later text paints over (W1's approach in the Tests
+  surface); `dim` is transparent. Tints fade over 140 ms (`ease-out`), not under reduced motion.
+  Covered lines are `success`, partial `warning`, uncovered `error`, lines changed since the
+  measurement `muted`, a breakpoint line `error` and the paused line a stronger `accent`.
 - **Large files.** The block sends the whole text, because the node needs it for offsets, and
   refuses files over 512 KiB (the `tern.fs.read` limit it passes) with an `empty` state that says
   so; unreadable and non-UTF-8 files get the same. Tern's highlighter recolors the whole text on
@@ -232,27 +242,22 @@ Offsets are UTF-16 code units.
 - **Overlays survive edits.** Each overlay keeps a line map in the buffer (current line to the line
   of the text it was measured against), updated by every edit: lines inserted above shift the
   marks, edited lines keep theirs, deleted lines drop theirs. Breakpoint lines move the same way.
-  A coverage tint whose line text differs from the measured text turns neutral (`mark dim`), and
+  A coverage tint whose line text differs from the measured text turns `muted`, and
   when the artifact's `sourceDigest` (`sha256-utf16be`: sha256 of the UTF-16BE source, checked with
   the system's `shasum`/`sha256sum`) does not match the file on disk every tint does and a strip
   says "Coverage measured an older version".
 - **Coverage.** The newest snapshot run with `options.coverage` is paged through
-  `project_coverage_page` until the file whose path matches, then its lines through `next`. While
-  the Coverage overlay has data the block draws the current text as a read-only `code` node in the
-  editor's slot (`numbers`, `lang`, toned row `marks`: covered `success`, partial `warning`,
-  uncovered `error`, lines changed since the measurement `muted`) and the status bar says
-  "Coverage view · read-only"; switching to None or Debug edits again, and Save still works.
-  `code` rows are not nodes, so the `reveal` op cannot scroll to one, and `code` has no `virt`, so
-  partial lines show their tone without a branch count. The badge and status bar show the file's
-  percentage. The artifact records only covered/uncovered and branch counts (no hit counts), and the
-  JavaScript producer reported no branch counts for the harness's ternary, so partial rows have not
-  been seen with real data yet. With no coverage run the overlay offers **Run with coverage** (F5;
-  `project_test` on the root with `coverage: true`) and polls each second until it finishes; F6
-  refreshes.
+  `project_coverage_page` until the file whose path matches, then its lines through `next`. The
+  tints sit on the same editor, which stays editable in every overlay; partial lines carry their
+  branch count in `virt`. The badge and status bar show the file's percentage. The artifact records
+  only covered/uncovered and branch counts (no hit counts), and the JavaScript producer reported no
+  branch counts for the harness's ternary, so partial lines have not been seen with real data yet.
+  With no coverage run the overlay offers **Run with coverage** (F5; `project_test` on the root with
+  `coverage: true`) and polls each second until it finishes; F6 refreshes.
 - **Debug.** While active the block polls `project_debug_snapshot` (`compact`) every 500 ms and
   re-renders only when the revision, pending flag, controller or error changes. The stop is a `▶`
-  `accent` sign, its line number in `accent`, a `mark` over the line's text and a ` paused` note; a
-  breakpoint is a `●` `error` sign with its number in `error` (`○` and `warning` with the adapter's
+  `accent` sign, its line number in `accent`, the line's `accent` band and a ` paused` note; a
+  breakpoint is a `●` `error` sign with its number in `error` and a light `error` band (`○` and `warning` with the adapter's
   message while unverified); where both fall on one line the stop wins. The caret jumps to each new
   stop and F7 returns to it. F9 toggles a breakpoint on the caret line: before a launch it is kept
   locally and passed to `project_debug_launch`; with a live target the file's replacement `lines`

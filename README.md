@@ -221,11 +221,11 @@ lenses, links and status line in an isolated window.
 or **Open Elide source…** in the project menu opens a project source file in Elide's own
 editor: Tern's highlighting, undo and redo, auto-indent, indent and comment toggles, find
 (⌃F), go to line (⌃G), soft wrap (⌥Z), save with ⌘S, and a reload when the file changes on
-disk. Overlays appear when they can act: **Coverage** shows the file read-only with
-covered, uncovered and partially covered rows tinted from the newest coverage run (F5 runs
-one; None or Debug edits again), and **Debug** sets breakpoints with F9 and launches with F5,
+disk. Overlays appear when they can act: **Coverage** tints covered, uncovered and
+partially covered rows from the newest coverage run (F5 runs one) while you keep editing, and **Debug** sets breakpoints with F9 and launches with F5,
 then shows Resume, Pause, Stop and stepping controls (F5, F6, ⇧F5, F10, F11, ⇧F11) only
-while a debug session exists, with the paused line marked. A hotness overlay will appear once
+while a debug session exists, with breakpoint and paused rows tinted. Switching overlays only
+fades colors; no text moves. A hotness overlay will appear once
 the project session records source-located profile samples. Files over 600 lines are shown without highlighting
 to keep typing fast. `elide://source` links open this editor for sources inside a project.
 Run `lua tests/source.lua` for its text model and `python3 tests/source.py --runtime
