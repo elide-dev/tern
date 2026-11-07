@@ -59,8 +59,14 @@ with tempfile.TemporaryDirectory(prefix='serve-', dir='/tmp') as temporary:
             ctl('click', '[data-role="request"] .sf-tbl-body .sf-tbl-row')
             wait(lambda: 'Duration' in tree('[data-role="request-detail"]'))
             ctl('shot', 'server-requests')
+            def first_row():
+                found = ctl('tree', '[data-role="request"] .sf-tbl-body .sf-tbl-row').get('nodes', [])
+                # Where the row sits and how tall it is; its width may follow its cells.
+                return (found[0]['rect'][0], found[0]['rect'][1], found[0]['rect'][3]) if found else None
+            running_row = first_row()
             ctl('click', '[data-role="stop"]')
             wait(lambda: 'Stopped' in tree())
+            assert first_row() == running_row, 'Stopping moved the requests table'
             wait(lambda: stopped(url))
             ctl('click', '[data-role="restart"]')
             wait(lambda: 'Running' in tree())

@@ -153,6 +153,18 @@ test("a debugged test", () => {
             click('[data-role="debug-targets"] .pk-btn[data-v="choose"]')
             wait(lambda: text_is('[data-role="debug-target"]', text))
 
+        def rect(selector):
+            found = ctl('tree', selector).get('nodes', [])
+            return found[0]['rect'] if found else None
+
+        def place(box):
+            # Where a node sits and how tall it is; its width may follow a sibling's text.
+            return box and (box[0], box[1], box[3])
+
+        # Surfaces with fixed slots (a reserved toolbar row) must not move content between
+        # states; older surfaces without one are not held to it.
+        fixed_slots = False
+
         def carly(code, marker):
             ctl('carly', 'lua', code + '; return ' + json.dumps(marker))
             wait(lambda: marker in json.dumps(ctl('state').get('carly', {}).get('last_tool', {})))
@@ -187,11 +199,18 @@ test("a debugged test", () => {
             binding = broker('project_attach', root=str(project.resolve()), runtime=str(runtime))
             choose_target('main.mjs')
             breakpoint('main.mjs', 4)
+            fixed_slots = bool(ctl('tree', '[data-role="debug-toolbar"]').get('nodes'))
+            tabs_before = rect('[data-role="debug-tabs"]')
             click('[data-role="debug-launch-button"]')
             entry = wait(lambda: stopped())
             assert target_processes(), 'Debug target process was not found'
             click('[data-role="debug-continue"]')
             first = wait(lambda: stopped(4, entry['stop_epoch']))
+            frames_row = '[data-role="debug-frames"] .sf-tbl-body .sf-tbl-row'
+            if fixed_slots:
+                wait(lambda: rect(frames_row))
+                assert place(rect('[data-role="debug-tabs"]')) == place(tabs_before), 'Launching moved the tabs'
+                frame_row = rect(frames_row)
             wait(lambda: any(bp['verified'] and bp['line'] == 4 for bp in debug()['debug']['breakpoints']))
             wait(lambda: debug()['debug']['scopes'])
             assert not debug()['debug']['variables'], 'Rendering a pause must not evaluate guest values'
@@ -240,6 +259,9 @@ test("a debugged test", () => {
             ctl('shot', 'debug-dark')
             click('[data-role="debug-next"]')
             stepped = wait(lambda: stopped(5, first['stop_epoch']))
+            if fixed_slots:
+                wait(lambda: rect(frames_row))
+                assert place(rect(frames_row)) == place(frame_row), 'Stepping moved the frames'
             assert not stepped['variables'], 'Stepping must invalidate prior values'
             carly('debug_binding = await(plugins.elide.project_open(' + json.dumps(str(project), ensure_ascii=False) + ')); debug_seen = await(plugins.elide.debug_read(debug_binding)); assert(debug_seen.debug.state == "stopped"); assert(not debug_seen.controls)', 'debug-observer-ready')
             carly('await(plugins.elide.debug_takeover(debug_binding, debug_seen.debug.generation))', 'debug-controller-ready')
