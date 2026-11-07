@@ -28,6 +28,7 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
         'test("adds", () => { assert.strictEqual(1 + 1, 2); });\n'
         'test("fails", () => { assert.strictEqual(1 + 1, 3); });\n')
     (tapp / 'two.js').write_text('one\ntwo\nthree\n')
+    (tapp / 'wait.mjs').write_text('setTimeout(() => {}, 60000);\n')
     (tapp / 'nested').mkdir()
     outside = base / 'outside.txt'; outside.write_text('outside\n')
     state = base / 'state'; (state / 'config').mkdir(parents=True)
@@ -118,6 +119,12 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
         check('tap lens summary', '1 passed' in tap and '1 failed' in tap, tap)
         check('tap lens rows', 'adds' in tap and 'fails' in tap and 'strictly equal' in tap, tap)
         check('outcome segment', wait(lambda: 'Tests failed' in tree('.sl-plugin'), 10), tree('.sl-plugin'))
+
+        # An interrupted run (status 128 and up) is neither a pass nor a failure.
+        run('elide run wait.mjs')
+        time.sleep(4)
+        ctl('key', 'Control+c')
+        check('interrupted segment', wait(lambda: 'Run interrupted' in tree('.sl-plugin'), 20), tree('.sl-plugin'))
 
         # Build lens on a Java compile error.
         before = len(ctl('tree', '.sf-block').get('nodes', []))
