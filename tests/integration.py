@@ -139,11 +139,11 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
             return wait(lambda: text in tree('.toast'), 10)
         # Sources inside a known project open the Elide source block; other files open Tern's editor.
         def source_block(text):
-            return wait(lambda: text in tree('[data-role="source-editor"]'), 15)
+            return wait(lambda: text in tree('[data-role~="source-editor"]'), 15)
         ctl('open-url', 'elide://source?path=' + str(tapp / 'two.js') + '&line=2')
-        check('source link opens', source_block('three'), tree('[data-role="source-editor"]'))
+        check('source link opens', source_block('three'), tree('[data-role~="source-editor"]'))
         ctl('open-url', 'elide://source?root=' + str(tapp) + '&path=' + str(tapp / 'sample.test.mjs') + '&line=3')
-        check('source link with root opens', source_block('strictEqual'), tree('[data-role="source-editor"]'))
+        check('source link with root opens', source_block('strictEqual'), tree('[data-role~="source-editor"]'))
         ctl('open-url', 'elide://source?root=' + str(tapp) + '&path=' + str(tapp / 'elide.pkl'))
         check('non-source link opens the editor', opened(tapp / 'elide.pkl'), ctl('state').get('file_blocks'))
         def none_open(path):

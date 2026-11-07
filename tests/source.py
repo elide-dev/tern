@@ -141,8 +141,18 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
 
     cell_width = [8.04]
 
+    # Each gutter row sits on its code row: the first-character tint run of every line has the
+    # gutter's y, and the rows advance by one line height.
+    def rows_aligned():
+        rows = gutter_rows()
+        marks = sorted(n['rect'][1] for n in nodes('.sf-editor .sf-t-mark'))
+        ys = [rows[k][1] for k in sorted(rows)]
+        pitch = [b - a for a, b in zip(ys, ys[1:])]
+        aligned = all(any(abs(m - y) < 2 for y in ys) for m in marks)
+        return aligned and len(set(round(p, 1) for p in pitch)) <= 2, {'pitch': sorted(set(round(p, 2) for p in pitch)), 'marks': len(marks)}
+
     def first_text_rect():
-        found = nodes('[data-role="source-editor"] .sf-ed-text .tk-keyword')
+        found = nodes('[data-role~="source-editor"] .sf-ed-text .tk-keyword')
         return found[0].get('rect') if found else None
 
     def numbered(line, token):
@@ -202,7 +212,7 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
     def band_ok(shot, line, clear_line):
         pixel = png(out / 'live' / (shot + '.png'))
         rows = gutter_rows()
-        editor = nodes('[data-role="source-editor"]')[0]['rect']
+        editor = nodes('[data-role~="source-editor"]')[0]['rect']
         far = (editor[0] + editor[2] - 24) * 2
         mid = lambda r: (rows[r][1] + rows[r][3] / 2) * 2
         band, clear = pixel(far, mid(line)), pixel(far, mid(clear_line))
@@ -227,7 +237,7 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
 
         # elide://source with a project root opens the block, not Tern's editor.
         ctl('open-url', 'elide://source?root=' + str(project) + '&path=' + str(source) + '&line=2')
-        check('block opens from link', wait(lambda: 'classify(value)' in tree('[data-role="source-editor"]'), 30),
+        check('block opens from link', wait(lambda: 'classify(value)' in tree('[data-role~="source-editor"]'), 30),
               tree('.sf-block'))
         check('head row names file and project',
               wait(lambda: 'classify.mjs' in tree('.sf-main') and 'sourcep' in tree('.sf-main'), 30), tree('.sf-main'))
@@ -245,10 +255,10 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
             return abs(width - (5 + digits) * cell) < 1.5, {'gutter': width, 'cell': cell, 'cells': width / cell}
         ok, detail = gutter_cells(1)
         check('gutter width, single-digit file', ok, detail)
-        click('[data-role="source-editor"]')
+        click('[data-role~="source-editor"]')
 
         def editor_text():
-            found = nodes('[data-role="source-editor"] .sf-ed-text')
+            found = nodes('[data-role~="source-editor"] .sf-ed-text')
             return found[0].get('text', '') if found else ''
         def position():
             return tree('[data-role="source-position"]')
@@ -303,8 +313,8 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         wait(lambda: nodes('[data-role="source-find-input"]'), 10)
         ctl('type', 'return')
         check('find counts matches', wait(lambda: '2 matches' in tree('[data-role="source-find"]'), 10), tree('[data-role="source-find"]'))
-        check('find marks matches', wait(lambda: len([n for n in nodes('[data-role="source-editor"] .sf-t-mark')
-              if 'return' in (n.get('text') or '')]) >= 2, 10), tree('[data-role="source-editor"] .sf-t-mark'))
+        check('find marks matches', wait(lambda: len([n for n in nodes('[data-role~="source-editor"] .sf-t-mark')
+              if 'return' in (n.get('text') or '')]) >= 2, 10), tree('[data-role~="source-editor"] .sf-t-mark'))
         ctl('key', 'Enter')
         check('find selects next', wait(lambda: '6 selected' in tree('[data-role="source-selection"]'), 10), tree('.sf-dock'))
         ctl('shot', 'source-find')
@@ -325,7 +335,7 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         check('running tests moves no text', rect_before and rect_before[:2] == (rect_during or [])[:2] == (rect_after or [])[:2],
               [rect_before, rect_during, rect_after])
         check('uncovered line tinted', tinted('error', 5), tree('.sf-editor .sf-t-mark'))
-        check('coverage keeps the editor', nodes('[data-role="source-editor"]'), tree('.sf-main'))
+        check('coverage keeps the editor', nodes('[data-role~="source-editor"]'), tree('.sf-main'))
         check('hotness hidden', not nodes('[data-role="source-btn-overlay-hotness"]') and 'Hotness' not in tree('[data-role="source-overlays"]'),
               tree('[data-role="source-toolbar"]'))
         check('coverage badge', wait(lambda: '% covered' in tree('.sf-main .sf-badge'), 10), tree('.sf-main .sf-badge'))
@@ -348,6 +358,9 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         shots('source-coverage')
         ok, detail = gutter_cells(2)
         check('gutter width, 10-line file', ok, detail)
+        ok, detail = rows_aligned()
+        check('gutter rows on code rows', ok, detail)
+        print('     row pitch: %s' % detail['pitch'], flush=True)
         ok, detail = band_ok('source-coverage-light', 5, 4)
         check('uncovered band row-aligned, under the text (light)', ok, detail)
         ok, detail = band_ok('source-coverage-light', 3, 4)
@@ -358,7 +371,7 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         ok, detail = band_ok('source-coverage-light', 4, 1)
         check('unmeasured row stays untinted', not detail['tinted'], detail)
         # An unsaved edit on a measured line mutes its tint; untouched lines keep theirs.
-        click('[data-role="source-editor"]')
+        click('[data-role~="source-editor"]')
         go_line(3)
         ctl('key', 'Home')
         ctl('type', '/* a */ ')
@@ -385,7 +398,7 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         overlay('debug')
         check('debug launch offered', wait(lambda: nodes('[data-role="source-btn-debug-launch"]'), 30), tree('.sf-main'))
         check('no stepping before a target', not nodes('[data-role="source-debug-steps"]'), tree('[data-role="source-toolbar"]'))
-        click('[data-role="source-editor"]')
+        click('[data-role~="source-editor"]')
         go_line(3)
         ctl('key', 'F9')
         check('breakpoint sign', wait(lambda: signed(3, '●', 'error'), 10), gutter())
