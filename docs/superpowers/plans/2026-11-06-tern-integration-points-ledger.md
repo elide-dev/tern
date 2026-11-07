@@ -108,3 +108,4 @@ Hand-off record for the plan in `2026-11-06-tern-integration-points.md`. Keep it
 - 20:22 Sam: "excellent support for compiler diagnostics from kotlinc/javac" → Task 16 (runtime: structured diagnostics + native Build surface, W4; plugin: source-block Diagnostics overlay, build lens, Build button, W3). Dispatch W4 when a slot frees.
 - 20:25 Sam: dirty (edited) dot beside the file name is too large → sent W5 (6px status-dot size, warning token, title).
 - 20:26 Sam: gutter needs a hairline border, more vertical and some horizontal spacing → sent W5 (inset hairline, one-cell padding, symmetric 1–2px run padding, line height unchanged).
+- 20:27 Release rebuild succeeded: dist = 1.6.3+de473aac1 (from de473aac1; pre W1 fix pass). Final rebuild still needed after W2/W1/W4 land.
