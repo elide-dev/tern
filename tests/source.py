@@ -363,6 +363,13 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
               for b in ctl('state').get('file_blocks', []) if b.get('path')), ctl('state').get('file_blocks'))
         check('line numbers in gutter', wait(lambda: len(gutter()) >= 7, 10), tree('.sf-editor .sf-ed-gutter'))
         check('stylesheet accepted (no "style sheet has errors")', not sheet_errors(), sheet_errors())
+        # The toolbar's height never changes with its state (narrow split pane): measured here clean,
+        # then dirty, with the coverage badge, and with the file deleted on disk.
+        def toolbar_height():
+            found = [n['rect'][3] for n in nodes('[data-role="source-toolbar"]') if onscreen(n)]
+            return found[0] if found else None
+        toolbar_clean = toolbar_height()
+        check('toolbar measured in the split pane', toolbar_clean is not None, tree('.sf-main'))
         check('caret starts on linked line', wait(lambda: 'Ln 2,' in tree('[data-role="source-position"]'), 10),
               tree('[data-role="source-position"]'))
         # The gutter is exactly sign + digits + space + hairline + two spaces: 1 + 2 + 1 + 1 + 2 cells here.
@@ -400,6 +407,7 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         ctl('type', '// edited')
         check('typing edits the buffer', wait(lambda: '// edited' in editor_text(), 10), editor_text())
         shots('source-dirty')
+        check('toolbar height unchanged when dirty', toolbar_height() == toolbar_clean, [toolbar_clean, toolbar_height()])
         check('modified shown', wait(lambda: 'Modified' in tree('[data-role="source-modified"]')
               and nodes('[data-role="source-dirty"] .sf-t-warning') and nodes('[data-role="source-btn-save"]'), 10), tree('.sf-main'))
         ctl('key', 'Meta+s')
@@ -450,6 +458,12 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         click('[data-role="source-confirm"]')
         check('reload takes the disk version', wait(lambda: not nodes('[data-role="source-modified"]')
               and not nodes('[data-role="source-confirm-strip"]'), 15), tree('.sf-dock'))
+        aside = source.with_name('classify.aside')
+        source.rename(aside)
+        check('deleted on disk shown', wait(lambda: 'Deleted on disk' in tree('.sf-main .sf-badge'), 15), tree('.sf-main .sf-badge'))
+        check('toolbar height unchanged when deleted on disk', toolbar_height() == toolbar_clean, [toolbar_clean, toolbar_height()])
+        aside.rename(source)
+        wait(lambda: 'Deleted on disk' not in tree('.sf-main .sf-badge'), 15)
 
         # Find marks matches and selects the next one; go to line moves the caret.
         ctl('key', 'Control+f')
@@ -482,6 +496,7 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         check('hotness hidden', not nodes('[data-role="source-btn-overlay-hotness"]') and 'Hotness' not in tree('[data-role="source-overlays"]'),
               tree('[data-role="source-toolbar"]'))
         check('coverage badge', wait(lambda: '% covered' in tree('.sf-main .sf-badge'), 10), tree('.sf-main .sf-badge'))
+        check('toolbar height unchanged with the coverage badge', toolbar_height() == toolbar_clean, [toolbar_clean, toolbar_height()])
         print('     partial line tinted: %s' % tinted('warning', 8), flush=True)
         # `inferred` lines (closers, blanks, comments) render at half the covered tint once the
         # broker's coverage page carries that state.

@@ -1910,8 +1910,8 @@ local function toolbar(state)
     justify = "between",
     align = "center",
     gap = "sm",
-    -- A last resort: the compact row fits a split pane, but a wrap beats clipping.
-    wrap = true,
+    -- No wrap: the row's height never changes (Save appearing, a longer badge, "Deleted on disk");
+    -- the breadcrumb shrinks and folds its folders instead.
   }, {
     ui.node("row", { key = "start", gap = "sm", align = "center", shrink = 1 }, left),
     ui.node("row", { key = "end", gap = "sm", align = "center" }, right),
