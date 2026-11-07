@@ -1,32 +1,266 @@
 /* The Elide source editor block, only where Tern's props stop (docs/architecture.md, "Source block").
-   Every rule is scoped to the block's surface and colored with Tern's tokens. No prop removes a
-   region's padding, so these rules make the editor run full-bleed from under the toolbar to the
-   status bar and give the toolbar and the transient strips their own tight spacing. */
+   Every rule is scoped to the block's surface and colored with Tern's tokens. */
 
+/* Full bleed: no prop removes a region's side padding. The toolbar and dock strips keep Tern's
+   vertical rhythm with their own padding. */
 .sf-region.sf-main[data-surface="plugin.elide.source"],
 .sf-region.sf-dock[data-surface="plugin.elide.source"] {
-  padding: 0;
-  gap: 0;
+  padding-left: 0;
+  padding-right: 0;
+}
+.sf-region.sf-main[data-surface="plugin.elide.source"] {
+  padding-top: 0;
 }
 [data-surface="plugin.elide.source"] [data-role="source-toolbar"] {
-  padding: 4px 8px;
+  padding: 6px 10px;
   box-shadow: inset 0 -1px 0 var(--l2);
 }
 [data-surface="plugin.elide.source"] [data-role="source-empty"],
 [data-surface="plugin.elide.source"] [data-role="source-error"],
 [data-surface="plugin.elide.source"] [data-role="source-loading"],
 [data-surface="plugin.elide.source"] [data-role="source-confirm-strip"] {
-  margin: 4px 8px;
+  margin: 0 10px;
 }
 [data-surface="plugin.elide.source"] [data-role="source-find"],
 [data-surface="plugin.elide.source"] [data-role="source-go"] {
-  padding: 4px 8px;
+  padding: 6px 10px;
   box-shadow: inset 0 1px 0 var(--l2);
 }
 [data-surface="plugin.elide.source"] .sf-editor[data-role="source-editor"],
-[data-surface="plugin.elide.source"] .sf-editor[data-role="source-editor"].focused,
-[data-surface="plugin.elide.source"] .sf-code[data-role="source-coverage"] {
+[data-surface="plugin.elide.source"] .sf-editor[data-role="source-editor"].focused {
   border-radius: 0;
   box-shadow: none;
   background: transparent;
+}
+
+/* Line tints. Tern's only background span token is `mark`. Every line carries a `mark <tone>` run
+   on its first character; these rules give the run an opaque tint (mixed into the page color, so
+   overlapping copies never stripe) and repeat it with zero-spread shadows every 0.9ch to the right (overlapping, so no seams show),
+   drawing a one-row band that the editor's scroller clips and that later text (the line, the
+   end-of-line note, the caret) paints over. `dim` is transparent. The run's box never changes, so
+   switching overlays moves nothing; colors fade. Syntax colors stay. */
+[data-surface="plugin.elide.source"] .sf-editor .sf-t-mark {
+  --elide-tint: transparent;
+  color: inherit;
+  border-radius: 0;
+  padding: 0;
+  margin: 0;
+  background-color: var(--elide-tint);
+  box-shadow: none;
+  transition: background-color 140ms ease-out, box-shadow 140ms ease-out;
+}
+[data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-success {
+  --elide-tint: color-mix(in srgb, var(--ok) 13%, var(--page));
+}
+[data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-error {
+  --elide-tint: color-mix(in srgb, var(--bad) 12%, var(--page));
+}
+[data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-warning {
+  --elide-tint: color-mix(in srgb, var(--warn) 16%, var(--page));
+}
+[data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-muted {
+  --elide-tint: color-mix(in srgb, var(--t3) 9%, var(--page));
+}
+/* The paused line reads stronger than a breakpoint line. */
+[data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-accent {
+  --elide-tint: color-mix(in srgb, var(--accent) 22%, var(--page));
+}
+/* Only toned runs draw the band, so neutral lines cost nothing to paint. */
+[data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-success,
+[data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-error,
+[data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-warning,
+[data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-muted,
+[data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-accent {
+  box-shadow:
+    0.9ch 0 0 0 var(--elide-tint),
+    1.8ch 0 0 0 var(--elide-tint),
+    2.7ch 0 0 0 var(--elide-tint),
+    3.6ch 0 0 0 var(--elide-tint),
+    4.5ch 0 0 0 var(--elide-tint),
+    5.4ch 0 0 0 var(--elide-tint),
+    6.3ch 0 0 0 var(--elide-tint),
+    7.2ch 0 0 0 var(--elide-tint),
+    8.1ch 0 0 0 var(--elide-tint),
+    9.0ch 0 0 0 var(--elide-tint),
+    9.9ch 0 0 0 var(--elide-tint),
+    10.8ch 0 0 0 var(--elide-tint),
+    11.7ch 0 0 0 var(--elide-tint),
+    12.6ch 0 0 0 var(--elide-tint),
+    13.5ch 0 0 0 var(--elide-tint),
+    14.4ch 0 0 0 var(--elide-tint),
+    15.3ch 0 0 0 var(--elide-tint),
+    16.2ch 0 0 0 var(--elide-tint),
+    17.1ch 0 0 0 var(--elide-tint),
+    18.0ch 0 0 0 var(--elide-tint),
+    18.9ch 0 0 0 var(--elide-tint),
+    19.8ch 0 0 0 var(--elide-tint),
+    20.7ch 0 0 0 var(--elide-tint),
+    21.6ch 0 0 0 var(--elide-tint),
+    22.5ch 0 0 0 var(--elide-tint),
+    23.4ch 0 0 0 var(--elide-tint),
+    24.3ch 0 0 0 var(--elide-tint),
+    25.2ch 0 0 0 var(--elide-tint),
+    26.1ch 0 0 0 var(--elide-tint),
+    27.0ch 0 0 0 var(--elide-tint),
+    27.9ch 0 0 0 var(--elide-tint),
+    28.8ch 0 0 0 var(--elide-tint),
+    29.7ch 0 0 0 var(--elide-tint),
+    30.6ch 0 0 0 var(--elide-tint),
+    31.5ch 0 0 0 var(--elide-tint),
+    32.4ch 0 0 0 var(--elide-tint),
+    33.3ch 0 0 0 var(--elide-tint),
+    34.2ch 0 0 0 var(--elide-tint),
+    35.1ch 0 0 0 var(--elide-tint),
+    36.0ch 0 0 0 var(--elide-tint),
+    36.9ch 0 0 0 var(--elide-tint),
+    37.8ch 0 0 0 var(--elide-tint),
+    38.7ch 0 0 0 var(--elide-tint),
+    39.6ch 0 0 0 var(--elide-tint),
+    40.5ch 0 0 0 var(--elide-tint),
+    41.4ch 0 0 0 var(--elide-tint),
+    42.3ch 0 0 0 var(--elide-tint),
+    43.2ch 0 0 0 var(--elide-tint),
+    44.1ch 0 0 0 var(--elide-tint),
+    45.0ch 0 0 0 var(--elide-tint),
+    45.9ch 0 0 0 var(--elide-tint),
+    46.8ch 0 0 0 var(--elide-tint),
+    47.7ch 0 0 0 var(--elide-tint),
+    48.6ch 0 0 0 var(--elide-tint),
+    49.5ch 0 0 0 var(--elide-tint),
+    50.4ch 0 0 0 var(--elide-tint),
+    51.3ch 0 0 0 var(--elide-tint),
+    52.2ch 0 0 0 var(--elide-tint),
+    53.1ch 0 0 0 var(--elide-tint),
+    54.0ch 0 0 0 var(--elide-tint),
+    54.9ch 0 0 0 var(--elide-tint),
+    55.8ch 0 0 0 var(--elide-tint),
+    56.7ch 0 0 0 var(--elide-tint),
+    57.6ch 0 0 0 var(--elide-tint),
+    58.5ch 0 0 0 var(--elide-tint),
+    59.4ch 0 0 0 var(--elide-tint),
+    60.3ch 0 0 0 var(--elide-tint),
+    61.2ch 0 0 0 var(--elide-tint),
+    62.1ch 0 0 0 var(--elide-tint),
+    63.0ch 0 0 0 var(--elide-tint),
+    63.9ch 0 0 0 var(--elide-tint),
+    64.8ch 0 0 0 var(--elide-tint),
+    65.7ch 0 0 0 var(--elide-tint),
+    66.6ch 0 0 0 var(--elide-tint),
+    67.5ch 0 0 0 var(--elide-tint),
+    68.4ch 0 0 0 var(--elide-tint),
+    69.3ch 0 0 0 var(--elide-tint),
+    70.2ch 0 0 0 var(--elide-tint),
+    71.1ch 0 0 0 var(--elide-tint),
+    72.0ch 0 0 0 var(--elide-tint),
+    72.9ch 0 0 0 var(--elide-tint),
+    73.8ch 0 0 0 var(--elide-tint),
+    74.7ch 0 0 0 var(--elide-tint),
+    75.6ch 0 0 0 var(--elide-tint),
+    76.5ch 0 0 0 var(--elide-tint),
+    77.4ch 0 0 0 var(--elide-tint),
+    78.3ch 0 0 0 var(--elide-tint),
+    79.2ch 0 0 0 var(--elide-tint),
+    80.1ch 0 0 0 var(--elide-tint),
+    81.0ch 0 0 0 var(--elide-tint),
+    81.9ch 0 0 0 var(--elide-tint),
+    82.8ch 0 0 0 var(--elide-tint),
+    83.7ch 0 0 0 var(--elide-tint),
+    84.6ch 0 0 0 var(--elide-tint),
+    85.5ch 0 0 0 var(--elide-tint),
+    86.4ch 0 0 0 var(--elide-tint),
+    87.3ch 0 0 0 var(--elide-tint),
+    88.2ch 0 0 0 var(--elide-tint),
+    89.1ch 0 0 0 var(--elide-tint),
+    90.0ch 0 0 0 var(--elide-tint),
+    90.9ch 0 0 0 var(--elide-tint),
+    91.8ch 0 0 0 var(--elide-tint),
+    92.7ch 0 0 0 var(--elide-tint),
+    93.6ch 0 0 0 var(--elide-tint),
+    94.5ch 0 0 0 var(--elide-tint),
+    95.4ch 0 0 0 var(--elide-tint),
+    96.3ch 0 0 0 var(--elide-tint),
+    97.2ch 0 0 0 var(--elide-tint),
+    98.1ch 0 0 0 var(--elide-tint),
+    99.0ch 0 0 0 var(--elide-tint),
+    99.9ch 0 0 0 var(--elide-tint),
+    100.8ch 0 0 0 var(--elide-tint),
+    101.7ch 0 0 0 var(--elide-tint),
+    102.6ch 0 0 0 var(--elide-tint),
+    103.5ch 0 0 0 var(--elide-tint),
+    104.4ch 0 0 0 var(--elide-tint),
+    105.3ch 0 0 0 var(--elide-tint),
+    106.2ch 0 0 0 var(--elide-tint),
+    107.1ch 0 0 0 var(--elide-tint),
+    108.0ch 0 0 0 var(--elide-tint),
+    108.9ch 0 0 0 var(--elide-tint),
+    109.8ch 0 0 0 var(--elide-tint),
+    110.7ch 0 0 0 var(--elide-tint),
+    111.6ch 0 0 0 var(--elide-tint),
+    112.5ch 0 0 0 var(--elide-tint),
+    113.4ch 0 0 0 var(--elide-tint),
+    114.3ch 0 0 0 var(--elide-tint),
+    115.2ch 0 0 0 var(--elide-tint),
+    116.1ch 0 0 0 var(--elide-tint),
+    117.0ch 0 0 0 var(--elide-tint),
+    117.9ch 0 0 0 var(--elide-tint),
+    118.8ch 0 0 0 var(--elide-tint),
+    119.7ch 0 0 0 var(--elide-tint),
+    120.6ch 0 0 0 var(--elide-tint),
+    121.5ch 0 0 0 var(--elide-tint),
+    122.4ch 0 0 0 var(--elide-tint),
+    123.3ch 0 0 0 var(--elide-tint),
+    124.2ch 0 0 0 var(--elide-tint),
+    125.1ch 0 0 0 var(--elide-tint),
+    126.0ch 0 0 0 var(--elide-tint),
+    126.9ch 0 0 0 var(--elide-tint),
+    127.8ch 0 0 0 var(--elide-tint),
+    128.7ch 0 0 0 var(--elide-tint),
+    129.6ch 0 0 0 var(--elide-tint),
+    130.5ch 0 0 0 var(--elide-tint),
+    131.4ch 0 0 0 var(--elide-tint),
+    132.3ch 0 0 0 var(--elide-tint),
+    133.2ch 0 0 0 var(--elide-tint),
+    134.1ch 0 0 0 var(--elide-tint),
+    135.0ch 0 0 0 var(--elide-tint),
+    135.9ch 0 0 0 var(--elide-tint),
+    136.8ch 0 0 0 var(--elide-tint),
+    137.7ch 0 0 0 var(--elide-tint),
+    138.6ch 0 0 0 var(--elide-tint),
+    139.5ch 0 0 0 var(--elide-tint),
+    140.4ch 0 0 0 var(--elide-tint),
+    141.3ch 0 0 0 var(--elide-tint),
+    142.2ch 0 0 0 var(--elide-tint),
+    143.1ch 0 0 0 var(--elide-tint),
+    144.0ch 0 0 0 var(--elide-tint),
+    144.9ch 0 0 0 var(--elide-tint),
+    145.8ch 0 0 0 var(--elide-tint),
+    146.7ch 0 0 0 var(--elide-tint),
+    147.6ch 0 0 0 var(--elide-tint),
+    148.5ch 0 0 0 var(--elide-tint),
+    149.4ch 0 0 0 var(--elide-tint),
+    150.3ch 0 0 0 var(--elide-tint),
+    151.2ch 0 0 0 var(--elide-tint),
+    152.1ch 0 0 0 var(--elide-tint),
+    153.0ch 0 0 0 var(--elide-tint),
+    153.9ch 0 0 0 var(--elide-tint),
+    154.8ch 0 0 0 var(--elide-tint),
+    155.7ch 0 0 0 var(--elide-tint),
+    156.6ch 0 0 0 var(--elide-tint),
+    157.5ch 0 0 0 var(--elide-tint),
+    158.4ch 0 0 0 var(--elide-tint),
+    159.3ch 0 0 0 var(--elide-tint),
+    160.2ch 0 0 0 var(--elide-tint),
+    161.1ch 0 0 0 var(--elide-tint),
+    162.0ch 0 0 0 var(--elide-tint);
+}
+/* Find matches sit above any line tint. */
+[data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-info {
+  --elide-tint: transparent;
+  background-color: rgb(from var(--accent) r g b / 30%);
+  box-shadow: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-surface="plugin.elide.source"] .sf-editor .sf-t-mark {
+    transition: none;
+  }
 }
