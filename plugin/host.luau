@@ -249,11 +249,6 @@ local HIGHLIGHT_LINES = 600
 local ACCENT_LINES = 2000
 local OVERLAYS = { "none", "coverage", "debug", "hotness" }
 local HOTNESS_REASON = "Profiles are not source-located yet: the broker has no project_profile_page operation."
-local SIGNS = {
-  covered = { "●", "success" },
-  uncovered = { "●", "error" },
-  partial = { "◐", "warning" },
-}
 local DEBUG_WORDS = {
   starting = { "Starting", "accent" },
   running = { "Running", "accent" },
@@ -1023,7 +1018,11 @@ local function step(state, cx, kind)
   if not target then
     return
   end
-  if kind ~= "stop" and target.state ~= "stopped" then
+  if kind == "pause" then
+    if target.state ~= "running" then
+      return
+    end
+  elseif kind ~= "stop" and target.state ~= "stopped" then
     return
   end
   request(state, cx, target, { kind = kind })
@@ -1163,13 +1162,24 @@ end
 -- View -----------------------------------------------------------------------------------------
 
 -- Lines the editor shows: the pane's rows less the head, overlay bar, dock fields and status bar.
+-- Lines the editor shows: the pane's rows less the toolbar, any overlay strip, the dock's fields
+-- and the status bar.
 local function visible(state, cx)
-  local chrome = 7
-  if state.mode ~= "none" then
-    chrome += 3
+  local chrome = 4
+  -- The toolbar wraps in narrow panes: one more row below about 110 columns, and the debugger's
+  -- wells take another below about 150.
+  local cols = cx.cols or 120
+  if cols < 110 then
+    chrome += 2
+  end
+  if state.mode == "debug" and cols < 150 then
+    chrome += 2
+  end
+  if state.strip then
+    chrome += 4
   end
   if state.find or state.go then
-    chrome += 3
+    chrome += 2
   end
   if state.confirm then
     chrome += 4
@@ -1177,6 +1187,25 @@ local function visible(state, cx)
   return math.max(4, (cx.rows or 24) - chrome)
 end
 
+-- Whole-line tints. Tern's only background token is `mark`; plugin/styles/source.css gives
+-- `mark` with a tone token that tone's faint tint inside this block (docs/architecture.md).
+local TINTS = {
+  covered = "mark success",
+  uncovered = "mark error",
+  partial = "mark warning",
+  stale = "mark dim",
+  breakpoint = "mark error",
+  stop = "mark accent",
+}
+
+local function tint(decor, starts, buf, line, kind)
+  if buf.lens[line] > 0 then
+    table.insert(decor, { from = starts[line], to = starts[line] + buf.lens[line], s = TINTS[kind] })
+  end
+end
+
+-- Gutter cells are `[sign] [number] │ `: a fixed sign cell left of right-aligned numbers, blank on
+-- lines without a sign, so toggling a breakpoint shifts nothing.
 local function lines_view(state, starts)
   local buf = state.buf
   local count = #buf.lines
@@ -1188,7 +1217,6 @@ local function lines_view(state, starts)
   local coverage = state.coverage
   local marks = state.mode == "coverage" and coverage.state == "ready" and coverage.marks or nil
   local debugging = state.mode == "debug"
-  local signs = state.mode ~= "none"
   local debug = state.debug
   local points = {}
   if debugging then
@@ -1204,35 +1232,33 @@ local function lines_view(state, starts)
       local mark = base and marks[base]
       if mark then
         local stale = coverage.stale or coverage.lines[base] ~= buf.lines[line]
-        glyph, tone = SIGNS[mark.state][1], stale and "dim" or SIGNS[mark.state][2]
+        tint(decor, starts, buf, line, stale and "stale" or mark.state)
         if mark.state == "partial" and mark.branches and not stale then
-          note = { ui.span("  " .. mark.branches.covered .. "/" .. mark.branches.total .. " branches", "warning") }
+          note = { ui.span("  " .. mark.branches.covered .. "/" .. mark.branches.total .. " branches", "muted") }
         end
       end
     elseif debugging then
       if debug.stop == line then
         glyph, tone = "▶", "accent"
-        local reason = debug.snap and debug.snap.debug.reason
-        note = { ui.span("  ◀ paused" .. (type(reason) == "string" and (" · " .. reason) or ""), "accent") }
-        table.insert(decor, { from = starts[line], to = starts[line] + buf.lens[line], s = "mark" })
+        note = { ui.span("  paused", "accent") }
+        tint(decor, starts, buf, line, "stop")
       elseif points[line] then
         local point = debug.verified and debug.verified[line]
         if point and not point.verified and active(debug) then
           glyph, tone = "○", "warning"
-          if type(point.message) == "string" then
-            note = { ui.span("  " .. point.message, "muted") }
-          end
+          note = { ui.span("  " .. (type(point.message) == "string" and point.message or "unverified"), "muted") }
         else
           glyph, tone = "●", "error"
+          note = { ui.span("  breakpoint", "dim") }
+          tint(decor, starts, buf, line, "breakpoint")
         end
       end
     end
-    local entry = { ui.span(source.number(line, width), line == caret and "accent" or "dim"), ui.span(" ") }
-    if signs then
-      table.insert(entry, tone and ui.span(glyph, tone) or ui.span(glyph))
-      table.insert(entry, ui.span(" "))
-    end
-    gutter[line] = entry
+    gutter[line] = {
+      tone and ui.span(glyph, tone) or ui.span(glyph),
+      ui.span(" " .. source.number(line, width), line == caret and "strong" or "dim"),
+      ui.span(" │ ", "dim"),
+    }
     virt[line] = note
     any_virt = any_virt or note ~= ""
   end
@@ -1242,84 +1268,177 @@ local function lines_view(state, starts)
       table.insert(decor, {
         from = starts[match.l] + match.from,
         to = starts[match.l] + match.to,
-        s = index == find.index and "mark accent" or "mark",
+        s = index == find.index and "mark strong" or "mark",
       })
     end
   end
   return gutter, any_virt and virt or nil, #decor > 0 and decor or nil
 end
 
--- The tone of a file's coverage percentage, shared by the head badge and the status bar.
+-- The tone of a file's coverage percentage, shared by the badge and the status bar.
 local function coverage_tone(percent)
   return percent >= 80 and "success" or percent >= 50 and "warning" or "error"
 end
 
-local function overlay_badges(state)
-  local badges = {}
-  if buffer.dirty(state.buf) then
-    table.insert(badges, ui.badge("Unsaved", "warning"))
-  end
-  if state.missing then
-    table.insert(badges, ui.badge("Deleted on disk", "error"))
-  end
+-- The overlay's state in words and tone, for the toolbar badge and the status bar.
+local function overlay_state(state)
   if state.mode == "coverage" then
     local coverage = state.coverage
     if coverage.state == "ready" then
       local percent = source.percent(coverage.covered, coverage.total)
-      if percent then
-        local tone = coverage_tone(percent)
-        table.insert(badges, ui.badge(percent .. "% covered", tone))
-      else
-        table.insert(badges, ui.badge("No measured lines", "muted"))
+      if not percent then
+        return "No measured lines", "muted"
       end
-      if coverage.stale then
-        table.insert(badges, ui.badge("Measured an older version", "muted"))
-      elseif not coverage.complete then
-        table.insert(badges, ui.badge("Incomplete", "warning"))
-      end
+      return percent .. "% covered", coverage.stale and "muted" or coverage_tone(percent)
     elseif coverage.state == "running" then
-      table.insert(badges, ui.badge("Running tests", "accent"))
+      return "Running tests", "accent"
     end
+    return nil
   elseif state.mode == "debug" and state.debug.snap then
-    local snap = state.debug.snap
-    local word = DEBUG_WORDS[snap.debug.state] or { tostring(snap.debug.state), "muted" }
-    table.insert(badges, ui.badge(word[1], word[2]))
-    if active(state.debug) and snap.controller ~= "you" then
-      table.insert(badges, ui.badge("Observing", "muted"))
+    local target = state.debug.snap.debug
+    if target.state == "stopped" then
+      return state.debug.stop and ("Paused at " .. state.debug.stop) or "Paused", "pending"
     end
+    local word = DEBUG_WORDS[target.state] or { tostring(target.state), "muted" }
+    return word[1], word[2]
   end
-  for index, badge in badges do
-    badge.p.key = "badge" .. index
-    badge.p.role = "source-badge"
-  end
-  return badges
+  return nil
 end
 
-local function head(state)
-  local folder = state.relative and string.match(state.relative, "^(.*)/[^/]*$")
-  local facts = {}
-  if folder then
-    table.insert(facts, folder)
+local function icon_button(key, label, icon, keys, act, extra)
+  local props = {
+    key = key,
+    role = "source-btn-" .. key,
+    icon = icon,
+    title = label,
+    aria = label,
+    keys = keys,
+    actions = { click = act },
+  }
+  for name, value in extra or {} do
+    props[name] = value
   end
-  if state.project then
-    table.insert(facts, state.project)
+  return ui.button("", props)
+end
+
+-- The debugger's two wells, as the Debug surface draws them: run control, then stepping.
+local function debug_wells(state)
+  local debug = state.debug
+  local live = active(debug)
+  local target = live and debug.snap.debug or nil
+  local controls = live and debug.snap.controller == "you"
+  local reason = nil
+  if state.attach ~= "ready" then
+    reason = "Attaching to the project"
+  elseif not source.debuggable(state.path) then
+    reason = "Debugging takes JavaScript, TypeScript or Python sources"
+  elseif live and not controls then
+    reason = "Another attachment controls this target"
   end
-  if not state.relative then
-    table.insert(facts, string.match(state.path, "^(.*)/[^/]*$") or "")
-  end
-  local right = overlay_badges(state)
-  table.insert(
-    right,
-    ui.button("Save", {
-      key = "save",
-      role = "source-save",
-      keys = { "cmd", "s" },
-      disabled = not buffer.dirty(state.buf) and "No unsaved changes" or nil,
-      actions = { click = "save" },
+  local paused = target and target.state == "stopped"
+  local resume_reason = reason or (target and not paused and "The target is running") or nil
+  local busy = target and target.pending == true or debug.launching == true
+  local step_reason = reason
+    or (not live and "No target is running")
+    or (not paused and "The target is not paused")
+    or nil
+  return ui.node("buttons", { key = "run", role = "source-debug-run", variant = "toolbar", label = "Run control" }, {
+    icon_button(
+      "debug-resume",
+      live and "Resume (F5)" or ("Launch " .. state.name .. " (F5)"),
+      "play",
+      { "f5" },
+      live and "continue" or "launch",
+      { variant = not resume_reason and "primary" or nil, disabled = resume_reason, busy = busy }
+    ),
+    icon_button("debug-pause", "Pause (F6)", "pause", { "f6" }, "pause", {
+      disabled = reason or (not live and "No target is running") or (paused and "The target is paused") or nil,
+    }),
+    icon_button("debug-stop", "Stop (⇧F5)", "stop", { "shift", "f5" }, "stop", {
+      variant = "danger",
+      disabled = reason or (not live and "No target is running") or nil,
+    }),
+  }),
+    ui.node("buttons", { key = "steps", role = "source-debug-steps", variant = "toolbar", label = "Stepping" }, {
+      icon_button("debug-next", "Step over (F10)", "redo", { "f10" }, "next", { disabled = step_reason, busy = busy }),
+      icon_button("debug-step_in", "Step into (F11)", "arrow-down", { "f11" }, "step_in", {
+        disabled = step_reason,
+        busy = busy,
+      }),
+      icon_button("debug-step_out", "Step out (⇧F11)", "arrow-up", { "shift", "f11" }, "step_out", {
+        disabled = step_reason,
+        busy = busy,
+      }),
     })
-  )
-  table.insert(
-    right,
+end
+
+local KEYS = {
+  { header = "File" },
+  { id = "save", label = "Save", icon = "save", keys = { "cmd", "S" } },
+  { id = "open", label = "Edit in Tern", icon = "open" },
+  { header = "Edit" },
+  { id = "undo", label = "Undo", icon = "undo", keys = { "cmd", "Z" } },
+  { id = "redo", label = "Redo", icon = "redo", keys = { "cmd", "shift", "Z" } },
+  { id = "comment", label = "Toggle line comment", keys = { "cmd", "/" } },
+  { id = "line_below", label = "New line below", keys = { "cmd", "enter" } },
+  { id = "select_all", label = "Select all", icon = "selection", keys = { "cmd", "A" } },
+  { header = "Navigate" },
+  { id = "find", label = "Find", icon = "search", keys = { "ctrl", "F" } },
+  { id = "goto", label = "Go to line", icon = "hash", keys = { "ctrl", "G" } },
+  { id = "wrap", label = "Soft wrap", icon = "corner-down-right", keys = { "alt", "Z" } },
+  { header = "Overlays" },
+  { id = "mode=none", label = "No overlay", keys = { "alt", "1" } },
+  { id = "mode=coverage", label = "Coverage", keys = { "alt", "2" } },
+  { id = "mode=debug", label = "Debug", keys = { "alt", "3" } },
+  { id = "run_coverage", label = "Run with coverage", icon = "run", keys = "F5" },
+  { id = "refresh", label = "Refresh coverage", icon = "repeat", keys = "F6" },
+  { id = "breakpoint", label = "Toggle breakpoint", keys = "F9" },
+  { id = "stop_line", label = "Go to the paused line", keys = "F7" },
+}
+
+local function toolbar(state)
+  local buf = state.buf
+  local crumbs = {}
+  local relative = state.relative or state.path
+  local walked = state.relative and state.root or ""
+  if state.project then
+    table.insert(crumbs, { id = state.root, label = state.project })
+  end
+  for part in string.gmatch(relative, "[^/]+") do
+    walked = walked .. "/" .. part
+    table.insert(crumbs, { id = walked, label = part })
+  end
+  local left = {
+    ui.node("breadcrumb", {
+      key = "path",
+      role = "source-path",
+      variant = "path",
+      max = 4,
+      items = crumbs,
+      shrink = 1,
+    }),
+  }
+  if buffer.dirty(buf) then
+    local dot = ui.text({ ui.span("●", "warning") })
+    dot.p.key = "dirty"
+    dot.p.role = "source-dirty"
+    dot.p.title = "Unsaved changes"
+    table.insert(left, dot)
+  end
+  local word, tone = overlay_state(state)
+  if word then
+    local badge = ui.badge(word, tone)
+    badge.p.key = "state"
+    badge.p.role = "source-badge"
+    table.insert(left, badge)
+  end
+  if state.missing then
+    local badge = ui.badge("Deleted on disk", "error")
+    badge.p.key = "missing"
+    badge.p.role = "source-badge"
+    table.insert(left, badge)
+  end
+  local right = {
     ui.node("tabs", {
       key = "overlay",
       role = "source-overlays",
@@ -1331,29 +1450,84 @@ local function head(state)
         { id = "debug", label = "Debug" },
         { id = "hotness", label = { ui.span("Hotness", "dim") }, disabled = HOTNESS_REASON },
       },
+    }),
+  }
+  if state.mode == "debug" then
+    local run, steps = debug_wells(state)
+    table.insert(right, run)
+    table.insert(right, steps)
+  elseif state.mode == "coverage" and state.coverage.state == "ready" then
+    table.insert(
+      right,
+      ui.node(
+        "buttons",
+        { key = "coverage", role = "source-coverage-tools", variant = "toolbar", label = "Coverage" },
+        {
+          icon_button("run-coverage", "Run with coverage (F5)", "run", nil, "run_coverage"),
+          icon_button("refresh", "Refresh coverage (F6)", "repeat", nil, "refresh"),
+        }
+      )
+    )
+  end
+  local dirty = buffer.dirty(buf)
+  table.insert(
+    right,
+    ui.node("buttons", { key = "tools", role = "source-tools", variant = "toolbar", label = "Editor" }, {
+      icon_button("save", "Save (⌘S)", "save", nil, "save", {
+        variant = dirty and "primary" or nil,
+        disabled = not dirty and "No unsaved changes" or nil,
+      }),
+      icon_button("find", "Find (⌃F)", "search", nil, "find", { on = state.find ~= nil }),
+      icon_button("goto", "Go to line (⌃G)", "hash", nil, "goto", { on = state.go ~= nil }),
+      icon_button("wrap", "Soft wrap (⌥Z)", "corner-down-right", nil, "wrap", { on = state.wrap }),
+      icon_button("edit", "Edit in Tern", "open", nil, "open", {
+        href = source.file_url(state.path, buf.cursor.l),
+      }),
     })
   )
-  local title = ui.text({ ui.span(state.name, "title"), ui.span("   " .. table.concat(facts, " · "), "muted") })
-  title.p.basis = "content"
-  return ui.node("row", { key = "head", justify = "between", align = "center", gap = "md", wrap = true }, {
-    title,
+  table.insert(
+    right,
+    ui.node("menu", {
+      key = "keys",
+      role = "source-keys",
+      icon = "keyboard",
+      title = "Keyboard shortcuts",
+      trigger = "quiet",
+      align = "end",
+      variant = "dense",
+      items = KEYS,
+    })
+  )
+  return ui.node("row", {
+    key = "head",
+    role = "source-toolbar",
+    justify = "between",
+    align = "center",
+    gap = "md",
+    wrap = true,
+  }, {
+    ui.node("row", { key = "start", gap = "sm", align = "center", shrink = 1 }, left),
     ui.node("row", { key = "end", gap = "sm", align = "center", wrap = true }, right),
   })
 end
 
 local function error_card(title, message, act)
   return ui.card(title, {
-    ui.button("Retry", { key = "end", icon = "repeat", actions = { click = act } }),
+    ui.button("Retry", { key = "end", icon = "repeat", size = "sm", actions = { click = act } }),
     ui.code(message),
-  }, { key = "status", role = "source-error", tone = "error", ["end"] = "main.status.end" })
+  }, { key = "strip", role = "source-error", tone = "error", ["end"] = "main.strip.end" })
 end
 
 local function inline_empty(title, text, button, tone)
-  return ui.node(
-    "empty",
-    { key = "status", role = "source-empty", variant = "inline", frame = true, title = title, text = text, tone = tone },
-    button and { button } or nil
-  )
+  return ui.node("empty", {
+    key = "strip",
+    role = "source-empty",
+    variant = "inline",
+    frame = true,
+    title = title,
+    text = text,
+    tone = tone,
+  }, button and { button } or nil)
 end
 
 local function run_button(variant)
@@ -1362,132 +1536,19 @@ local function run_button(variant)
     role = "source-run-coverage",
     variant = variant,
     size = "sm",
-    icon = "play",
+    icon = "run",
     keys = { "f5" },
     actions = { click = "run_coverage" },
   })
 end
 
-local function bar(description, buttons)
-  local text = ui.text(description)
-  text.p.basis = "content"
-  return ui.node("row", { key = "status", role = "source-bar", justify = "between", align = "center", wrap = true }, {
-    text,
-    ui.node("buttons", { key = "actions", label = "Overlay actions", basis = "content" }, buttons),
-  })
+local function shimmer(text)
+  return ui.node("shimmer", { key = "strip", role = "source-loading", text = text })
 end
 
-local function coverage_status(state)
-  local coverage = state.coverage
-  if coverage.state == "missing" then
-    return inline_empty(
-      "No coverage yet",
-      "Run the project's tests with coverage to mark covered and uncovered lines.",
-      run_button("primary")
-    )
-  elseif coverage.state == "running" then
-    return ui.node("shimmer", { key = "status", role = "source-loading", text = "Running tests with coverage…" })
-  elseif coverage.state == "loading" or coverage.state == "idle" then
-    return ui.node("shimmer", { key = "status", role = "source-loading", text = "Fetching coverage…" })
-  elseif coverage.state == "absent" then
-    return inline_empty(
-      "This file wasn't measured",
-      "The latest coverage run measured other files.",
-      run_button("default")
-    )
-  elseif coverage.state == "unavailable" then
-    return inline_empty("No coverage for this run", coverage.message, run_button("default"), "warning")
-  elseif coverage.state == "error" then
-    return error_card("Couldn't fetch coverage", coverage.error or "", "refresh")
-  end
-  local description = {
-    ui.span("Run ", "muted"),
-    ui.span(string.sub(tostring(coverage.run), 1, 8), "mono"),
-    ui.span(" · " .. coverage.covered .. " of " .. coverage.total .. " measured lines covered", "muted"),
-  }
-  if coverage.stale then
-    table.insert(description, ui.span(" · the file changed since; marks are dimmed", "muted"))
-  end
-  return bar(description, {
-    ui.button("Refresh", { key = "refresh", icon = "repeat", keys = { "f6" }, actions = { click = "refresh" } }),
-    run_button("default"),
-  })
-end
-
-local function debug_status(state)
-  local debug = state.debug
-  if not source.debuggable(state.path) then
-    return inline_empty("Can't debug this file", "Debugging takes JavaScript, TypeScript or Python sources.")
-  end
-  local target = debug.snap and debug.snap.debug
-  local live = active(debug)
-  local description
-  if debug.error then
-    description = { ui.span(debug.error, "error") }
-  elseif debug.launching then
-    description = { ui.span("Launching " .. state.relative .. "…", "muted") }
-  elseif not live then
-    local count = #state.breakpoints
-    description = {
-      ui.span(count == 0 and "No breakpoints" or (count .. (count == 1 and " breakpoint" or " breakpoints")), "muted"),
-      ui.span(" · F9 toggles one on the caret line", "muted"),
-    }
-  elseif target.state == "stopped" then
-    description = debug.stop and { ui.span("Paused at line ", "muted"), ui.span(tostring(debug.stop), "mono") }
-      or { ui.span("Paused in ", "muted"), ui.span(debug.elsewhere or "another file", "mono") }
-  else
-    description = { ui.span((DEBUG_WORDS[target.state] or { target.state })[1], "muted") }
-  end
-  local buttons
-  if not live then
-    buttons = {
-      ui.button("Launch", {
-        key = "launch",
-        role = "source-debug-launch",
-        variant = "primary",
-        icon = "bug",
-        keys = { "f5" },
-        busy = debug.launching,
-        disabled = state.attach ~= "ready" and "Attaching to the project" or nil,
-        actions = { click = "launch" },
-      }),
-    }
-  else
-    local why = nil
-    if debug.snap.controller ~= "you" then
-      why = "Another attachment controls this target"
-    elseif target.state ~= "stopped" then
-      why = "The target is not paused"
-    end
-    local function control(label, act, keys, icon)
-      return ui.button(label, {
-        key = act,
-        role = "source-debug-" .. act,
-        icon = icon,
-        keys = keys,
-        disabled = why or nil,
-        busy = target.pending == true,
-        actions = { click = act },
-      })
-    end
-    buttons = {
-      control("Continue", "continue", { "f5" }, "play"),
-      control("Step over", "next", { "f10" }),
-      control("Step in", "step_in", { "f11" }),
-      control("Step out", "step_out", { "shift", "f11" }),
-      ui.button("Stop", {
-        key = "stop",
-        role = "source-debug-stop",
-        keys = { "shift", "f5" },
-        disabled = debug.snap.controller ~= "you" and "Another attachment controls this target" or nil,
-        actions = { click = "stop" },
-      }),
-    }
-  end
-  return bar(description, buttons)
-end
-
-local function status(state)
+-- The overlay's transient state under the toolbar: loading, empty and error states only. A ready
+-- overlay says how it is doing in the toolbar badge and the status bar.
+local function strip(state)
   if state.mode == "none" or state.mode == "hotness" then
     return nil
   end
@@ -1495,19 +1556,48 @@ local function status(state)
     return inline_empty("No Elide project", "Overlays need an elide.pkl in this file's folder or a parent.")
   end
   if state.attach == "attaching" or state.attach == "idle" then
-    return ui.node("shimmer", {
-      key = "status",
-      role = "source-loading",
-      text = "Attaching to " .. (state.project or string.match(state.root, "([^/]+)$") or "the project") .. "…",
-    })
+    return shimmer("Attaching to " .. (state.project or "the project") .. "…")
   end
   if state.attach == "error" then
     return error_card("Couldn't attach to the project", state.attach_error or "", "retry")
   end
   if state.mode == "coverage" then
-    return coverage_status(state)
+    local coverage = state.coverage
+    if coverage.state == "missing" then
+      return inline_empty(
+        "No coverage yet",
+        "Run the project's tests with coverage to tint covered and uncovered lines.",
+        run_button("primary")
+      )
+    elseif coverage.state == "running" then
+      return shimmer("Running tests with coverage…")
+    elseif coverage.state == "loading" or coverage.state == "idle" then
+      return shimmer("Fetching coverage…")
+    elseif coverage.state == "absent" then
+      return inline_empty("This file wasn't measured", "The latest coverage run measured other files.", run_button())
+    elseif coverage.state == "unavailable" then
+      return inline_empty("No coverage for this run", coverage.message, run_button(), "warning")
+    elseif coverage.state == "error" then
+      return error_card("Couldn't fetch coverage", coverage.error or "", "refresh")
+    elseif coverage.stale then
+      return inline_empty(
+        "Coverage measured an older version",
+        "The file changed since this run; its tints are dimmed.",
+        run_button()
+      )
+    end
+    return nil
   end
-  return debug_status(state)
+  if not source.debuggable(state.path) then
+    return inline_empty("Can't debug this file", "Debugging takes JavaScript, TypeScript or Python sources.")
+  end
+  if state.debug.error then
+    return inline_empty("Debugger", state.debug.error, nil, "error")
+  end
+  if state.debug.elsewhere then
+    return inline_empty("Paused in another file", state.debug.elsewhere)
+  end
+  return nil
 end
 
 local function confirm_strip(state)
@@ -1531,13 +1621,15 @@ end
 local function find_row(state)
   local find = state.find
   local count = #find.matches
-  local summary = find.text == "" and ""
-    or count == 0 and "No matches"
-    or (
-      (find.index and (find.index .. " of ") or "")
-      .. (count >= MAX_MATCHES and (count .. "+") or count)
-      .. (count == 1 and " match" or " matches")
-    )
+  local summary = ""
+  if find.text ~= "" then
+    if count == 0 then
+      summary = "No matches"
+    else
+      local total = count >= MAX_MATCHES and (count .. "+") or tostring(count)
+      summary = (find.index and (find.index .. " of ") or "") .. total .. (count == 1 and " match" or " matches")
+    end
+  end
   return ui.node("row", { key = "find", role = "source-find", gap = "sm", align = "center" }, {
     ui.node("input", {
       key = "query",
@@ -1549,23 +1641,9 @@ local function find_row(state)
       grow = 1,
     }),
     ui.text({ ui.span(summary, count == 0 and find.text ~= "" and "warning" or "muted") }),
-    ui.node("buttons", { key = "nav", label = "Matches" }, {
-      ui.button("", {
-        key = "prev",
-        icon = "chev-u",
-        title = "Previous match",
-        aria = "Previous match",
-        keys = { "shift", "enter" },
-        actions = { click = "find_prev" },
-      }),
-      ui.button("", {
-        key = "next",
-        icon = "chev-d",
-        title = "Next match",
-        aria = "Next match",
-        keys = { "enter" },
-        actions = { click = "find_next" },
-      }),
+    ui.node("buttons", { key = "nav", variant = "toolbar", label = "Matches" }, {
+      icon_button("find-prev", "Previous match (⇧Enter)", "arrow-up", { "shift", "enter" }, "find_prev"),
+      icon_button("find-next", "Next match (Enter)", "arrow-down", { "enter" }, "find_next"),
     }),
     ui.button("Done", { key = "close", variant = "quiet", keys = { "esc" }, actions = { click = "close_fields" } }),
   })
@@ -1577,8 +1655,8 @@ local function go_row(state)
     ui.node("input", {
       key = "line",
       role = "source-go-input",
-      prompt = { ui.span("Line ", "muted") },
-      placeholder = "line or line:column, 1–" .. #state.buf.lines,
+      icon = "hash",
+      placeholder = "Line or line:column, 1–" .. #state.buf.lines,
       text = field.text,
       cursor = field.cursor,
       grow = 1,
@@ -1588,20 +1666,8 @@ local function go_row(state)
   })
 end
 
-local HINTS = {
-  none = "⌘S save · ⌘F find · ⌃G line · ⌘/ comment · ⌥1–3 overlays",
-  coverage = "F5 run with coverage · F6 refresh · ⌘F find · ⌃G line · ⌥1 no overlay",
-  debug = "F9 breakpoint · F5 launch/continue · F10 over · F11 in · ⇧F11 out · F6 stop line",
-}
-
 local function status_bar(state)
   local buf = state.buf
-  local a, b = buffer.selection(buf)
-  local position = "Ln " .. buf.cursor.l .. ", Col " .. (buf.cursor.c + 1)
-  if a then
-    local chars = buffer.units(buffer.slice(buf, a, b))
-    position ..= " (" .. chars .. " selected)"
-  end
   local segs = {
     ui.node("seg", {
       key = "path",
@@ -1611,36 +1677,43 @@ local function status_bar(state)
       priority = 5,
     }),
   }
-  if buffer.dirty(buf) then
+  local word, tone = overlay_state(state)
+  if word then
     table.insert(
       segs,
-      ui.node("seg", { key = "dirty", role = "source-modified", text = "Modified", tone = "warning", priority = 6 })
-    )
-  end
-  table.insert(segs, ui.node("seg", { key = "hints", text = HINTS[state.mode] or HINTS.none, priority = 0 }))
-  local overlay = nil
-  if state.mode == "coverage" then
-    local coverage = state.coverage
-    local percent = coverage.state == "ready" and source.percent(coverage.covered, coverage.total)
-    overlay = {
-      "Coverage" .. (percent and (" · " .. percent .. "%") or (" · " .. coverage.state)),
-      percent and coverage_tone(percent) or "muted",
-    }
-  elseif state.mode == "debug" then
-    local snap = state.debug.snap
-    local word = snap and DEBUG_WORDS[snap.debug.state] or { "Idle", "muted" }
-    overlay = { "Debug · " .. word[1], word[2] }
-  end
-  if overlay then
-    table.insert(
-      segs,
-      ui.node("seg", { key = "overlay", side = "right", text = overlay[1], tone = overlay[2], priority = 4 })
+      ui.node("seg", {
+        key = "overlay",
+        role = "source-overlay-state",
+        side = "right",
+        text = (state.mode == "coverage" and "Coverage " or "") .. word,
+        tone = tone,
+        priority = 4,
+      })
     )
   end
   table.insert(
     segs,
-    ui.node("seg", { key = "pos", role = "source-position", side = "right", text = position, priority = 7 })
+    ui.node("seg", {
+      key = "pos",
+      role = "source-position",
+      side = "right",
+      text = "Ln " .. buf.cursor.l .. ", Col " .. (buf.cursor.c + 1),
+      priority = 8,
+    })
   )
+  local a, b = buffer.selection(buf)
+  if a then
+    table.insert(
+      segs,
+      ui.node("seg", {
+        key = "selection",
+        role = "source-selection",
+        side = "right",
+        text = buffer.units(buffer.slice(buf, a, b)) .. " selected",
+        priority = 6,
+      })
+    )
+  end
   local language = LANG_NAMES[state.lang or ""] or "Plain text"
   local plain = state.lang and #buf.lines > HIGHLIGHT_LINES
   table.insert(
@@ -1665,23 +1738,23 @@ local function status_bar(state)
       priority = 1,
     })
   )
-  table.insert(segs, ui.node("seg", { key = "encoding", side = "right", text = "UTF-8", priority = 1 }))
   table.insert(
     segs,
     ui.node("seg", { key = "eol", side = "right", text = buf.ending == "\r\n" and "CRLF" or "LF", priority = 2 })
   )
-  table.insert(
-    segs,
-    ui.node("seg", {
-      key = "wrap",
-      role = "source-wrap",
-      side = "right",
-      text = state.wrap and "Wrap" or "No wrap",
-      title = "Toggle soft wrap (⌥Z)",
-      priority = 2,
-      actions = { click = "wrap" },
-    })
-  )
+  if buffer.dirty(buf) then
+    table.insert(
+      segs,
+      ui.node("seg", {
+        key = "dirty",
+        role = "source-modified",
+        side = "right",
+        text = "Modified",
+        tone = "warning",
+        priority = 7,
+      })
+    )
+  end
   return ui.node("status", { key = "bar", role = "source-status" }, segs)
 end
 
@@ -1720,6 +1793,37 @@ local function find_root(path)
     dir = string.match(dir, "^(.*)/[^/]*$")
   end
   return nil
+end
+
+-- Rows of the keyboard menu and toolbar buttons without their own handler.
+local function menu_action(state, cx, act, value)
+  local buf = state.buf
+  if act == "undo" then
+    edited(state, buffer.undo(buf))
+  elseif act == "redo" then
+    edited(state, buffer.redo(buf))
+  elseif act == "comment" then
+    local prefix = source.comment(state.path)
+    if prefix then
+      edited(state, buffer.comment(buf, prefix))
+    end
+  elseif act == "line_below" then
+    edited(state, buffer.line_below(buf))
+  elseif act == "select_all" then
+    buffer.select_all(buf)
+  elseif act == "find" then
+    open_find(state, cx)
+  elseif act == "goto" then
+    state.go, state.find = { text = "", cursor = 0 }, nil
+    focus(state, cx, "go")
+  elseif act == "mode" and value then
+    set_mode(state, cx, value)
+  elseif act == "breakpoint" then
+    toggle_breakpoint(state, cx)
+  elseif act == "stop_line" and state.debug.stop then
+    move_to(state, state.debug.stop)
+    reveal(state, state.debug.stop)
+  end
 end
 
 -- Keys --------------------------------------------------------------------------------------------
@@ -1853,7 +1957,9 @@ local function overlay_keys(state, cx, key)
       step(state, cx, "next")
     elseif name == "f11" then
       step(state, cx, key.shift and "step_out" or "step_in")
-    elseif name == "f6" and state.debug.stop then
+    elseif name == "f6" then
+      step(state, cx, "pause")
+    elseif name == "f7" and state.debug.stop then
       move_to(state, state.debug.stop)
       reveal(state, state.debug.stop)
     else
@@ -1992,8 +2098,9 @@ tern.block.define("source", {
     local buf = state.buf
     local starts = buffer.starts(buf)
     local gutter, virt, decor = lines_view(state, starts)
-    local children = { head(state) }
-    local note = status(state)
+    local children = { toolbar(state) }
+    local note = strip(state)
+    state.strip = note ~= nil
     if note then
       table.insert(children, note)
     end
@@ -2010,6 +2117,7 @@ tern.block.define("source", {
         key = "editor",
         role = "source-editor",
         aria = state.name,
+        grow = 1,
         text = buffer.text(buf),
         cursor = buffer.offset(buf, buf.cursor),
         anchor = a and buffer.offset(buf, buf.anchor) or nil,
@@ -2034,8 +2142,8 @@ tern.block.define("source", {
     end
     table.insert(dock, status_bar(state))
     return {
-      main = ui.node("col", { gap = "md" }, children),
-      dock = ui.col(dock),
+      main = ui.node("col", { gap = "none", grow = 1 }, children),
+      dock = ui.node("col", { gap = "none" }, dock),
     }
   end,
   key = key_handler,
@@ -2072,6 +2180,8 @@ tern.block.define("source", {
       end
     elseif ev.ev == "select" and ev.id == "main.head.end.overlay" then
       set_mode(state, cx, ev.item)
+    elseif ev.ev == "select" and ev.id == "main.head.start.path" and type(ev.item) == "string" then
+      cx:open(ev.item)
     elseif ev.ev == "action" then
       local act = ev.act
       if act == "open" then
@@ -2098,8 +2208,17 @@ tern.block.define("source", {
         start_coverage(state, cx)
       elseif act == "launch" then
         step(state, cx, "continue")
-      elseif act == "continue" or act == "next" or act == "step_in" or act == "step_out" or act == "stop" then
+      elseif
+        act == "continue"
+        or act == "next"
+        or act == "step_in"
+        or act == "step_out"
+        or act == "stop"
+        or act == "pause"
+      then
         step(state, cx, act)
+      else
+        menu_action(state, cx, act, ev.value)
       end
     end
   end,

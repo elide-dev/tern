@@ -5,6 +5,7 @@ version = "0.1.0-preview.1"
 description = "Embedded polyglot runtime sessions for Tern."
 window = "window.luau"
 host = "host.luau"
+styles = ["styles/source.css"]
 
 [[lenses]]
 id = "json"
