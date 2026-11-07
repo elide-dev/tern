@@ -85,10 +85,20 @@ with tempfile.TemporaryDirectory(prefix='tp-', dir='/tmp') as temporary:
         def tree(selector):
             return json.dumps(ctl('tree', selector), ensure_ascii=False)
         def native_panel(program):
-            pane = ctl('state')['focused']['id']
-            listing = json.loads(subprocess.check_output(['tern', 'ls', '--json'], env=environment, text=True))
-            blocks = [block for session in listing['sessions'] for tab in session['tabs'] for block in tab['blocks']]
-            launch = next(block for block in blocks if block['id'] == pane)
+            # The plugin opens the panel once its runtime probe answers, so the focused pane is the
+            # launched one only after that; poll until it is listed with its command.
+            def launched():
+                pane = ctl('state')['focused']['id']
+                listing = json.loads(subprocess.check_output(['tern', 'ls', '--json'], env=environment, text=True))
+                blocks = [block for session in listing['sessions'] for tab in session['tabs'] for block in tab['blocks']]
+                found = next((block for block in blocks if block['id'] == pane), None)
+                return found if found and runtime in (found.get('command') or '') else None
+            deadline = time.monotonic() + 15
+            launch = launched()
+            while not launch and time.monotonic() < deadline:
+                time.sleep(.25)
+                launch = launched()
+            assert launch, ('No launched panel became the focused pane', ctl('state')['focused'])
             kind = program.removeprefix('elide-tern-')
             assert runtime in (launch['command'] or ''), launch
             assert f"'tern' '{kind}'" in launch['command'], launch
