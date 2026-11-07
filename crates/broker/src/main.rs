@@ -319,9 +319,19 @@ fn dispatch(request: Request, sessions: &Sessions, serial: &AtomicUsize, project
       offset,
       limit,
     } => {
-      let artifact = projects.lock().unwrap().coverage(binding, run, Instant::now())?;
+      let (artifact, root) = {
+        let mut projects = projects.lock().unwrap();
+        let now = Instant::now();
+        let artifact = projects.coverage(binding, run, now)?;
+        // Line pages read the measured source under the project root to serve inferred lines.
+        let root = match (&artifact, file) {
+          (Some(_), Some(_)) => projects.snapshot(binding, None, now)?.map(|snapshot| snapshot.root),
+          _ => None,
+        };
+        (artifact, root)
+      };
       return artifact.map_or(Ok(Value::Null), |artifact| {
-        coverage::page(&artifact, *file, *offset, *limit)
+        coverage::page(&artifact, *file, *offset, *limit, root.as_deref())
       });
     }
     Request::ProjectDebugLaunch {

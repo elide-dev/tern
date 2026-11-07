@@ -331,6 +331,16 @@ Starting a pane can still take longer than 500 ms under the in-process `tern ser
 harness, which `tests/workspace.py` tolerates only for its launch checks; desktop windows
 stay within budget.
 
+### Inferred coverage in the broker
+
+`project_coverage_page` serves Task 17's `inferred` state: for a file page it reads the
+measured file's current source under the project root and merges
+`elide_project_session::coverage::line_states` into the page (see `docs/protocol.md`).
+The state passes through unchanged; the source block draws `inferred` at half tint. The
+broker does not compare the source with the measured digest (it has no SHA-256), so it
+infers only when the file still reaches every measured line; the source block already
+dims overlays whose measured identity differs from the open text.
+
 ### Context-sensitive controls
 
 The window half shows a control only when it can act or has something to show:

@@ -367,8 +367,11 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         check('covered band row-aligned, under the text (light)', ok, detail)
         ok, detail = band_ok('source-coverage-dark', 5, 4)
         check('uncovered band row-aligned, under the text (dark)', ok, detail)
-        # Negative control: an unmeasured row (4) reads untinted against another (1).
-        ok, detail = band_ok('source-coverage-light', 4, 1)
+        # Negative control: an unmeasured row reads untinted against another (1). Row 4 closes the
+        # covered `if` and is served as inferred; row 6 closes the function after the uncovered
+        # line 5, so nothing is inferred for it.
+        check('row 6 is neither measured nor inferred', 6 not in [l['line'] for l in measured], measured)
+        ok, detail = band_ok('source-coverage-light', 6, 1)
         check('unmeasured row stays untinted', not detail['tinted'], detail)
         # An unsaved edit on a measured line mutes its tint; untouched lines keep theirs.
         click('[data-role~="source-editor"]')

@@ -77,6 +77,15 @@ are stable within the immutable run artifact. File pages also cap encoded entrie
 256 KiB, so use `next` even when fewer than `limit` entries arrive. Each page includes the producer's
 `complete` flag; consult the run summary for process and collection status.
 
+A file page's `lines` are the measured lines with a `state` (`covered`, `partial` or
+`uncovered`) merged in line order with `{line, state: "inferred"}` entries: closers,
+blanks and comment-only lines of blocks that ran, from
+`elide_project_session::coverage::line_states`. Inference reads the file's current text
+under the attached root (symlinks resolved, at most 2 MiB); when it cannot be read, or a
+measured line lies past its end, the page holds the measured lines without `state`.
+`offset`, `next` and `total` count these merged entries. Inferred lines are never
+counted as covered here; `covered_lines` in the file listing stays the measured count.
+
 This layer reports configuration as `discovered`. It does not evaluate manifests,
 resolve workspace dependencies, provide streaming subscriptions, or implement MCP.
 
