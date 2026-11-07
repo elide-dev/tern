@@ -1,7 +1,7 @@
 """The Elide source block in an isolated desktop window: elide://source opens it, a coverage run from the
 block marks covered and uncovered lines, and the Debug overlay sets a breakpoint with `b`, launches and
 shows the stop marker. Usage: python3 tests/source.py --runtime /path/to/elide [--sdk /path/to/embedder]"""
-import argparse, json, os, shutil, subprocess, sys, tempfile, time, uuid
+import argparse, json, os, re, shutil, subprocess, sys, tempfile, time, uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -87,11 +87,9 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
     def gutter():
         found = {}
         for node in nodes('.sf-editor .sf-ed-gutter'):
-            words = [w for w in (node.get('text') or '').split() if w != '│']
-            if words and not words[0].isdigit():
-                words = words[1:] + words[:1]
-            if words and words[0].isdigit():
-                found[int(words[0])] = words[1] if len(words) > 1 else ''
+            match = re.match(r'^\s*([^\d\s]?)\s*(\d+)', node.get('text') or '')
+            if match:
+                found[int(match.group(2))] = match.group(1)
         return found
 
     def signed(line, glyph, tone):
@@ -121,8 +119,11 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         ctl('prefs', 'preview', 'light')
         ctl('prefs', 'close')
 
-    def tinted(tone, text):
-        return any(text in (n.get('text') or '') for n in nodes('.sf-editor .sf-t-mark.sf-t-' + tone))
+    def toned(tone, text):
+        return any(text in (n.get('text') or '') for n in nodes('.sf-code .sf-ln[data-tone="' + tone + '"]'))
+
+    def numbered(line, token):
+        return any((n.get('text') or '').strip() == str(line) for n in nodes('.sf-editor .sf-ed-gutter .sf-t-' + token))
 
     def click(selector):
         enabled = selector + ':not(.disabled):not([disabled]):not([aria-disabled="true"])'
@@ -215,18 +216,27 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         check('coverage empty state', wait(lambda: 'No coverage yet' in tree('[data-role="source-empty"]'), 60),
               tree('.sf-main'))
         click('[data-role="source-run-coverage"]')
-        check('covered line tinted', wait(lambda: tinted('success', 'positive'), 240), tree('.sf-editor .sf-t-mark'))
-        check('uncovered line tinted', tinted('error', 'other'), tree('.sf-editor .sf-t-mark'))
-        check('no coverage dots in the gutter', not any(g for g in gutter().values()), gutter())
+        check('covered rows toned', wait(lambda: toned('success', 'positive'), 240), tree('.sf-code'))
+        check('uncovered row toned', toned('error', 'other'), tree('.sf-code'))
+        check('coverage view is read-only', not nodes('[data-role="source-editor"]')
+              and 'read-only' in tree('[data-role="source-readonly"]'), tree('.sf-dock'))
+        check('hotness hidden', not nodes('[data-role="source-overlays"] .sf-tab[data-tab="hotness"]'), tree('[data-role="source-overlays"]'))
         check('coverage badge', wait(lambda: '% covered' in tree('.sf-main .sf-badge'), 10), tree('.sf-main .sf-badge'))
-        print('     partial line tinted: %s' % tinted('warning', 'sign'), flush=True)
+        print('     partial row toned: %s' % toned('warning', 'sign'), flush=True)
         shots('source-coverage')
-        # An unsaved edit on a measured line dims its tint; untouched lines keep theirs.
+        # An unsaved edit on a measured line mutes its row; untouched lines keep their tones.
+        click('[data-role="source-overlays"] .sf-tab[data-tab="none"]')
+        wait(lambda: nodes('[data-role="source-editor"]'), 10)
+        click('[data-role="source-editor"]')
         go_line(3)
         ctl('key', 'Home')
         ctl('type', '/* a */ ')
-        check('edited line tint dims', wait(lambda: tinted('dim', 'positive'), 10), tree('.sf-editor .sf-t-mark'))
-        check('untouched lines keep tints', tinted('error', 'other') and tinted('success', 'if'), tree('.sf-editor .sf-t-mark'))
+        click('[data-role="source-overlays"] .sf-tab[data-tab="coverage"]')
+        check('edited row muted', wait(lambda: toned('muted', 'positive'), 10), tree('.sf-code'))
+        check('untouched rows keep tones', toned('error', 'other') and toned('success', 'if'), tree('.sf-code'))
+        click('[data-role="source-overlays"] .sf-tab[data-tab="none"]')
+        wait(lambda: nodes('[data-role="source-editor"]'), 10)
+        click('[data-role="source-editor"]')
         for _ in range(6):
             if not nodes('[data-role="source-modified"]'):
                 break
@@ -236,18 +246,22 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
 
         # Debug: F9 on two lines, F5 launches; the target pauses at the call first, then in the function.
         click('[data-role="source-overlays"] .sf-tab[data-tab="debug"]')
-        check('debug launch offered', wait(lambda: nodes('[data-role="source-btn-debug-resume"]'), 30), tree('.sf-main'))
+        check('debug launch offered', wait(lambda: nodes('[data-role="source-btn-debug-launch"]'), 30), tree('.sf-main'))
+        check('no stepping before a target', not nodes('[data-role="source-debug-steps"]'), tree('[data-role="source-toolbar"]'))
         click('[data-role="source-editor"]')
         go_line(3)
         ctl('key', 'F9')
         check('breakpoint sign', wait(lambda: signed(3, '●', 'error'), 10), gutter())
-        check('breakpoint line tinted', wait(lambda: tinted('error', 'positive'), 10), tree('.sf-editor .sf-t-mark'))
+        check('breakpoint number in error', wait(lambda: numbered(3, 'error'), 10), tree('.sf-editor .sf-ed-gutter'))
         go_line(9)
         ctl('key', 'F9')
         wait(lambda: signed(9, '●', 'error'), 10)
         ctl('key', 'F5')
         check('stop marker', wait(lambda: signed(9, '▶', 'accent'), 120), tree('.sf-main'))
-        check('stop line tinted stronger', wait(lambda: tinted('accent', 'classify'), 10), tree('.sf-editor .sf-t-mark'))
+        check('stop line marked', wait(lambda: any('classify' in (n.get('text') or '') for n in nodes('.sf-editor .sf-t-mark'))
+              and numbered(9, 'accent'), 10), tree('.sf-editor .sf-t-mark'))
+        check('stepping wells while paused', nodes('[data-role="source-debug-run"]') and nodes('[data-role="source-debug-steps"]')
+              and nodes('[data-role="source-btn-debug-resume"]'), tree('[data-role="source-toolbar"]'))
         check('paused badge with line', wait(lambda: 'Paused at 9' in tree('.sf-main .sf-badge'), 10), tree('.sf-main .sf-badge'))
         shots('source-debug-split')
         ctl('key', 'F5')

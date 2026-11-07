@@ -1,61 +1,32 @@
 /* The Elide source editor block, only where Tern's props stop (docs/architecture.md, "Source block").
-   Every rule is scoped to the block's surface and colored with Tern's tokens. */
+   Every rule is scoped to the block's surface and colored with Tern's tokens. No prop removes a
+   region's padding, so these rules make the editor run full-bleed from under the toolbar to the
+   status bar and give the toolbar and the transient strips their own tight spacing. */
 
-/* Full bleed: the editor runs edge to edge from under the toolbar to the status bar. */
 .sf-region.sf-main[data-surface="plugin.elide.source"],
 .sf-region.sf-dock[data-surface="plugin.elide.source"] {
   padding: 0;
+  gap: 0;
 }
 [data-surface="plugin.elide.source"] [data-role="source-toolbar"] {
-  padding: 6px 10px;
+  padding: 4px 8px;
   box-shadow: inset 0 -1px 0 var(--l2);
 }
 [data-surface="plugin.elide.source"] [data-role="source-empty"],
 [data-surface="plugin.elide.source"] [data-role="source-error"],
-[data-surface="plugin.elide.source"] [data-role="source-loading"] {
-  margin: 8px 10px;
+[data-surface="plugin.elide.source"] [data-role="source-loading"],
+[data-surface="plugin.elide.source"] [data-role="source-confirm-strip"] {
+  margin: 4px 8px;
 }
 [data-surface="plugin.elide.source"] [data-role="source-find"],
 [data-surface="plugin.elide.source"] [data-role="source-go"] {
-  padding: 6px 10px;
+  padding: 4px 8px;
   box-shadow: inset 0 1px 0 var(--l2);
 }
-[data-surface="plugin.elide.source"] [data-role="source-confirm-strip"] {
-  margin: 8px 10px;
-}
 [data-surface="plugin.elide.source"] .sf-editor[data-role="source-editor"],
-[data-surface="plugin.elide.source"] .sf-editor[data-role="source-editor"].focused {
+[data-surface="plugin.elide.source"] .sf-editor[data-role="source-editor"].focused,
+[data-surface="plugin.elide.source"] .sf-code[data-role="source-coverage"] {
   border-radius: 0;
   box-shadow: none;
   background: transparent;
-}
-
-/* Line tints: Tern's only background token is `mark`; with a tone token beside it, the run takes
-   that tone's faint tint and keeps its syntax colors. */
-[data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-success,
-[data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-error,
-[data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-warning,
-[data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-accent,
-[data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-dim {
-  color: inherit;
-  border-radius: 0;
-  box-shadow: none;
-  padding: 0;
-  margin: 0;
-}
-[data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-success {
-  background: rgb(from var(--ok) r g b / 13%);
-}
-[data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-error {
-  background: rgb(from var(--bad) r g b / 12%);
-}
-[data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-warning {
-  background: rgb(from var(--warn) r g b / 16%);
-}
-/* The paused line reads stronger than a breakpoint line. */
-[data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-accent {
-  background: rgb(from var(--accent) r g b / 24%);
-}
-[data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-dim {
-  background: rgb(from var(--t3) r g b / 8%);
 }
