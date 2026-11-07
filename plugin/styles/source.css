@@ -65,6 +65,10 @@
 [data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-muted {
   --elide-tint: rgb(from color-mix(in srgb, var(--t3) 9%, var(--page)) r g b / 1);
 }
+/* Inferred lines (closers, blanks, comments inheriting their block's coverage): half the covered tint. */
+[data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-success.sf-t-dim {
+  --elide-tint: rgb(from color-mix(in srgb, var(--ok) 6.5%, var(--page)) r g b / 1);
+}
 /* The paused line reads stronger than a breakpoint line. */
 [data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-accent {
   --elide-tint: rgb(from color-mix(in srgb, var(--accent) 18%, var(--page)) r g b / 1);

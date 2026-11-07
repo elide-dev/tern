@@ -1175,7 +1175,7 @@ local function visible(state, cx)
   return math.max(4, (cx.rows or 24) - chrome)
 end
 
--- Gutter cells are `[sign][number] `: one sign cell left of numbers right-aligned to the widest, so
+-- Gutter cells are `[sign] [number] │ `: one sign cell left of numbers right-aligned to the widest, so
 -- every line's cell is the same width and toggling a breakpoint shifts nothing. Breakpoint lines
 -- number in `error`, the paused line in `accent`, the caret line in `strong`.
 --
@@ -1212,8 +1212,10 @@ local function lines_view(state, starts)
       local mark = base and marks[base]
       if mark then
         local stale = coverage.stale or coverage.lines[base] ~= buf.lines[line]
+        -- `inferred` lines inherit their block's coverage: the success tint at half strength.
         tint = stale and "muted"
           or (mark.state == "covered" and "success")
+          or (mark.state == "inferred" and "success dim")
           or (mark.state == "partial" and "warning")
           or "error"
         if mark.state == "partial" and mark.branches and not stale then
@@ -1241,9 +1243,13 @@ local function lines_view(state, starts)
       local first = string.byte(buf.lines[line], 1) >= 0xF0 and 2 or 1
       table.insert(decor, { from = starts[line], to = starts[line] + first, s = "mark " .. tint })
     end
+    -- Sign cell, a space, the right-aligned number, a space, a `dim` hairline, a space before the
+    -- code. The box-drawing glyph spans the line's full height, so the hairline reads continuous.
     gutter[line] = {
       tone and ui.span(glyph, tone) or ui.span(glyph),
-      ui.span(source.number(line, width), number),
+      ui.span(" " .. source.number(line, width), number),
+      ui.span(" "),
+      ui.span("│", "dim"),
       ui.span(" "),
     }
     virt[line] = note
@@ -1509,7 +1515,8 @@ local function toolbar(state)
     }),
   }
   if dirty then
-    local dot = ui.text({ ui.span("●", "warning") })
+    -- A small dot, the size of a table status dot, centred on the file name.
+    local dot = ui.text({ ui.span("•", "warning") })
     dot.p.key = "dirty"
     dot.p.role = "source-dirty"
     dot.p.title = "Unsaved changes"
