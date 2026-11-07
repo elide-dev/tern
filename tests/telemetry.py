@@ -117,6 +117,8 @@ Elide.serve({port: 0, hostname: "127.0.0.1", fetch(request) {
             assert not nodes('[data-role="traces-start"]'), 'Tracing must not require restarting'
             success = request(url, '/', 10)
             failure = request(url, '/fail', 11)
+            # The Traces tab appears once capture holds a trace.
+            wait(lambda: nodes('.sf-tab[data-tab="traces"]'))
             ctl('click', '.sf-tab[data-tab="traces"]')
             wait(lambda: len(nodes(TRACE)) >= 2)
             if not args.local_only: wait(lambda: remote_has(success) and remote_has(failure))

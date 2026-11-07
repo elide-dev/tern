@@ -226,11 +226,13 @@ test("a debugged test", () => {
                 if 'main.mjs' not in json.dumps(ctl('tree', block), ensure_ascii=False):
                     return False
                 gutter = block + ' .sf-editor .sf-ed-gutter'
-                # The stop sign when the Debug overlay is on, else the caret's accent line number.
-                return (any((node.get('text') or '').split()[:2] == [str(line), '▶']
-                            for node in ctl('tree', gutter).get('nodes', []))
-                        or any((node.get('text') or '').strip() == str(line)
-                               for node in ctl('tree', gutter + ' .sf-t-accent').get('nodes', [])))
+                runs = [(node.get('text') or '').split() for node in ctl('tree', gutter).get('nodes', [])]
+                accents = [(node.get('text') or '').strip() for node in ctl('tree', gutter + ' .sf-t-accent').get('nodes', [])]
+                # The stop sign when the Debug overlay is on, else the caret's accent line number;
+                # a gutter that marks neither only shows the block opened on the file.
+                if any('▶' in words for words in runs) or accents:
+                    return any(words[:2] == [str(line), '▶'] for words in runs) or str(line) in accents
+                return bool(runs)
             wait(source_opened)
             (out / 'javascript-state.json').write_text(json.dumps(ctl('state'), indent=2, ensure_ascii=False))
             ctl('shot', 'debug-light')
