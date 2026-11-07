@@ -157,6 +157,35 @@ end
 check("groups", order, { { "/b.kt", "2,9" }, { "/a.java", "3" }, { "/w.kt", "4" }, { "-", "1" } })
 check("group counts", grouped[1].counts, { error = 1, warning = 1, note = 0 })
 
+-- A long line full of `": "` (minified JSON) is not quadratic: 256 KB parses in under 50 ms.
+local long = string.rep('"k": 1, ', 32768)
+local started = os.clock()
+check("long line has no diagnostic", #diagnostics.parse(long, "/w"), 0)
+local took = os.clock() - started
+check("long line under 50 ms", took < 0.05, true)
+if took >= 0.05 then
+  print("  took " .. string.format("%.3f", took) .. " s")
+end
+-- A header past the first 4 KB of a line is not one (compilers print short headers).
+check("header in a short line", #diagnostics.parse("/w/A.java:3: error: boom", "/w"), 1)
+
+-- Incremental parsing: the same result as one parse, with only new lines read again.
+local text = fixture("javac.txt")
+local all = {}
+for line in string.gmatch(text, "([^\n]*)\n") do
+  table.insert(all, line)
+end
+local session = diagnostics.session("/w/kt")
+for index = 1, #all do
+  session:add(all[index])
+  if index % 3 == 0 then
+    session:result()
+  end
+end
+check("incremental equals whole", pick(session:result(), { "severity", "line", "col", "code" }),
+  pick(diagnostics.parse(text, "/w/kt"), { "severity", "line", "col", "code" }))
+check("incremental keeps notes", session:result()[2].notes, javac[2].notes)
+
 -- Reports, phrases and links.
 local report = diagnostics.report({
   version = 1,

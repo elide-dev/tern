@@ -101,15 +101,23 @@ tern.lens.define("build", {
   open = function(run)
     local state = buffer()
     state.cwd = run.cwd
+    -- Parsed as lines arrive; `view` (up to every 250 ms) reads only what is new.
+    state.session = parser.session(run.cwd)
     return state
   end,
-  line = collect,
+  line = function(state, l)
+    local before = #state.lines
+    collect(state, l)
+    if #state.lines > before then
+      state.session:add(l.text)
+    end
+  end,
   finish = function() end,
   view = function(state)
     if state.truncated then
       return nil
     end
-    local kept, counts = parser.collect(parser.parse(state.lines, state.cwd))
+    local kept, counts = parser.collect(state.session:result())
     if #kept == 0 then
       return nil
     end

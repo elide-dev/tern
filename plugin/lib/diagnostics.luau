@@ -14,6 +14,9 @@ local MESSAGE_LIMIT = 4096
 local EXCERPT_LINES = 12
 local NOTES = 16
 local NOTE_LIMIT = 1024
+-- Compilers print short headers; a `path:line: severity:` header is looked for only this far
+-- into a line, so a long line of other output (minified JSON) costs one pass, not a quadratic one.
+local HEADER_LIMIT = 4096
 
 local SEVERITIES = { error = "error", e = "error", warning = "warning", w = "warning" }
 for _, word in ipairs({ "note", "info", "hint", "i" }) do
@@ -216,17 +219,21 @@ local function header(line, base)
     diagnostic.tool = "kotlinc"
     return diagnostic, "none"
   end
-  -- javac and plain kotlinc: `path:line[:col]: severity: message`.
+  -- javac and plain kotlinc: `path:line[:col]: severity: message`. Only a `": "` followed by a
+  -- severity word is a candidate, and only then is the text before it read as a location.
   local from = 1
-  while true do
+  while from <= HEADER_LIMIT do
     local at = string.find(line, ": ", from, true)
-    if not at then
+    if not at or at > HEADER_LIMIT then
       return nil
     end
-    local path, number, col = M.location(string.sub(line, 1, at - 1))
-    local named, message = string.match(string.sub(line, at + 2), "^(%a+): (.*)$")
-    if path and named and #named > 1 and SEVERITIES[named] and extension(path) then
-      local diagnostic = new(SEVERITIES[named], message)
+    local _, last, named = string.find(line, "^(%a+): ", at + 2)
+    local path, number, col
+    if named and #named > 1 and SEVERITIES[named] then
+      path, number, col = M.location(string.sub(line, 1, at - 1))
+    end
+    if path and extension(path) then
+      local diagnostic = new(SEVERITIES[named], string.sub(line, last + 1))
       local ext = extension(path)
       diagnostic.tool = (ext == "java" and "javac") or ((ext == "kt" or ext == "kts") and "kotlinc") or nil
       diagnostic.path, diagnostic.line, diagnostic.col = M.resolve(path, base), number, col
@@ -234,6 +241,7 @@ local function header(line, base)
     end
     from = at + 2
   end
+  return nil
 end
 
 -- The `In file:` line, notes, and the numbered excerpt after an Elide header.
@@ -324,19 +332,17 @@ end
 
 -- Every diagnostic in a compiler's or Elide's text output (a string or a list of lines), with
 -- relative paths resolved against `base`.
-function M.parse(text, base)
-  local lines = {}
-  if type(text) == "table" then
-    for index, line in ipairs(text) do
-      lines[index] = M.plain(M.unstamped(M.plain(line)))
-    end
-  else
-    for line in string.gmatch(text .. "\n", "([^\n]*)\n") do
-      table.insert(lines, M.plain(M.unstamped(M.plain((string.gsub(line, "\r$", ""))))))
-    end
-  end
-  local found, at = {}, 1
+-- A line of compiler or Elide output with escapes and the builder's time stamp removed.
+function M.clean(line)
+  return M.plain(M.unstamped(M.plain((string.gsub(line, "\r$", "")))))
+end
+
+-- Diagnostics whose headers start at or after `from` in cleaned `lines`, each with the index of
+-- the line it starts on.
+local function parse_from(lines, base, from)
+  local found, starts, at = {}, {}, from
   while at <= #lines do
+    local start = at
     local line = string.gsub(lines[at], "%s+$", "")
     at = at + 1
     local closing = string.match(line, "^Note: (.*)$")
@@ -349,6 +355,7 @@ function M.parse(text, base)
         at = at + 1
       end
       table.insert(found, bound(diagnostic))
+      table.insert(starts, start)
     elseif not M.summary(line) then
       local diagnostic, follow = header(line, base)
       if diagnostic then
@@ -358,10 +365,58 @@ function M.parse(text, base)
           at = source_body(lines, at, diagnostic)
         end
         table.insert(found, bound(diagnostic))
+        table.insert(starts, start)
       end
     end
   end
-  return found
+  return found, starts
+end
+
+-- Every diagnostic in a compiler's or Elide's text output (a string or a list of lines), with
+-- relative paths resolved against `base`.
+function M.parse(text, base)
+  local lines = {}
+  if type(text) == "table" then
+    for index, line in ipairs(text) do
+      lines[index] = M.clean(line)
+    end
+  else
+    for line in string.gmatch(text .. "\n", "([^\n]*)\n") do
+      table.insert(lines, M.clean(line))
+    end
+  end
+  return (parse_from(lines, base, 1))
+end
+
+-- An incremental parse for a lens: `add` lines as they arrive, `result` the diagnostics so far.
+-- Each `result` reads only lines from where the last diagnostic started (its body may still be
+-- growing), so a long output is parsed about once, not once per view.
+local Session = {}
+Session.__index = Session
+
+function M.session(base)
+  return setmetatable({ base = base, lines = {}, found = {}, starts = {}, resume = 1 }, Session)
+end
+
+function Session:add(line)
+  table.insert(self.lines, M.clean(line))
+end
+
+function Session:result()
+  if self.resume <= #self.lines then
+    -- Drop what started at or after the resume point and read it again with the new lines.
+    while #self.starts > 0 and self.starts[#self.starts] >= self.resume do
+      table.remove(self.starts)
+      table.remove(self.found)
+    end
+    local found, starts = parse_from(self.lines, self.base, self.resume)
+    for index, diagnostic in ipairs(found) do
+      table.insert(self.found, diagnostic)
+      table.insert(self.starts, starts[index])
+    end
+    self.resume = #starts > 0 and starts[#starts] or #self.lines + 1
+  end
+  return self.found
 end
 
 -- Diagnostics without repeats, kept up to KEPT, with exact counts past it.
