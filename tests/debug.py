@@ -90,7 +90,7 @@ test("a debugged test", () => {
 
         def ctl(command, *values):
             def argument(value):
-                if command == 'tree' or (command == 'click' and value in {'right', 'ctrl', 'meta', 'alt', 'shift'}):
+                if command in ('tree', 'resize') or (command == 'click' and value in {'right', 'ctrl', 'meta', 'alt', 'shift'}):
                     return str(value)
                 return json.dumps(str(value), ensure_ascii=False)
             result = subprocess.run(['tern', 'ctl', '--control', str(socket), command, *(argument(value) for value in values)],
@@ -281,10 +281,35 @@ test("a debugged test", () => {
 
             choose_target('main.py')
             breakpoint('main.py', 4)
+            if fixed_slots:
+                # The medium band (about 100 columns) holds still across a launch too.
+                def shell_columns():
+                    box = rect('[data-role="debug-shell"]')
+                    return box and box[2] / 8.3
+                low, high = 1280, 4000
+                while low < high:
+                    middle = (low + high) // 2
+                    ctl('resize', middle, 800)
+                    time.sleep(.3)
+                    if (shell_columns() or 0) < 100:
+                        low = middle + 1
+                    else:
+                        high = middle
+                ctl('resize', low, 800)
+                time.sleep(1)
+                assert 85 <= (shell_columns() or 0) < 120, shell_columns()
+                medium_tabs = rect('[data-role="debug-tabs"]')
+                medium_toolbar = rect('[data-role="debug-toolbar"]')
             click('[data-role="debug-launch-button"]')
             entry = wait(lambda: stopped())
             click('[data-role="debug-continue"]')
             first_python = wait(lambda: stopped(4, entry['stop_epoch']))
+            if fixed_slots:
+                wait(lambda: rect(frames_row))
+                assert place(rect('[data-role="debug-tabs"]')) == place(medium_tabs), 'Launching moved the tabs at 100 columns'
+                assert place(rect('[data-role="debug-toolbar"]')) == place(medium_toolbar), 'Launching resized the toolbar at 100 columns'
+                ctl('resize', 1280, 800)
+                time.sleep(1)
             assert first_python['generation'] != first['generation']
             wait(lambda: debug()['debug']['scopes'])
             click('[data-role="debug-read-values"]')

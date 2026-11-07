@@ -32,7 +32,7 @@ test("refreshes expired sessions", {skip: true}, () => {});
         server = subprocess.Popen([tern, 'serve', '--control', str(socket), '--out', str(out)], stdout=log, stderr=log)
         def ctl(command, *values):
             result = subprocess.run([tern, 'ctl', '--control', str(socket), command,
-                *(str(v) if command == 'tree' else json.dumps(str(v)) for v in values)], capture_output=True, text=True, timeout=30)
+                *(str(v) if command in ('tree', 'resize') else json.dumps(str(v)) for v in values)], capture_output=True, text=True, timeout=30)
             reply = json.loads(result.stdout)
             assert reply.get('ok'), reply
             return reply
@@ -88,21 +88,43 @@ test("refreshes expired sessions", {skip: true}, () => {});
             wait(lambda: status('Passed'))
             assert '1 passed' in tree('[data-role="totals"]')
             script.write_text('import {test} from "node:test"; test("waiting for a service", async () => { await new Promise(resolve => setTimeout(resolve, 60000)); });')
-            # Starting a run must not move the page: the results table stays where it was.
+            # Starting a run must not move the page: the results table stays where it was,
+            # and the dock row keeps its height. Checked at 100 columns, the medium band.
             header = '[data-role="test-list"] .sf-tbl-row.head'
             def header_rect():
                 nodes = ctl('tree', header).get('nodes') or []
                 return nodes[0].get('rect') if nodes else None
+            def dock_place():
+                nodes = ctl('tree', '[data-role="test-controls"]').get('nodes') or []
+                return nodes and (nodes[0]['rect'][1], nodes[0]['rect'][3])
+            def columns(target):
+                low, high = 300, 3000
+                while low < high:
+                    middle = (low + high) // 2
+                    ctl('resize', middle, 900)
+                    time.sleep(.3)
+                    if ctl('state')['panes'][0]['cols'] < target:
+                        low = middle + 1
+                    else:
+                        high = middle
+                ctl('resize', low, 900)
+                time.sleep(1)
+                return ctl('state')['panes'][0]['cols']
+            medium = columns(100)
+            assert 80 <= medium < 120, medium
             ctl('click', '[data-role="test-views"] [data-tab="results"]')
             wait(lambda: header_rect() is not None)
             before = header_rect()
+            dock_before = dock_place()
             ctl('click', '[data-role="test-rerun"]')
             wait(lambda: 'waiting for a service' in tree('[data-role="test-running"]'))
             after = header_rect()
             assert before is not None and before == after, (before, after)
+            assert dock_place() == dock_before, ('the dock row moved', dock_before, dock_place())
             running_pid, _ = child()
             ctl('click', '[data-role="test-cancel"]')
             wait(lambda: status('Cancelled'))
+            ctl('resize', 1280, 800)
             wait(lambda: gone(running_pid))
             ctl('key', 'ctrl+c')
             # The dock leaves when the surface closes; the process exits a moment later.
