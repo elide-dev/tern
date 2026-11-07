@@ -238,6 +238,7 @@ tern.lens.define("tap", {
 -- block"). Launch arguments: the absolute file, then optionally the project root and a line.
 local broker = require("./lib/broker")
 local buffer = require("./lib/buffer")
+local links = require("./lib/links")
 local source = require("./lib/source")
 
 local RENEW_MS = 30000
@@ -629,7 +630,8 @@ function load_coverage(state, cx, force)
       -- Measured against the file on disk. Marks follow later edits by line; lines whose text
       -- differs from the measured text (unsaved edits included) draw dimmed.
       coverage.lines = buffer.new(state.disk).lines
-      state.buf.maps.coverage = identity(#state.buf.lines)
+      -- Anchored to the disk text it measured; a dirty buffer's lines map through what changed.
+      state.buf.maps.coverage = source.line_map(coverage.lines, state.buf.lines)
       check_identity(state, cx, file.sourceDigest, token)
       cx:render()
     end)
@@ -711,9 +713,10 @@ local function absorb_debug(state, snap)
   end
   local target = snap.debug
   if target.generation ~= debug.generation then
-    -- A target launched elsewhere ran the file on disk; anchor its lines there.
+    -- A target launched elsewhere ran the file on disk; anchor its lines there, through any unsaved
+    -- edits.
     if not debug.launched_here then
-      state.buf.maps.debug = identity(#state.buf.lines)
+      state.buf.maps.debug = source.line_map(buffer.new(state.disk).lines, state.buf.lines)
     end
     debug.launched_here = false
   end
@@ -943,18 +946,13 @@ end
 -- Replaces the buffer with the file on disk as one undoable step.
 local function reload(state, text)
   local buf = state.buf
-  local fresh = buffer.new(text)
-  local last = #buf.lines
   local cursor = buf.cursor
-  local edit = buffer.replace(
-    buf,
-    { l = 1, c = 0 },
-    { l = last, c = buf.lens[last] },
-    table.concat(fresh.lines, "\n"),
-    "reload"
-  )
-  buf.ending = fresh.ending
-  state.breakpoints = buffer.remap(state.breakpoints, edit)
+  -- Only the changed middle is replaced, so breakpoints and overlay marks above and below it keep
+  -- their lines.
+  local edit = buffer.reload(buf, text)
+  if edit then
+    state.breakpoints = buffer.remap(state.breakpoints, edit)
+  end
   buf.cursor = buffer.clamp(buf, cursor)
   state.disk = text
   buffer.mark_saved(buf)
@@ -1013,7 +1011,8 @@ local function load_report(state, cx, run)
     end
     return (a.col or 0) < (b.col or 0)
   end)
-  state.buf.maps.diagnostics = identity(#state.buf.lines)
+  -- The build compiled the file on disk; anchor its lines there, through any unsaved edits.
+  state.buf.maps.diagnostics = source.line_map(buffer.new(state.disk).lines, state.buf.lines)
   diag.state, diag.error, diag.run, diag.report, diag.items, diag.counts = "ready", nil, run, report, items, counts
   for _, d in items do
     d.stale = diagnostic_stale(state, d)
@@ -1912,8 +1911,8 @@ local function toolbar(state)
     justify = "between",
     align = "center",
     gap = "sm",
-    -- A last resort: the compact row fits a split pane, but a wrap beats clipping.
-    wrap = true,
+    -- No wrap: the row's height never changes (Save appearing, a longer badge, "Deleted on disk");
+    -- the breadcrumb shrinks and folds its folders instead.
   }, {
     ui.node("row", { key = "start", gap = "sm", align = "center", shrink = 1 }, left),
     ui.node("row", { key = "end", gap = "sm", align = "center" }, right),
@@ -2371,7 +2370,11 @@ tern.block.define("source", {
     if string.sub(path, 1, 1) ~= "/" and cx.cwd then
       path = cx.cwd .. "/" .. path
     end
-    local root = args[2]
+    -- Callers pass absolute paths; anything else (a relative path with no cwd, `.` or `..`
+    -- segments) is refused here rather than resolved by the file system.
+    local given = path
+    path = links.absolute(path) or ""
+    local root = args[2] and links.absolute(args[2])
     if root == "" or (root and not source.relative(path, root)) then
       root = nil
     end
@@ -2401,7 +2404,16 @@ tern.block.define("source", {
       end
     end
     table.sort(state.breakpoints)
-    local text, problem = read(path)
+    local text, problem
+    if path == "" then
+      state.path, state.name = given, string.match(given, "([^/]+)$") or given
+      problem = {
+        title = "Not an absolute path",
+        text = "Elide source opens absolute paths without . or .. segments: " .. given,
+      }
+    else
+      text, problem = read(path)
+    end
     state.problem, state.disk = problem, text or ""
     state.buf = buffer.new(state.disk)
     state.unit = buffer.unit(state.buf, state.lang == "python" and 4 or 2)
@@ -2409,10 +2421,22 @@ tern.block.define("source", {
     if problem then
       return state
     end
-    -- An unsaved draft from before a reload or restart comes back as one undoable edit.
+    -- An unsaved draft from before a reload or restart comes back as one undoable edit. When the
+    -- file changed on disk since the draft's base, the block asks (reload or keep editing) instead
+    -- of letting a later save overwrite the newer contents unprompted.
     if type(saved.draft) == "string" and saved.draft ~= buffer.text(state.buf) and source.text(saved.draft) then
+      local plan = source.restore_plan(saved.draft, saved.draft_base, source.digest(state.disk))
       local last = #state.buf.lines
       buffer.replace(state.buf, { l = 1, c = 0 }, { l = last, c = state.buf.lens[last] }, saved.draft, "draft")
+      if plan == "conflict" then
+        state.pending_disk = state.disk
+        state.confirm = {
+          kind = "reload",
+          title = state.name .. " changed on disk since your unsaved changes",
+          text = "They are restored here. Reloading replaces them with the version on disk; keep editing to save over it.",
+          action = "Reload",
+        }
+      end
     end
     local line = tonumber(args[3]) or saved.line or 1
     move_to(state, line)
@@ -2565,12 +2589,18 @@ tern.block.define("source", {
       return nil
     end
     local text = buffer.text(state.buf)
+    local draft = buffer.dirty(state.buf) and #text <= MAX_DRAFT and text or nil
+    -- The draft's base (the disk text it edits), recomputed only when that text changes.
+    if draft and state.digest_of ~= state.disk then
+      state.digest, state.digest_of = source.digest(state.disk), state.disk
+    end
     return {
       mode = state.mode,
       wrap = state.wrap,
       line = state.buf.cursor.l,
       breakpoints = tern.json.array(state.breakpoints),
-      draft = buffer.dirty(state.buf) and #text <= MAX_DRAFT and text or nil,
+      draft = draft,
+      draft_base = draft and state.digest or nil,
     }
   end,
 })

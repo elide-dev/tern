@@ -7,6 +7,9 @@
 
 local M = {}
 
+-- The undo history's budget for the text its steps hold.
+M.MAX_UNDO_BYTES = 8 * 1024 * 1024
+
 local function size(b)
   if b < 0x80 or (b >= 0x80 and b < 0xC0) then
     return 1
@@ -322,13 +325,56 @@ function M.replace(buf, a, b, text, kind)
       inserted = text,
       was = was,
     }
-    if #buf.undo > 1000 then
-      table.remove(buf.undo, 1)
+    -- At most 1,000 steps and MAX_UNDO_BYTES of their text (a reload step holds both versions of
+    -- what changed), evicting the oldest; the newest step always stays.
+    local bytes = 0
+    for _, entry in ipairs(buf.undo) do
+      bytes = bytes + #entry.removed + #entry.inserted
+    end
+    while #buf.undo > 1 and (#buf.undo > 1000 or bytes > M.MAX_UNDO_BYTES) do
+      local oldest = table.remove(buf.undo, 1)
+      bytes = bytes - #oldest.removed - #oldest.inserted
     end
   end
   buf.redo = {}
   buf.cursor, buf.anchor, buf.goal = stop, nil, nil
   return edit
+end
+
+-- Replaces the buffer with `text` as read from disk, as one undoable step that touches only the lines
+-- that differ: the common leading and trailing lines stay where they are, so marks on them keep their
+-- lines and the undo entry holds only the changed middle. Takes the disk's line ending. Returns the
+-- line movement, or nil when nothing changed.
+function M.reload(buf, text)
+  local fresh = M.new(text)
+  buf.ending = fresh.ending
+  local old, new = buf.lines, fresh.lines
+  local head = 0
+  while head < #old and head < #new and old[head + 1] == new[head + 1] do
+    head = head + 1
+  end
+  if head == #old and head == #new then
+    return nil
+  end
+  local tail = 0
+  while tail < #old - head and tail < #new - head and old[#old - tail] == new[#new - tail] do
+    tail = tail + 1
+  end
+  local middle = {}
+  for i = head + 1, #new - tail do
+    middle[#middle + 1] = new[i]
+  end
+  if tail > 0 then
+    -- From the first changed line's start to the start of the first common trailing line.
+    local text_in = #middle > 0 and (table.concat(middle, "\n") .. "\n") or ""
+    return M.replace(buf, { l = head + 1, c = 0 }, { l = #old - tail + 1, c = 0 }, text_in, "reload")
+  end
+  if head > 0 then
+    -- From the end of the last common leading line to the end of the text.
+    local text_in = #middle > 0 and ("\n" .. table.concat(middle, "\n")) or ""
+    return M.replace(buf, { l = head, c = buf.lens[head] }, { l = #old, c = buf.lens[#old] }, text_in, "reload")
+  end
+  return M.replace(buf, { l = 1, c = 0 }, { l = #old, c = buf.lens[#old] }, table.concat(new, "\n"), "reload")
 end
 
 function M.undo(buf)

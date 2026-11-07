@@ -363,6 +363,13 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
               for b in ctl('state').get('file_blocks', []) if b.get('path')), ctl('state').get('file_blocks'))
         check('line numbers in gutter', wait(lambda: len(gutter()) >= 7, 10), tree('.sf-editor .sf-ed-gutter'))
         check('stylesheet accepted (no "style sheet has errors")', not sheet_errors(), sheet_errors())
+        # The toolbar's height never changes with its state (narrow split pane): measured here clean,
+        # then dirty, with the coverage badge, and with the file deleted on disk.
+        def toolbar_height():
+            found = [n['rect'][3] for n in nodes('[data-role="source-toolbar"]') if onscreen(n)]
+            return found[0] if found else None
+        toolbar_clean = toolbar_height()
+        check('toolbar measured in the split pane', toolbar_clean is not None, tree('.sf-main'))
         check('caret starts on linked line', wait(lambda: 'Ln 2,' in tree('[data-role="source-position"]'), 10),
               tree('[data-role="source-position"]'))
         # The gutter is exactly sign + digits + space + hairline + two spaces: 1 + 2 + 1 + 1 + 2 cells here.
@@ -400,6 +407,7 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         ctl('type', '// edited')
         check('typing edits the buffer', wait(lambda: '// edited' in editor_text(), 10), editor_text())
         shots('source-dirty')
+        check('toolbar height unchanged when dirty', toolbar_height() == toolbar_clean, [toolbar_clean, toolbar_height()])
         check('modified shown', wait(lambda: 'Modified' in tree('[data-role="source-modified"]')
               and nodes('[data-role="source-dirty"] .sf-t-warning') and nodes('[data-role="source-btn-save"]'), 10), tree('.sf-main'))
         ctl('key', 'Meta+s')
@@ -433,6 +441,30 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         source.write_text(source.read_text() + '// external\n')
         check('reload from disk', wait(lambda: 'Reloaded classify.mjs' in tree('.toast') and 10 in gutter(), 15), tree('.toast'))
 
+        # An unsaved draft restored after a plugin reload, over a file that changed on disk since:
+        # the block asks instead of letting a save overwrite the newer contents.
+        click('[data-role~="source-editor"]')
+        go_line(1)
+        ctl('key', 'End')
+        ctl('type', ' // draft')
+        wait(lambda: nodes('[data-role="source-modified"]'), 10)
+        time.sleep(1)
+        source.write_text(source.read_text() + '// newer\n')
+        subprocess.run(['tern', 'plugin', 'reload', 'elide'], env=env, stdout=log, stderr=log)
+        check('restored draft over newer disk asks', wait(lambda: 'since your unsaved changes'
+              in tree('[data-role="source-confirm-strip"]'), 30), tree('.sf-dock'))
+        check('newer disk contents kept', '// newer' in source.read_text() and '// draft' not in source.read_text(),
+              source.read_text())
+        click('[data-role="source-confirm"]')
+        check('reload takes the disk version', wait(lambda: not nodes('[data-role="source-modified"]')
+              and not nodes('[data-role="source-confirm-strip"]'), 15), tree('.sf-dock'))
+        aside = source.with_name('classify.aside')
+        source.rename(aside)
+        check('deleted on disk shown', wait(lambda: 'Deleted on disk' in tree('.sf-main .sf-badge'), 15), tree('.sf-main .sf-badge'))
+        check('toolbar height unchanged when deleted on disk', toolbar_height() == toolbar_clean, [toolbar_clean, toolbar_height()])
+        aside.rename(source)
+        wait(lambda: 'Deleted on disk' not in tree('.sf-main .sf-badge'), 15)
+
         # Find marks matches and selects the next one; go to line moves the caret.
         ctl('key', 'Control+f')
         wait(lambda: nodes('[data-role="source-find-input"]'), 10)
@@ -464,6 +496,7 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         check('hotness hidden', not nodes('[data-role="source-btn-overlay-hotness"]') and 'Hotness' not in tree('[data-role="source-overlays"]'),
               tree('[data-role="source-toolbar"]'))
         check('coverage badge', wait(lambda: '% covered' in tree('.sf-main .sf-badge'), 10), tree('.sf-main .sf-badge'))
+        check('toolbar height unchanged with the coverage badge', toolbar_height() == toolbar_clean, [toolbar_clean, toolbar_height()])
         print('     partial line tinted: %s' % tinted('warning', 8), flush=True)
         # `inferred` lines (closers, blanks, comments) render at half the covered tint once the
         # broker's coverage page carries that state.
@@ -505,7 +538,17 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         ctl('type', '/* a */ ')
         check('edited line muted', wait(lambda: tinted('muted', 3), 10), tree('.sf-editor .sf-t-mark'))
         check('untouched lines keep tints', tinted('error', 5) and tinted('success', 2), tree('.sf-editor .sf-t-mark'))
-        for _ in range(6):
+        # Coverage fetched while the buffer is dirty is anchored to the disk text it measured: with a
+        # line inserted above, the measured lines keep their tints on their shifted rows.
+        go_line(1)
+        ctl('key', 'End')
+        ctl('key', 'Enter')
+        ctl('type', '// above')
+        ctl('key', 'F6')
+        untinted = lambda line: not any(tinted(t, line) for t in ['success', 'error', 'warning', 'muted', 'success.sf-t-dim'])
+        check('coverage refreshed while dirty follows the inserted line', wait(lambda: tinted('error', 6)
+              and untinted(2), 30), tree('.sf-editor .sf-t-mark'))
+        for _ in range(12):
             if not nodes('[data-role="source-modified"]'):
                 break
             ctl('key', 'Meta+z')
@@ -582,6 +625,12 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         ctl('open-url', 'elide://source?root=' + str(project) + '&path=' + str(huge))
         check('oversized file refused', wait(lambda: 'File too large' in tree('[data-role="source-problem"]'), 30),
               tree('.sf-main'))
+        # The block checks its own path argument: a path with `..` is refused before any read, even
+        # when it names a real file.
+        dotted = str(project) + '/../' + project.name + '/' + str(source.relative_to(project))
+        lua('cx:new_block("elide.source", ' + json.dumps([dotted, str(project)]).replace('[', '{').replace(']', '}') + ', "tab")')
+        check('path with .. refused', wait(lambda: 'Not an absolute path' in tree('[data-role="source-problem"]'), 30),
+              tree('.sf-main'))
         ctl('open-url', 'elide://source?root=' + str(project) + '&path=' + str(project / 'notes.txt'))
         check('non-source link opens the editor', wait(lambda: any(Path(b['path']).resolve() == (project / 'notes.txt').resolve()
               for b in ctl('state').get('file_blocks', []) if b.get('path')), 15), ctl('state').get('file_blocks'))
@@ -592,6 +641,7 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
               tree('[data-role="source-position"]'))
         click('[data-role~="source-editor"]')
         go_line(1250)
+        wait(lambda: 1250 in gutter_rows() and 1251 in gutter_rows(), 15)
         ok, geometry = gutter_geometry(1250)
         check('hairline 2 cells after the digits and before the code (4 digits)', ok, geometry)
         row_1250 = gutter_rows()[1250]

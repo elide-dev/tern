@@ -239,9 +239,11 @@ Offsets are UTF-16 code units.
   guide's sanctioned escape hatch where no prop exists. Tern's stylesheet op rejects what it does not
   know (an unknown property logs `plugin style sheet has errors` and is dropped; `background-attachment`
   did that), so the harness fails on any such log line. The sheet relies only on: custom properties
-  (`--elide-tint`, `--sf-lh`), `padding`, `margin`, `gap`, `border`, `border-right`, `border-radius`,
+  (`--elide-tint`, `--sf-lh`), `padding` and its `padding-top`, `padding-right`, `padding-bottom` and
+  `padding-left` longhands, `margin`, `gap`, `border`, `border-right`, `border-radius`,
   `background`, `background-color`, `box-shadow` (outer, on blocks and on the tint run), `color`,
-  `display: inline-block`, `height`, `vertical-align`, `transition`, and the values `var()`, `calc()`
+  `display: inline-block`, `font-size`, `height`, `vertical-align`, `transition`, an
+  `@media (prefers-reduced-motion: reduce)` block, and the values `var()`, `calc()`
   with `em`/`ch`/`px`, `color-mix()` and relative `rgb(from …)`. Not used, because they fail or are
   ignored here: pseudo-elements, positioning on inline runs, margins on inline-blocks, the `lh` unit,
   `background-attachment`. It removes the regions' side padding so the editor runs full-bleed, keeps
@@ -256,8 +258,9 @@ Offsets are UTF-16 code units.
   token: no run, sign cell or note slot appears or disappears and no text moves (the harness checks
   the first line's text rect across None, Coverage, Debug and None). The stylesheet gives the run a tint mixed into the page color
   and forced opaque (the glass themes make the page translucent, and translucent copies stripe), 1 px of vertical padding (so adjacent rows meet without a hairline, without changing
-  the line's layout) and zero-spread shadows of the same tint every 0.9ch to the right, which overlap
-  so no seams show; the scroller clips the band, and later text, the caret and the end-of-line note
+  the line's layout) and zero-spread shadows of the same tint every 0.9ch to the right, out to about
+  300ch so wide panes have no untinted tail, which overlap so no seams show (only tinted runs carry
+  them: transparent copies on every line stalled the window); the scroller clips the band, and later text, the caret and the end-of-line note
   paint over it. Other attempts left visible blocks or did not render: a background on every run
   broke at spaces and token edges; copies every 1ch seamed at fractional pixel edges; a single
   `100vw` shadow showed nothing past the text; and a `::before` band is not positioned against an

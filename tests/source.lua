@@ -79,6 +79,28 @@ check("utf16be astral", source.utf16be("😀"), "\216\061\222\000")
 check("comment js", source.comment("/p/a.ts"), "//")
 check("comment py", source.comment("/p/a.py"), "#")
 
+-- A restored draft applies only over the disk text it was based on.
+check("digest stable", source.digest("abc"), source.digest("abc"))
+check("digest differs", source.digest("abc") ~= source.digest("abd"), true)
+check("digest length", source.digest("ab") ~= source.digest("ab\0"), true)
+local base = source.digest("disk v1")
+check("no draft", source.restore_plan(nil, nil, base), "none")
+check("draft over its base", source.restore_plan("edited", base, base), "apply")
+check("draft over newer disk", source.restore_plan("edited", base, source.digest("disk v2")), "conflict")
+check("draft without a base", source.restore_plan("edited", nil, base), "conflict")
+
+-- Coverage measured on the disk text maps onto a dirty buffer through the common prefix and suffix.
+local map = source.line_map({ "a", "b", "c", "d" }, { "a", "new", "b", "c", "d" })
+check("line map prefix", map[1], 1)
+check("line map inserted line", map[2], false)
+check("line map shifted", map[3], 2)
+check("line map suffix", map[5], 4)
+local same_map = source.line_map({ "a", "b" }, { "a", "b" })
+check("line map identity", same_map[2], 2)
+local changed = source.line_map({ "a", "b", "c" }, { "a", "B", "c" })
+check("line map changed line unmapped", changed[2], false)
+check("line map after change", changed[3], 3)
+
 -- Buffer: UTF-16 positions, edits, undo, line maps.
 local buffer = dofile(here .. "/../plugin/lib/buffer.luau")
 local function key(name, extra)
@@ -200,6 +222,54 @@ check("field backspace astral", field.text, "1")
 check("field ignores", buffer.field_key(field, key("f5")), false)
 buffer.field_edit(field, { from = 0, to = 1, text = "42", cursor = 2, len = 1 })
 check("field native edit", field.text, "42")
+
+-- Reload from disk replaces only the changed middle, so marks above and below keep their lines.
+local function ten()
+  local lines = {}
+  for i = 1, 10 do
+    lines[i] = "line " .. i
+  end
+  return table.concat(lines, "\n") .. "\n"
+end
+local function reloaded(old, new, points)
+  local r = buffer.new(old)
+  local edit = buffer.reload(r, new)
+  return r, edit and table.concat(buffer.remap(points, edit), ",") or table.concat(points, ",")
+end
+local inserted_text = string.gsub(ten(), "line 5\n", "line 5\nnew\n")
+local r, moved = reloaded(ten(), inserted_text, { 1, 2, 8 })
+check("reload insert keeps marks above", moved, "1,2,9")
+check("reload insert text", buffer.disk(r), inserted_text)
+check("reload undo is the middle only", r.undo[1].inserted, "new\n")
+local deleted_text = string.gsub(ten(), "line 5\n", "")
+r, moved = reloaded(ten(), deleted_text, { 2, 8 })
+check("reload delete keeps marks", moved, "2,7")
+r, moved = reloaded(ten(), ten() .. "line 11\n", { 3, 10 })
+check("reload append keeps marks", moved, "3,10")
+check("reload append text", buffer.disk(r), ten() .. "line 11\n")
+r, moved = reloaded(ten(), string.gsub(ten(), "line 9\nline 10\n", ""), { 3, 10 })
+check("reload truncate drops the cut", moved, "3")
+local same = buffer.new(ten())
+check("reload unchanged is no edit", buffer.reload(same, ten()), nil)
+check("reload unchanged no undo", #same.undo, 0)
+local crlf_reload = buffer.new("a\nb\n")
+buffer.reload(crlf_reload, "a\r\nb\r\nc\r\n")
+check("reload takes the disk ending", buffer.disk(crlf_reload), "a\r\nb\r\nc\r\n")
+
+-- Undo keeps at most MAX_UNDO_BYTES of removed and inserted text, evicting the oldest steps.
+local big = buffer.new("")
+local chunk = string.rep("x", 1024 * 1024)
+for i = 1, 12 do
+  big.cursor = { l = 1, c = 0 }
+  buffer.replace(big, { l = 1, c = 0 }, { l = 1, c = big.lens[1] }, chunk .. i, "reload")
+end
+local held = 0
+for _, entry in ipairs(big.undo) do
+  held = held + #entry.removed + #entry.inserted
+end
+check("undo bytes bounded", held <= buffer.MAX_UNDO_BYTES, true)
+check("undo keeps the newest", big.undo[#big.undo].inserted, chunk .. 12)
+check("undo still has steps", #big.undo >= 3, true)
 
 if failures > 0 then
   print(failures .. " failed")
