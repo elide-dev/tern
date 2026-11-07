@@ -560,7 +560,35 @@ function M.report(decoded)
     notes = count("notes"),
     dropped = count("dropped") or 0,
     outcome = type(decoded.outcome) == "string" and decoded.outcome or nil,
+    -- When the run finished (unix ms), and how many repeats the counts may include.
+    finished_ms = count("finished_ms"),
+    unfiltered = count("unfiltered") or 0,
   }
+end
+
+-- The run directory named by the runtime's `latest` pointer (`.dev/reports/build/tern/latest`),
+-- or nil when it is missing or not a run name: it becomes part of a path, so nothing else passes.
+function M.latest(text)
+  if type(text) ~= "string" then
+    return nil
+  end
+  local name = string.match(text, "^%s*(.-)%s*$")
+  if name and string.find(name, "^run%-[%w_%-]+$") then
+    return name
+  end
+  return nil
+end
+
+-- The run with the newest `finished_ms` among `{ run, finished_ms? }` entries, or nil when none
+-- has one (reports from runtimes before the field).
+function M.newest_finished(entries)
+  local best, at = nil, nil
+  for _, entry in ipairs(entries) do
+    if type(entry.finished_ms) == "number" and (not at or entry.finished_ms > at) then
+      best, at = entry.run, entry.finished_ms
+    end
+  end
+  return best
 end
 
 -- `elide://source?path=…&line=N&col=M` for a diagnostic with an absolute path (percent-encoding

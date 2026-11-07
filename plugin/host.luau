@@ -1054,22 +1054,50 @@ local function load_report(state, cx, run)
   cx:render()
 end
 
--- Calls `done(run)` with the newest of `runs` (run directories under `dir` that hold a report).
--- Run directories are named at random and the report has no timestamp, so this asks `ls -t`
+-- The run named by the runtime's `latest` pointer under `dir`, validated, or nil.
+local function latest_run(dir)
+  local ok, text = pcall(tern.fs.read, dir .. "/latest", 256)
+  return ok and parser.latest(text) or nil
+end
+
+-- Calls `done(run)` with the newest of `runs` (run directories under `dir` that hold a report):
+-- the runtime's `latest` pointer when it names one of them; else the newest `finished_ms` among
+-- their reports (each read once, remembered in `finished`); else, for runtimes before both, `ls -t`
 -- (a run's directory changes when its report lands), off the block's thread.
-local function newest_run(dir, runs, done)
+local function newest_run(dir, runs, finished, done)
+  local present = {}
+  for _, run in runs do
+    present[run] = true
+  end
+  local pointed = latest_run(dir)
+  if pointed and present[pointed] then
+    done(pointed)
+    return
+  end
   if #runs == 1 then
     done(runs[1])
     return
   end
-  local wanted = {}
+  local entries = {}
   for _, run in runs do
-    wanted[run] = true
+    if finished[run] == nil then
+      local ok, decoded = pcall(function()
+        return tern.json.decode(tern.fs.read(dir .. "/" .. run .. "/diagnostics.json", DIAGNOSTICS_BYTES))
+      end)
+      finished[run] = ok and type(decoded) == "table" and type(decoded.finished_ms) == "number" and decoded.finished_ms
+        or false
+    end
+    table.insert(entries, { run = run, finished_ms = finished[run] or nil })
+  end
+  local newest = parser.newest_finished(entries)
+  if newest then
+    done(newest)
+    return
   end
   local started = pcall(function()
     tern.process.run({ "/bin/ls", "-t", dir }, { timeout_ms = 5000 }, function(result)
       for name in string.gmatch(result.stdout or "", "[^\n]+") do
-        if wanted[name] then
+        if present[name] then
           done(name)
           return
         end
@@ -1130,6 +1158,12 @@ local function scan_diagnostics(state, cx)
     table.remove(pending, 1)
   end
   diag.pending = pending
+  -- `latest` moves just after its run's report lands, so a poll can see the report first.
+  local pointer = latest_run(dir)
+  if pointer ~= diag.pointer then
+    diag.pointer = pointer
+    changed = true
+  end
   if not changed and diag.scanned then
     return
   end
@@ -1143,7 +1177,14 @@ local function scan_diagnostics(state, cx)
   table.sort(runs)
   if #runs == 0 then
     if diag.report then
-      state.diag = { state = "none", known = diag.known, pending = diag.pending, scanned = true }
+      state.diag = {
+        state = "none",
+        known = diag.known,
+        pending = diag.pending,
+        scanned = true,
+        pointer = diag.pointer,
+        finished = diag.finished,
+      }
       if state.mode == "diagnostics" then
         state.mode = "none"
       end
@@ -1152,7 +1193,8 @@ local function scan_diagnostics(state, cx)
     return
   end
   diag.scanning = true
-  newest_run(dir, runs, function(run)
+  diag.finished = diag.finished or {}
+  newest_run(dir, runs, diag.finished, function(run)
     diag.scanning = false
     if alive(state) then
       load_report(state, cx, run)
@@ -1598,6 +1640,9 @@ local function overlay_state(state)
     local detail = "Latest build: "
       .. (total or "no diagnostics")
       .. (report.dropped > 0 and (", " .. report.dropped .. " not listed") or "")
+    if report.unfiltered > 0 then
+      detail = detail .. ". The counts may include " .. report.unfiltered .. " repeats"
+    end
     local changed = #diag.items - (counts.error + counts.warning + counts.note)
     if changed > 0 then
       detail = detail .. ". " .. changed .. " on lines edited since the build are hidden until the next build."

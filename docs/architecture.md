@@ -383,10 +383,13 @@ resolve symlinks), so the lens links what the compiler printed, made absolute.
 `<root>/.dev/reports/build/tern/run-*/diagnostics.json`. The block lists the run directories when it
 opens and on its 2-second disk poll, and checks a directory for its report only when it
 first appears and while the report is pending (at most 8 pending at once), not every
-directory on every poll. With more than one report, `newest_run` picks the newest; today it
-asks `ls -t` (run directories are named at random and the report carries no timestamp; a
-run's directory changes when its report lands), off the block's thread, and it is the one
-place to switch to the runtime's `latest` pointer. The **Diagnostics** tab
+directory on every poll. With more than one report, `newest_run` picks the newest: the runtime's
+`.dev/reports/build/tern/latest` pointer when it names one of them (validated as
+`run-[A-Za-z0-9_-]+` before it becomes part of a path, and a change to it triggers a rescan,
+since it is written just after its run's report); else the report with the newest
+`finished_ms` (each report read once); else, for runtimes before both, `ls -t` off the
+block's thread (a run's directory changes when its report lands). A report's `unfiltered`
+count is noted in the badge's tooltip as possible repeats. The **Diagnostics** tab
 appears only once a report exists. It keeps this file's diagnostics and draws, per line,
 the gutter sign (`●` error, `▲` warning, `•` note), the row band through the same
 first-character `mark` run the other overlays use, Tern's dotted `typo` underline on the

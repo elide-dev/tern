@@ -219,6 +219,25 @@ check(
 )
 check("no link for relative path", diagnostics.link({ path = "A.java", line = 2 }), nil)
 
+-- The newest report: the runtime's `latest` pointer first, else the newest `finished_ms`.
+check("latest name", diagnostics.latest("run-AbC123"), "run-AbC123")
+check("latest with newline", diagnostics.latest("run-AbC_1-2\n"), "run-AbC_1-2")
+check("latest rejects traversal", diagnostics.latest("../etc"), nil)
+check("latest rejects a slash", diagnostics.latest("run-a/b"), nil)
+check("latest rejects other names", diagnostics.latest("tmp-1"), nil)
+check("latest rejects empty", diagnostics.latest(""), nil)
+check("latest rejects nil", diagnostics.latest(nil), nil)
+check("newest finished", diagnostics.newest_finished({
+  { run = "run-a", finished_ms = 100 },
+  { run = "run-b", finished_ms = 300 },
+  { run = "run-c" },
+  { run = "run-d", finished_ms = 200 },
+}), "run-b")
+check("no finished times", diagnostics.newest_finished({ { run = "run-a" }, { run = "run-b" } }), nil)
+local timed = diagnostics.report({ version = 1, finished_ms = 1794000000000, unfiltered = 3, diagnostics = {} })
+check("report times and repeats", { timed.finished_ms, timed.unfiltered }, { 1794000000000, 3 })
+check("older report", { diagnostics.report({ version = 1, diagnostics = {} }).finished_ms }, {})
+
 -- Links round-trip through the elide:// parser.
 local links = dofile(here .. "/../plugin/lib/links.luau")
 local parsed = links.parse(diagnostics.link({ path = "/p/Workspace's λ/A.java", line = 2, col = 5 }))

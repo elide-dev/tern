@@ -75,8 +75,12 @@ with tempfile.TemporaryDirectory(prefix='w3d-', dir='/tmp') as temporary:
             time.sleep(.25)
         return None
 
+    # Types a line and Enter, not `ctl run`, whose wait for the pane to settle can outlast ctl's
+    # 30 s while an inline Build page is live; every check waits for its own result.
     def run(line):
-        ctl('run', line)
+        ctl('type', line)
+        ctl('key', 'Enter')
+        time.sleep(.3)
 
     def lua(code):
         marker = 'w3d-' + str(uuid.uuid4()) + ':'
@@ -158,6 +162,13 @@ with tempfile.TemporaryDirectory(prefix='w3d-', dir='/tmp') as temporary:
         time.sleep(.8)
         after = first_text_rect()
         check('overlay moves no text', before and after and before[:2] == after[:2], (before, after))
+        # The runtime's `latest` pointer wins over directory order: point it at the older decoy run
+        # (the block notices the pointer change on its next poll), then back at the real build.
+        (reports / 'latest').write_text('run-decoy')
+        check('latest pointer is followed', wait(lambda: gutter().get(2, ('',))[0] == '●', 15), gutter())
+        (reports / 'latest').write_text(fresh[0].parent.name)
+        check('pointer back to the build', wait(lambda: gutter().get(5, ('',))[0] == '●'
+                                                and gutter().get(2, ('',))[0] != '●', 15), gutter())
         ctl('key', 'F8')
         check('F8 steps to the diagnostic', wait(lambda: 'Ln 5,' in tree('[data-role="source-position"]'), 10),
               tree('[data-role="source-position"]'))
