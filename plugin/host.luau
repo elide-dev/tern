@@ -238,6 +238,7 @@ tern.lens.define("tap", {
 -- block"). Launch arguments: the absolute file, then optionally the project root and a line.
 local broker = require("./lib/broker")
 local buffer = require("./lib/buffer")
+local links = require("./lib/links")
 local source = require("./lib/source")
 
 local RENEW_MS = 30000
@@ -2369,7 +2370,11 @@ tern.block.define("source", {
     if string.sub(path, 1, 1) ~= "/" and cx.cwd then
       path = cx.cwd .. "/" .. path
     end
-    local root = args[2]
+    -- Callers pass absolute paths; anything else (a relative path with no cwd, `.` or `..`
+    -- segments) is refused here rather than resolved by the file system.
+    local given = path
+    path = links.absolute(path) or ""
+    local root = args[2] and links.absolute(args[2])
     if root == "" or (root and not source.relative(path, root)) then
       root = nil
     end
@@ -2399,7 +2404,16 @@ tern.block.define("source", {
       end
     end
     table.sort(state.breakpoints)
-    local text, problem = read(path)
+    local text, problem
+    if path == "" then
+      state.path, state.name = given, string.match(given, "([^/]+)$") or given
+      problem = {
+        title = "Not an absolute path",
+        text = "Elide source opens absolute paths without . or .. segments: " .. given,
+      }
+    else
+      text, problem = read(path)
+    end
     state.problem, state.disk = problem, text or ""
     state.buf = buffer.new(state.disk)
     state.unit = buffer.unit(state.buf, state.lang == "python" and 4 or 2)

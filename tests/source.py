@@ -625,6 +625,12 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         ctl('open-url', 'elide://source?root=' + str(project) + '&path=' + str(huge))
         check('oversized file refused', wait(lambda: 'File too large' in tree('[data-role="source-problem"]'), 30),
               tree('.sf-main'))
+        # The block checks its own path argument: a path with `..` is refused before any read, even
+        # when it names a real file.
+        dotted = str(project) + '/../' + project.name + '/' + str(source.relative_to(project))
+        lua('cx:new_block("elide.source", ' + json.dumps([dotted, str(project)]).replace('[', '{').replace(']', '}') + ', "tab")')
+        check('path with .. refused', wait(lambda: 'Not an absolute path' in tree('[data-role="source-problem"]'), 30),
+              tree('.sf-main'))
         ctl('open-url', 'elide://source?root=' + str(project) + '&path=' + str(project / 'notes.txt'))
         check('non-source link opens the editor', wait(lambda: any(Path(b['path']).resolve() == (project / 'notes.txt').resolve()
               for b in ctl('state').get('file_blocks', []) if b.get('path')), 15), ctl('state').get('file_blocks'))
