@@ -239,9 +239,11 @@ Offsets are UTF-16 code units.
   guide's sanctioned escape hatch where no prop exists. Tern's stylesheet op rejects what it does not
   know (an unknown property logs `plugin style sheet has errors` and is dropped; `background-attachment`
   did that), so the harness fails on any such log line. The sheet relies only on: custom properties
-  (`--elide-tint`, `--sf-lh`), `padding`, `margin`, `gap`, `border`, `border-right`, `border-radius`,
+  (`--elide-tint`, `--sf-lh`), `padding` and its `padding-top`, `padding-right`, `padding-bottom` and
+  `padding-left` longhands, `margin`, `gap`, `border`, `border-right`, `border-radius`,
   `background`, `background-color`, `box-shadow` (outer, on blocks and on the tint run), `color`,
-  `display: inline-block`, `height`, `vertical-align`, `transition`, and the values `var()`, `calc()`
+  `display: inline-block`, `font-size`, `height`, `vertical-align`, `transition`, an
+  `@media (prefers-reduced-motion: reduce)` block, and the values `var()`, `calc()`
   with `em`/`ch`/`px`, `color-mix()` and relative `rgb(from …)`. Not used, because they fail or are
   ignored here: pseudo-elements, positioning on inline runs, margins on inline-blocks, the `lh` unit,
   `background-attachment`. It removes the regions' side padding so the editor runs full-bleed, keeps
