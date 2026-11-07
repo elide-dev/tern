@@ -11,6 +11,7 @@ local MAX_DIAGNOSTICS = 200
 local MAX_ROWS = 5000
 
 local ui = tern.ui
+local parser = require("./lib/diagnostics")
 
 local function buffer()
   return { lines = {}, bytes = 0, truncated = false }
@@ -44,76 +45,58 @@ tern.lens.define("json", {
   end,
 })
 
-local SEVERITIES = {
-  error = "error",
-  fatal = "error",
-  warning = "warning",
-  warn = "warning",
-  note = "note",
-  info = "note",
-  help = "help",
-}
-
--- `severity[code]: message` or `severity: message`, as compilers print after a location.
-local function severity_message(text)
-  local word, code, message = string.match(text, "^%s*(%a+)%[([^%]]+)%]:%s*(.+)$")
-  if not word then
-    word, message = string.match(text, "^%s*(%a+):%s*(.+)$")
+-- Compiler output (`elide build`, `elide javac`, `elide kotlinc`) as diagnostic cards grouped
+-- by file, each with an `elide://source` link; raw output when nothing parses. The parser is
+-- shared with the source block's Diagnostics overlay and mirrors the runtime's.
+-- A path as the lens shows it: relative to the command's directory when it lies inside it.
+local function shown_path(path, cwd)
+  if path and cwd and cwd ~= "" and string.sub(path, 1, #cwd + 1) == cwd .. "/" then
+    return string.sub(path, #cwd + 2)
   end
-  local severity = word and SEVERITIES[string.lower(word)]
-  if not severity then
-    return nil
-  end
-  return severity, code, message
+  return path
 end
 
--- Elide's builder: `[ 7.2s] error: javac: ';' expected`, then `In file: path:line:col` and a
--- numbered excerpt (`→4 │ code`). Compilers' own `path:line:col: error: message` lines too.
-local function diagnostics(lines)
-  local found, pending = {}, nil
-  local function close()
-    if pending then
-      if #pending.excerpt > 0 then
-        pending.diag.snippet = { pending.first, table.concat(pending.excerpt, "\n") }
-      end
-      table.insert(found, pending.diag)
-      pending = nil
-    end
+local function diagnostic_node(d, cwd)
+  local notes = {}
+  for _, text in d.notes do
+    table.insert(notes, text)
   end
-  for _, text in lines do
-    local file = string.match(text, "^%s*In file:%s*(.+)$")
-    local number, source = string.match(text, "^%s*[^%d%s]*%s*(%d+) │ ?(.*)$")
-    if pending and file then
-      local path, line, col = tern.parse.location(file)
-      pending.diag.path, pending.diag.line, pending.diag.col = path, line, col
-    elseif pending and pending.diag.path and #pending.excerpt == 0 and string.find(text, "^%s*$") then
-      -- The builder leaves a blank line between the location and its excerpt.
-    elseif pending and number and pending.diag.path then
-      pending.first = pending.first or tonumber(number)
-      table.insert(pending.excerpt, source)
-    else
-      close()
-      local path, line, col = tern.parse.location(text)
-      local rest = path and string.match(text, "^.-:%d+:?%d*:%s*(.*)$")
-      local severity, code, message = severity_message(rest or "")
-      if path and severity then
-        table.insert(
-          found,
-          { severity = severity, code = code, message = message, path = path, line = line, col = col }
-        )
-      else
-        severity, code, message = severity_message(string.gsub(text, "^%s*%[[^%]]*%]", "", 1))
-        if severity and severity ~= "help" then
-          pending = { diag = { severity = severity, code = code, message = message }, excerpt = {} }
-        end
-      end
-    end
+  for _, text in d.suggestions do
+    table.insert(notes, text)
   end
-  close()
-  return found
+  local diag = {
+    severity = d.severity,
+    code = d.code,
+    message = d.message,
+    path = shown_path(d.path, cwd),
+    line = d.line,
+    col = d.col,
+    snippet = d.excerpt and { d.excerpt.first_line, d.excerpt.text } or nil,
+    notes = #notes > 0 and notes or nil,
+  }
+  local ok, card = pcall(ui.diagnostic, diag, cwd)
+  if not ok then
+    -- An excerpt the builder rejects should not cost the rest of the card.
+    diag.snippet = nil
+    card = ui.diagnostic(diag, cwd)
+  end
+  return card
 end
 
--- `elide build`: compile errors and warnings as diagnostic cards; raw output when none parse.
+local function count_spans(counts)
+  local spans = {}
+  for _, entry in { { "error", "error", "errors" }, { "warning", "warning", "warnings" }, { "note", "note", "notes" } } do
+    local n = counts[entry[1]] or 0
+    if n > 0 then
+      table.insert(
+        spans,
+        ui.span("  " .. n .. " " .. (n == 1 and entry[2] or entry[3]), entry[1] == "note" and "info" or entry[1])
+      )
+    end
+  end
+  return spans
+end
+
 tern.lens.define("build", {
   open = function(run)
     local state = buffer()
@@ -126,25 +109,48 @@ tern.lens.define("build", {
     if state.truncated then
       return nil
     end
-    local found = diagnostics(state.lines)
-    if #found == 0 then
+    local kept, counts = parser.collect(parser.parse(state.lines, state.cwd))
+    if #kept == 0 then
       return nil
     end
-    local cards = {}
-    for index, diag in found do
-      if index > MAX_DIAGNOSTICS then
-        table.insert(cards, ui.overflow(#found - MAX_DIAGNOSTICS))
+    local phrase = parser.phrase(counts.error, counts.warning, counts.note)
+    local children = {
+      ui.text({ ui.span(phrase, counts.error > 0 and "error" or counts.warning > 0 and "warning" or "info") }),
+    }
+    local shown = 0
+    for _, group in parser.by_file(kept) do
+      if shown >= MAX_DIAGNOSTICS then
         break
       end
-      local ok, card = pcall(ui.diagnostic, diag, state.cwd)
-      if not ok then
-        -- An excerpt the builder rejects should not cost the rest of the card.
-        diag.snippet = nil
-        card = ui.diagnostic(diag, state.cwd)
+      local cards = {}
+      for _, d in group.items do
+        if shown >= MAX_DIAGNOSTICS then
+          break
+        end
+        shown += 1
+        table.insert(cards, diagnostic_node(d, state.cwd))
+        local href = parser.link(d)
+        if href then
+          local name = string.match(d.path, "([^/]+)$") or d.path
+          table.insert(
+            cards,
+            ui.text({ ui.link("Open " .. name .. (d.line and (":" .. d.line) or ""), href, "muted") })
+          )
+        end
       end
-      table.insert(cards, card)
+      local head = {
+        group.path and ui.path(shown_path(group.path, state.cwd), state.cwd) or ui.span("Without a file", "muted"),
+      }
+      for _, span in count_spans(group.counts) do
+        table.insert(head, span)
+      end
+      table.insert(children, ui.section(head, cards))
     end
-    return ui.col(cards)
+    local hidden = #kept - shown + counts.dropped
+    if hidden > 0 then
+      table.insert(children, ui.overflow(hidden))
+    end
+    return ui.col(children)
   end,
 })
 
@@ -247,7 +253,11 @@ local MAX_MATCHES = 2000
 local HIGHLIGHT_LINES = 600
 -- Accenting the caret line's number resends the whole gutter on every line move.
 local ACCENT_LINES = 2000
-local OVERLAYS = { "none", "coverage", "debug", "hotness" }
+local OVERLAYS = { "none", "coverage", "debug", "diagnostics", "hotness" }
+-- The largest build report read for the Diagnostics overlay (500 diagnostics fit well within it).
+local DIAGNOSTICS_BYTES = 8 * 1024 * 1024
+local DIAGNOSTIC_SIGNS = { error = "●", warning = "▲", note = "•" }
+local DIAGNOSTIC_TONES = { error = "error", warning = "warning", note = "info" }
 local HOTNESS_REASON = "Profiles are not source-located yet: the broker has no project_profile_page operation."
 local DEBUG_WORDS = {
   starting = { "Starting", "accent" },
@@ -257,7 +267,8 @@ local DEBUG_WORDS = {
   exited = { "Exited", "muted" },
   failed = { "Failed", "error" },
 }
-local LANG_NAMES = { javascript = "JavaScript", typescript = "TypeScript", python = "Python", kotlin = "Kotlin" }
+local LANG_NAMES =
+  { javascript = "JavaScript", typescript = "TypeScript", python = "Python", kotlin = "Kotlin", java = "Java" }
 local FIELDS = { find = "dock.find.query", go = "dock.go.line" }
 
 math.randomseed(math.floor(tern.now() * 1000) % 2147483647)
@@ -949,6 +960,165 @@ local function reload(state, text)
   buffer.mark_saved(buf)
 end
 
+-- Diagnostics ---------------------------------------------------------------------------------
+
+-- Where `elide build` keeps each run's `diagnostics.json` (Elide crates/cli/src/building.rs).
+local function diagnostics_dir(state)
+  return state.root .. "/.dev/reports/build/tern"
+end
+
+-- Whether a diagnostic's excerpt no longer matches the line it names: the file changed since
+-- the build, so its marks are drawn muted.
+local function diagnostic_stale(state, d)
+  local excerpt = d.excerpt
+  if not excerpt or not d.line then
+    return false
+  end
+  local index, wanted = d.line - excerpt.first_line + 1, nil
+  local position = 0
+  for text in string.gmatch(excerpt.text .. "\n", "([^\n]*)\n") do
+    position += 1
+    if position == index then
+      wanted = text
+      break
+    end
+  end
+  local line = current_line(state, "diagnostics", d.line)
+  return wanted ~= nil and (not line or state.buf.lines[line] ~= wanted)
+end
+
+-- Reads run `run`'s report and keeps this file's diagnostics, by line.
+local function load_report(state, cx, run)
+  local path = diagnostics_dir(state) .. "/" .. run .. "/diagnostics.json"
+  local ok, decoded = pcall(function()
+    return tern.json.decode(tern.fs.read(path, DIAGNOSTICS_BYTES))
+  end)
+  local report = ok and parser.report(decoded) or nil
+  local diag = state.diag
+  if not report then
+    diag.state, diag.error = "error", "Could not read the build report " .. path
+    cx:render()
+    return
+  end
+  local items, counts = {}, { error = 0, warning = 0, note = 0 }
+  for _, d in report.diagnostics do
+    if d.line and same(state, d.path) then
+      table.insert(items, d)
+      counts[d.severity] += 1
+    end
+  end
+  table.sort(items, function(a, b)
+    if a.line ~= b.line then
+      return a.line < b.line
+    end
+    return (a.col or 0) < (b.col or 0)
+  end)
+  state.buf.maps.diagnostics = identity(#state.buf.lines)
+  diag.state, diag.error, diag.run, diag.report, diag.items, diag.counts = "ready", nil, run, report, items, counts
+  for _, d in items do
+    d.stale = diagnostic_stale(state, d)
+  end
+  cx:render()
+end
+
+-- Finds the newest build report under the project and loads it when the set of runs changed.
+-- Run directories are named at random, so with more than one the newest comes from `ls -t`
+-- (a run's directory changes when its report lands); the scan never blocks the block.
+local function scan_diagnostics(state, cx)
+  local diag = state.diag
+  if not state.root or diag.scanning then
+    return
+  end
+  local dir = diagnostics_dir(state)
+  local ok, names = pcall(tern.fs.list, dir)
+  local runs = {}
+  for _, name in (ok and names or {}) do
+    if string.sub(name, 1, 4) == "run-" and tern.fs.exists(dir .. "/" .. name .. "/diagnostics.json") then
+      table.insert(runs, name)
+    end
+  end
+  local signature = table.concat(runs, "\n")
+  if signature == diag.signature then
+    return
+  end
+  diag.signature = signature
+  if #runs == 0 then
+    if diag.report then
+      state.diag = { state = "none", signature = signature }
+      if state.mode == "diagnostics" then
+        state.mode = "none"
+      end
+      cx:render()
+    end
+    return
+  end
+  if #runs == 1 then
+    load_report(state, cx, runs[1])
+    return
+  end
+  diag.scanning = true
+  local started = pcall(function()
+    tern.process.run({ "/bin/ls", "-t", dir }, { timeout_ms = 5000 }, function(result)
+      diag.scanning = false
+      if not alive(state) then
+        return
+      end
+      local wanted = {}
+      for _, run in runs do
+        wanted[run] = true
+      end
+      for name in string.gmatch(result.stdout or "", "[^\n]+") do
+        if wanted[name] then
+          load_report(state, cx, name)
+          return
+        end
+      end
+      load_report(state, cx, runs[#runs])
+    end)
+  end)
+  if not started then
+    diag.scanning = false
+    load_report(state, cx, runs[#runs])
+  end
+end
+
+-- Moves the caret to the next (`dir` 1) or previous (-1) diagnostic from the caret line, wrapping.
+local function step_diagnostic(state, dir)
+  local items = state.diag.state == "ready" and state.diag.items or {}
+  if #items == 0 then
+    return
+  end
+  local caret = state.buf.cursor.l
+  local lines = {}
+  for _, d in items do
+    local line = current_line(state, "diagnostics", d.line)
+    if line then
+      table.insert(lines, line)
+    end
+  end
+  if #lines == 0 then
+    return
+  end
+  local target = dir > 0 and lines[1] or lines[#lines]
+  if dir > 0 then
+    for _, line in lines do
+      if line > caret then
+        target = line
+        break
+      end
+    end
+  else
+    for index = #lines, 1, -1 do
+      if lines[index] < caret then
+        target = lines[index]
+        break
+      end
+    end
+  end
+  move_to(state, target)
+  reveal(state, target)
+end
+
 local function watch(state, cx)
   state.timers.disk = tern.timer(DISK_POLL_MS, function()
     state.timers.disk = nil
@@ -983,6 +1153,7 @@ local function watch(state, cx)
         cx:render()
       end
     end
+    scan_diagnostics(state, cx)
     watch(state, cx)
   end)
 end
@@ -1203,6 +1374,26 @@ local function lines_view(state, starts)
   local caret = count <= ACCENT_LINES and buf.cursor.l or nil
   local coverage = state.coverage
   local marks = state.mode == "coverage" and coverage.state == "ready" and coverage.marks or nil
+  -- Diagnostics by current line (the first, most severe, leads), and their underline ranges.
+  local problems, underlines = nil, {}
+  if state.mode == "diagnostics" and state.diag.state == "ready" then
+    problems = {}
+    local rank = { error = 1, warning = 2, note = 3 }
+    for _, d in state.diag.items do
+      local line = current_line(state, "diagnostics", d.line)
+      if line and line <= shown then
+        local entry = problems[line]
+        if not entry then
+          problems[line] = { lead = d, count = 1 }
+        else
+          entry.count += 1
+          if rank[d.severity] < rank[entry.lead.severity] then
+            entry.lead = d
+          end
+        end
+      end
+    end
+  end
   local every = count <= HIGHLIGHT_LINES
   for line = 1, shown do
     -- Numbers are `dim`; the caret line's is in the normal ink (not `strong`, whose weight can widen
@@ -1222,6 +1413,24 @@ local function lines_view(state, starts)
           or "error"
         if mark.state == "partial" and mark.branches and not stale then
           note = { ui.span(" " .. mark.branches.covered .. "/" .. mark.branches.total .. " branches", "muted") }
+        end
+      end
+    elseif problems then
+      local entry = problems[line]
+      if entry then
+        local d = entry.lead
+        local mark = d.stale and "muted" or DIAGNOSTIC_TONES[d.severity]
+        glyph, tone, number, tint = DIAGNOSTIC_SIGNS[d.severity], mark, mark, mark
+        local message = string.gsub(d.message, "%s+", " ")
+        if #message > 120 then
+          message = string.sub(message, 1, 117) .. "…"
+        end
+        note = { ui.span("  " .. message, mark) }
+        if entry.count > 1 then
+          table.insert(note, ui.span(" +" .. (entry.count - 1), "muted"))
+        end
+        if d.col and d.col >= 1 and not d.stale then
+          underlines[line] = { col = d.col, tone = mark }
         end
       end
     elseif debugging then
@@ -1244,6 +1453,17 @@ local function lines_view(state, starts)
     if length > 0 and (every or tint ~= "dim") then
       local first = string.byte(buf.lines[line], 1) >= 0xF0 and 2 or 1
       table.insert(decor, { from = starts[line], to = starts[line] + first, s = "mark " .. tint })
+      -- The diagnostic's token gets Tern's dotted `typo` underline, after the band's run.
+      local under = underlines[line]
+      if under then
+        local text = buf.lines[line]
+        local word = string.match(string.sub(text, under.col), "^[%w_]+") or ""
+        local from = math.max(under.col - 1, first)
+        local to = math.min(under.col - 1 + math.max(#word, 1), length)
+        if to > from and not string.find(string.sub(text, 1, under.col + #word), "[\128-\255]") then
+          table.insert(decor, { from = starts[line] + from, to = starts[line] + to, s = "typo " .. under.tone })
+        end
+      end
     end
     -- As VS Code and IDEA lay it out: the sign cell, the number right-aligned to the widest, a space,
     -- a `dim` hairline (the box-drawing glyph spans the line's height, so it reads continuous) and
@@ -1286,6 +1506,32 @@ end
 local function overlay_state(state)
   if state.mode == "none" or state.mode == "hotness" then
     return nil
+  end
+  if state.mode == "diagnostics" then
+    local diag = state.diag
+    if diag.state == "error" then
+      return "Report unreadable", "error", diag.error
+    elseif diag.state ~= "ready" then
+      return "Reading diagnostics…", "accent"
+    end
+    local counts = diag.counts
+    local phrase = parser.phrase(counts.error, counts.warning, counts.note)
+    local report = diag.report
+    local total = parser.phrase(report.errors, report.warnings, report.notes)
+    local detail = "Latest build: "
+      .. (total or "no diagnostics")
+      .. (report.dropped > 0 and (", " .. report.dropped .. " not listed") or "")
+    if not phrase then
+      return "No diagnostics", "success", detail
+    end
+    local stale = false
+    for _, d in diag.items do
+      stale = stale or d.stale
+    end
+    if stale then
+      detail = detail .. ". The file changed since the build; changed lines are muted."
+    end
+    return phrase, counts.error > 0 and "error" or counts.warning > 0 and "warning" or "info", detail
   end
   if state.attach == "attaching" or state.attach == "idle" then
     return "Attaching…", "accent", "Attaching to " .. (state.project or "the project")
@@ -1352,6 +1598,10 @@ function overlay_modes(state)
     table.insert(modes, "coverage")
     if source.debuggable(state.path) then
       table.insert(modes, "debug")
+    end
+    -- Diagnostics only once a build of this project left a report.
+    if state.diag.report then
+      table.insert(modes, "diagnostics")
     end
   end
   return modes
@@ -1484,6 +1734,10 @@ local function key_rows(state)
     if coverage_ready(state) then
       add({ id = "refresh", label = "Refresh coverage", icon = "repeat", keys = "F6" })
     end
+  elseif state.mode == "diagnostics" and state.diag.state == "ready" and #state.diag.items > 0 then
+    add({ header = "Diagnostics" })
+    add({ id = "diag_next", label = "Next diagnostic", keys = "F8" })
+    add({ id = "diag_prev", label = "Previous diagnostic", keys = { "shift", "F8" } })
   elseif state.mode == "debug" and state.attach == "ready" and source.debuggable(state.path) then
     add({ header = "Debug" })
     add({ id = "breakpoint", label = "Toggle breakpoint", keys = "F9" })
@@ -1548,8 +1802,8 @@ local function toolbar(state)
   local modes = overlay_modes(state)
   if #modes > 1 and narrow then
     -- Split panes: the overlays as a well of icon toggles, the active one `on`.
-    local icons = { none = "eye-off", coverage = "list-checks", debug = "bug" }
-    local labels = { none = "No overlay", coverage = "Coverage", debug = "Debug" }
+    local icons = { none = "eye-off", coverage = "list-checks", debug = "bug", diagnostics = "warn" }
+    local labels = { none = "No overlay", coverage = "Coverage", debug = "Debug", diagnostics = "Diagnostics" }
     local toggles = {}
     for index, mode in modes do
       table.insert(
@@ -1568,7 +1822,8 @@ local function toolbar(state)
       )
     )
   elseif #modes > 1 then
-    local labels = { none = "None", coverage = "Coverage", debug = "Debug", hotness = "Hotness" }
+    local labels =
+      { none = "None", coverage = "Coverage", debug = "Debug", diagnostics = "Diagnostics", hotness = "Hotness" }
     local items = {}
     for _, mode in modes do
       table.insert(items, { id = mode, label = labels[mode] })
@@ -1882,6 +2137,8 @@ local function menu_action(state, cx, act, value)
     focus(state, cx, "go")
   elseif act == "mode" and value then
     set_mode(state, cx, value)
+  elseif act == "diag_next" or act == "diag_prev" then
+    step_diagnostic(state, act == "diag_next" and 1 or -1)
   elseif act == "breakpoint" then
     toggle_breakpoint(state, cx)
   elseif act == "stop_line" and state.debug.stop then
@@ -2002,6 +2259,13 @@ end
 
 local function overlay_keys(state, cx, key)
   local name = key.name
+  if state.mode == "diagnostics" then
+    if name ~= "f8" or state.diag.state ~= "ready" or #state.diag.items == 0 then
+      return false
+    end
+    step_diagnostic(state, key.shift and -1 or 1)
+    return true
+  end
   if state.mode == "coverage" and state.attach == "ready" then
     if name == "f5" then
       start_coverage(state, cx)
@@ -2126,6 +2390,7 @@ tern.block.define("source", {
       attach = "idle",
       coverage = { state = "idle" },
       debug = { verified = {} },
+      diag = { state = "none" },
       timers = {},
     }
     for _, line in (type(saved.breakpoints) == "table" and saved.breakpoints or {}) do
@@ -2153,6 +2418,7 @@ tern.block.define("source", {
       reveal(state, state.buf.cursor.l)
     end
     attach(state, cx)
+    scan_diagnostics(state, cx)
     watch(state, cx)
     focus(state, cx, "editor")
     return state

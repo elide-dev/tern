@@ -1,0 +1,3 @@
+Raw.kt:6:19: error: initializer type mismatch: expected 'String', actual 'Int'.
+  val y: String = x
+                  ^

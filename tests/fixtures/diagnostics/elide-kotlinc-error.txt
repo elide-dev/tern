@@ -1,0 +1,12 @@
+
+error: kotlinc: Initializer type mismatch: expected 'String', actual 'Int'.
+In file: Warn.kt:6:19
+
+ 4 │ 
+ 5 │ fun warn(x: Int): Int {
+→6 │   val y: String = x
+ 7 │   return x!! + old()
+ 8 │ }
+
+  1 error.
+❌  Compilation failed (44ms)

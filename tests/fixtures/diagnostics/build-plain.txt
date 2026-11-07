@@ -1,0 +1,21 @@
+[249ms] ✓ Resolved 21 Maven dependencies (123ms)
+[900ms] warning: kotlinc: Unnecessary non-null assertion (!!) on a non-null receiver of type 'Int'.
+In file: src/main/com/example/Warn.kt:5:11
+
+ 3 │ fun warn(x: Int): Int {
+ 4 │   val unused = 3
+→5 │   return x!! + 1
+ 6 │ }
+[905ms] ✓ Compiled 3 main Kotlin sources (655ms)
+[993ms] error: javac: incompatible types: int cannot be converted to java.lang.String
+In file: src/main/com/example/Util.java:5:22
+
+ 3 │ public class Util {
+ 4 │   public static int twice(int value) {
+→5 │     String s = value * 2;
+ 6 │     return s;
+ 7 │   }
+ 8 │ }
+ · │
+[996ms] ✗ Java main compilation failed (88ms)
+[ 1.0s] ✗ Build failed in 899ms

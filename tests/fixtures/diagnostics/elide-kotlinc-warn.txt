@@ -1,0 +1,19 @@
+
+warning: kotlinc: Unnecessary non-null assertion (!!) on a non-null receiver of type 'Int'.
+In file: Warn.kt:7:11
+
+ 5 │ fun warn(x: Int): Int {
+ 6 │   val y = x
+→7 │   return x!! + old()
+ 8 │ }
+
+warning: kotlinc: 'fun old(): Int' is deprecated. old.
+In file: Warn.kt:7:16
+
+ 5 │ fun warn(x: Int): Int {
+ 6 │   val y = x
+→7 │   return x!! + old()
+ 8 │ }
+
+  0 errors, 2 warnings.
+✅  1 Kotlin sources compiled to `kout` (80ms)
