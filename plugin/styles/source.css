@@ -36,13 +36,49 @@
 }
 /* The code sits flush under the toolbar's hairline and against the status bar, its gutter at the
    pane's left edge: the editor's field frame (padding, corners, hairline, focus ring) is removed. */
-[data-surface="plugin.elide.source"] .sf-editor[data-role="source-editor"],
-[data-surface="plugin.elide.source"] .sf-editor[data-role="source-editor"].focused {
+[data-surface="plugin.elide.source"] .sf-editor[data-role~="source-editor"],
+[data-surface="plugin.elide.source"] .sf-editor[data-role~="source-editor"].focused {
   padding: 0;
   border-radius: 0;
   box-shadow: none;
   border: 0;
   background: transparent;
+}
+
+/* A slightly taller line than Tern's (about 13%: 1.35em against the kit's 15.5px at 13px). The
+   editor's line height and its maxLines height both read --sf-lh, so the visible-rows math follows. */
+[data-surface="plugin.elide.source"] .sf-editor[data-role~="source-editor"] {
+  --sf-lh: calc(1em * 1.35);
+}
+/* The gutter's hairline: one 1px line down the scroller, in the hairline cell of
+   `[sign][digits] │  `, so it is continuous at any line height and scrolls with the code. The
+   editor's role carries its digit count (`digits-N`), which places it at (N + 2.5)ch. */
+[data-surface="plugin.elide.source"] .sf-editor .sf-ed-scroll {
+  background-image: linear-gradient(var(--l3, var(--l2)), var(--l3, var(--l2)));
+  background-repeat: no-repeat;
+  background-size: 1px 100%;
+  background-attachment: local;
+}
+[data-surface="plugin.elide.source"] .sf-editor[data-role~="digits-1"] .sf-ed-scroll {
+  background-position: calc(3.5ch - 0.5px) 0;
+}
+[data-surface="plugin.elide.source"] .sf-editor[data-role~="digits-2"] .sf-ed-scroll {
+  background-position: calc(4.5ch - 0.5px) 0;
+}
+[data-surface="plugin.elide.source"] .sf-editor[data-role~="digits-3"] .sf-ed-scroll {
+  background-position: calc(5.5ch - 0.5px) 0;
+}
+[data-surface="plugin.elide.source"] .sf-editor[data-role~="digits-4"] .sf-ed-scroll {
+  background-position: calc(6.5ch - 0.5px) 0;
+}
+[data-surface="plugin.elide.source"] .sf-editor[data-role~="digits-5"] .sf-ed-scroll {
+  background-position: calc(7.5ch - 0.5px) 0;
+}
+[data-surface="plugin.elide.source"] .sf-editor[data-role~="digits-6"] .sf-ed-scroll {
+  background-position: calc(8.5ch - 0.5px) 0;
+}
+[data-surface="plugin.elide.source"] .sf-editor[data-role~="digits-7"] .sf-ed-scroll {
+  background-position: calc(9.5ch - 0.5px) 0;
 }
 
 /* Line tints. Tern's only background span token is `mark`. Every line carries a `mark <tone>` run on
@@ -57,9 +93,9 @@
   --elide-tint: transparent;
   color: inherit;
   border-radius: 0;
-  /* Vertical padding paints over the line box's half-pixel leading, so adjacent rows meet; it does not
-     change the line's layout. */
-  padding: 1px 0;
+  /* Vertical padding paints over the line box's leading (about 1.3px a side at the block's line
+     height), so adjacent rows meet; it does not change the line's layout. */
+  padding: 2px 0;
   margin: 0;
   background-color: var(--elide-tint);
   box-shadow: none;

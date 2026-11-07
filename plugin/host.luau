@@ -1252,7 +1252,8 @@ local function lines_view(state, starts)
       tone and ui.span(glyph, tone) or ui.span(glyph),
       number and ui.span(source.number(line, width), number) or ui.span(source.number(line, width)),
       ui.span(" "),
-      ui.span("│", "dim"),
+      -- The hairline's cell: the stylesheet draws one continuous line down the editor here.
+      ui.span(" "),
       ui.span("  "),
     }
     virt[line] = note
@@ -1268,7 +1269,7 @@ local function lines_view(state, starts)
       })
     end
   end
-  return gutter, any_virt and virt or nil, #decor > 0 and decor or nil
+  return gutter, any_virt and virt or nil, #decor > 0 and decor or nil, width
 end
 
 -- Whether the Coverage overlay has measured lines to draw.
@@ -2166,7 +2167,7 @@ tern.block.define("source", {
     local buf = state.buf
     local starts = buffer.starts(buf)
     state.cols = cx.cols
-    local gutter, virt, decor = lines_view(state, starts)
+    local gutter, virt, decor, digits = lines_view(state, starts)
     local children = { toolbar(state) }
     -- Transient and empty states live in the toolbar badge and the status bar, never in a node
     -- above the editor, so nothing reflows the code.
@@ -2182,7 +2183,8 @@ tern.block.define("source", {
         children,
         ui.node("editor", {
           key = "editor",
-          role = "source-editor",
+          -- `digits-N` tells the stylesheet where the gutter's hairline falls.
+          role = "source-editor digits-" .. digits,
           aria = state.name,
           grow = 1,
           text = buffer.text(buf),
