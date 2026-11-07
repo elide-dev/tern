@@ -201,6 +201,39 @@ check("field ignores", buffer.field_key(field, key("f5")), false)
 buffer.field_edit(field, { from = 0, to = 1, text = "42", cursor = 2, len = 1 })
 check("field native edit", field.text, "42")
 
+-- Reload from disk replaces only the changed middle, so marks above and below keep their lines.
+local function ten()
+  local lines = {}
+  for i = 1, 10 do
+    lines[i] = "line " .. i
+  end
+  return table.concat(lines, "\n") .. "\n"
+end
+local function reloaded(old, new, points)
+  local r = buffer.new(old)
+  local edit = buffer.reload(r, new)
+  return r, edit and table.concat(buffer.remap(points, edit), ",") or table.concat(points, ",")
+end
+local inserted_text = string.gsub(ten(), "line 5\n", "line 5\nnew\n")
+local r, moved = reloaded(ten(), inserted_text, { 1, 2, 8 })
+check("reload insert keeps marks above", moved, "1,2,9")
+check("reload insert text", buffer.disk(r), inserted_text)
+check("reload undo is the middle only", r.undo[1].inserted, "new\n")
+local deleted_text = string.gsub(ten(), "line 5\n", "")
+r, moved = reloaded(ten(), deleted_text, { 2, 8 })
+check("reload delete keeps marks", moved, "2,7")
+r, moved = reloaded(ten(), ten() .. "line 11\n", { 3, 10 })
+check("reload append keeps marks", moved, "3,10")
+check("reload append text", buffer.disk(r), ten() .. "line 11\n")
+r, moved = reloaded(ten(), string.gsub(ten(), "line 9\nline 10\n", ""), { 3, 10 })
+check("reload truncate drops the cut", moved, "3")
+local same = buffer.new(ten())
+check("reload unchanged is no edit", buffer.reload(same, ten()), nil)
+check("reload unchanged no undo", #same.undo, 0)
+local crlf_reload = buffer.new("a\nb\n")
+buffer.reload(crlf_reload, "a\r\nb\r\nc\r\n")
+check("reload takes the disk ending", buffer.disk(crlf_reload), "a\r\nb\r\nc\r\n")
+
 if failures > 0 then
   print(failures .. " failed")
   os.exit(1)

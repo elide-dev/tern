@@ -943,18 +943,13 @@ end
 -- Replaces the buffer with the file on disk as one undoable step.
 local function reload(state, text)
   local buf = state.buf
-  local fresh = buffer.new(text)
-  local last = #buf.lines
   local cursor = buf.cursor
-  local edit = buffer.replace(
-    buf,
-    { l = 1, c = 0 },
-    { l = last, c = buf.lens[last] },
-    table.concat(fresh.lines, "\n"),
-    "reload"
-  )
-  buf.ending = fresh.ending
-  state.breakpoints = buffer.remap(state.breakpoints, edit)
+  -- Only the changed middle is replaced, so breakpoints and overlay marks above and below it keep
+  -- their lines.
+  local edit = buffer.reload(buf, text)
+  if edit then
+    state.breakpoints = buffer.remap(state.breakpoints, edit)
+  end
   buf.cursor = buffer.clamp(buf, cursor)
   state.disk = text
   buffer.mark_saved(buf)
