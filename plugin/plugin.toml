@@ -13,7 +13,7 @@ match = ["elide project *", "elide * --json", "elide * --json *", "elide --json 
 
 [[lenses]]
 id = "build"
-match = ["elide build", "elide build *"]
+match = ["elide build", "elide build *", "elide javac *", "elide kotlinc *"]
 
 [[lenses]]
 id = "tap"
@@ -22,6 +22,6 @@ match = ["elide test --reporter=tap*", "elide test * --reporter=tap*"]
 [[blocks]]
 id = "source"
 title = "Elide source"
-files = ["*.js", "*.mjs", "*.cjs", "*.ts", "*.mts", "*.cts", "*.py", "*.kt"]
+files = ["*.js", "*.mjs", "*.cjs", "*.ts", "*.mts", "*.cts", "*.py", "*.kt", "*.java"]
 # Opens on a file ("Open with Elide source", elide://source, the workspace toolbar); never empty.
 palette = false

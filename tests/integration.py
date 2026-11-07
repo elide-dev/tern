@@ -124,9 +124,14 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
         run('cd ' + shlex.quote(str(build)))
         run('elide build')
         check('build segment', wait(lambda: 'Build failed' in tree('.sl-plugin'), 280), tree('.sl-plugin'))
-        built = wait(lambda: (lambda t: t if 'expected' in t else None)(block_text(before)), 30) or block_text(before)
-        check('build lens diagnostic', 'expected' in built and 'Hello.java' in built and ':4:26' in built, built)
-        check('build lens excerpt', 'System.out.println' in built, built)
+        # Runtimes with the native Build surface draw it inline under Tern; older ones print plain
+        # output, which the build lens reads. Either way the error, its location and excerpt show.
+        def build_view():
+            text = block_text(before) + tree('.sf-main *')
+            return text if 'expected' in text else None
+        built = wait(build_view, 30) or ''
+        check('build diagnostic shown', 'expected' in built and 'Hello.java' in built and ':4:26' in built, built)
+        check('build excerpt shown', 'System.out.println' in built, built)
         ctl('shot', 'lenses')
         run('cd ' + shlex.quote(str(tapp)))
         wait(lambda: 'tapp' in tree('.sl-plugin'), 30)

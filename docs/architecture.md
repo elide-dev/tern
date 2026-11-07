@@ -84,14 +84,18 @@ handlers start a process: formatters have a 4 ms budget and event and route hand
   into its editor. `palette` opens are left to Tern (the control socket's `file open`
   arrives that way, and claiming it broke `tests/coverage.py`), except `elide.pkl`:
   chosen from the palette, it opens that project's workspace, or focuses the open one.
-- **Lenses.** The host half adds `build` (`elide build`, `elide build *`) and `tap`
-  (`elide test --reporter=tap*`, `elide test * --reporter=tap*`) beside `json`. Each
-  keeps at most 20,000 lines and 4 MiB and falls back to raw output beyond that. `build`
-  reads the builder's `error: …` / `In file: path:line:col` / numbered excerpt form and
-  compilers' one-line `path:line[:col]: severity: message` form into
-  `tern.ui.diagnostic` cards (200 at most, then "… N more"); with no diagnostic it
-  shows raw output. `tap` shows `tern.ui.test_summary` and a table of top-level `ok` /
-  `not ok` lines (5,000 rows at most) with each failure's YAML `message`.
+- **Lenses.** The host half adds `build` (`elide build`, `elide build *`, `elide javac *`,
+  `elide kotlinc *`) and `tap` (`elide test --reporter=tap*`, `elide test * --reporter=tap*`)
+  beside `json`. Each keeps at most 20,000 lines and 4 MiB and falls back to raw output
+  beyond that. `build` parses with `plugin/lib/diagnostics.luau` (below) and shows a count
+  line, then one `section` per file (path relative to the command's directory, toned error,
+  warning and note counts) holding `tern.ui.diagnostic` cards (excerpt, notes and
+  suggestions) and an `Open File:line` link to `elide://source?path&line&col`; 200 cards
+  at most, then "… N more". With no diagnostic it shows raw output. Under a runtime with the
+  native Build surface, `elide build` in Tern draws that surface instead, and the lens only
+  sees plain output (older runtimes, `elide javac`, `elide kotlinc`). `tap` shows
+  `tern.ui.test_summary` and a table of top-level `ok` / `not ok` lines (5,000 rows at most)
+  with each failure's YAML `message`.
 
 ### `elide://` links
 
@@ -340,6 +344,43 @@ The state passes through unchanged; the source block draws `inferred` at half ti
 broker does not compare the source with the measured digest (it has no SHA-256), so it
 infers only when the file still reaches every measured line; the source block already
 dims overlays whose measured identity differs from the open text.
+
+### Compiler diagnostics
+
+`plugin/lib/diagnostics.luau` mirrors the runtime's parser (Elide
+`crates/cli/src/building/diagnostics.rs`) on the same samples, copied to
+`tests/fixtures/diagnostics/` and checked by `lua tests/diagnostics.lua`: javac (caret
+columns, `[lint]` codes, indented notes, closing `Note:` lines), kotlinc plain, with
+`[NAME]` codes and Gradle-style `e:`/`w:` with `file://` URLs, and Elide's own
+`error: tool: message` / `In file:` / numbered-excerpt form behind `[249ms] ` prefixes. It
+de-duplicates and bounds like the runtime (500 kept, exact counts past it), groups by file
+(errors first), reads version-1 `diagnostics.json` reports and builds `elide://source`
+links. Unlike the runtime it does not canonicalize paths (the lens has no file access to
+resolve symlinks), so the lens links what the compiler printed, made absolute.
+
+**Source block overlay.** `elide build` writes
+`<root>/.dev/reports/build/tern/run-*/diagnostics.json`. The block lists those runs when it
+opens and on its 2-second disk poll; when there is more than one it orders them with
+`ls -t` (run directories are named at random and the report carries no timestamp; a run's
+directory changes when its report lands), off the block's thread. The **Diagnostics** tab
+appears only once a report exists. It keeps this file's diagnostics and draws, per line,
+the gutter sign (`●` error, `▲` warning, `•` note), the row band through the same
+first-character `mark` run the other overlays use, Tern's dotted `typo` underline on the
+token at the reported column, and the message as a `virt` inlay (`+N` when a line has
+several). A diagnostic whose excerpt no longer matches its line (the file changed since the
+build) is drawn `muted`. The toolbar badge and status segment show "1 error, 2 warnings";
+F8 and ⇧F8 step to the next and previous diagnostic. The plan named `n`/`p`, but the block
+is an editor where those keys type, so it uses VS Code's keys. Like every overlay, it only
+changes tokens: no text moves (`tests/diagnostics_overlay.py` checks the first keyword's
+rect). The block now also opens Java files (`*.java`), so javac's diagnostics have a
+place to show.
+
+**Build button and status segment.** The workspace toolbar's Build runs
+`<runtime> --ignore-version build --surface=screen` when `build --help` lists `--surface`,
+else plain `build`. When an `elide build` line typed in a pane finishes, the window half
+compares the project's report runs with those present when it started; the one new
+report's counts extend the status segment: "Build failed · 3 errors, 1 warning". This is
+a directory listing and one bounded read, no process, inside the 50 ms event budget.
 
 ### Context-sensitive controls
 

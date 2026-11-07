@@ -206,9 +206,13 @@ and the status bar shows the project, **Workspace**, and how the pane's last
 A failing `elide test` typed in a terminal toasts "Tests failed". Choosing `elide.pkl`
 from the palette opens that project's workspace.
 
-`elide build` in a Tern terminal shows compile errors as diagnostic cards linked to
-their source, and `elide test --reporter=tap` shows a pass/fail summary with a table of
-results. Both fall back to the raw output when nothing parses or the output is very large.
+`elide build` in a Tern terminal draws Elide's Build surface on runtimes that have one.
+On older runtimes, and for `elide javac` and `elide kotlinc`, the build lens shows the
+compiler's errors and warnings as cards grouped by file, with counts and an **Open** link to
+each location; `elide test --reporter=tap` shows a pass/fail summary with a table of results.
+Both fall back to the raw output when nothing parses or the output is very large. After a
+typed `elide build`, the status bar reads, for example, "Build failed · 3 errors, 1 warning",
+and the workspace's Build button opens the full Build page when the runtime has one.
 
 `elide://source`, `elide://debug`, `elide://tests` and `elide://help` links open a source line (in the
 [source editor](#source-editor) for project sources), the debugger, project test runs or a help topic. Elide prints them; any program can, as OSC 8 hyperlinks.
@@ -230,8 +234,14 @@ while a debug session exists, with breakpoint and paused rows tinted. Switching 
 fades colors; no text moves. A hotness overlay will appear once
 the project session records source-located profile samples. Files over 600 lines are shown without highlighting
 to keep typing fast. `elide://source` links open this editor for sources inside a project.
+Once a build has left a report, **Diagnostics** marks its errors and warnings: a gutter sign,
+a tinted row, a dotted underline on the token and the message beside the line; F8 and ⇧F8
+step through them. Java files open here too.
 Run `lua tests/source.lua` for its text model and `python3 tests/source.py --runtime
 /path/to/elide` for the editor itself.
+`lua tests/diagnostics.lua` checks the shared compiler-output parser, and
+`make building ELIDE_SOURCE=…` then `python3 tests/diagnostics_overlay.py --runtime
+/path/to/elide` checks the overlay, the build lens and the status segment.
 
 ### Built-in agent project tools
 

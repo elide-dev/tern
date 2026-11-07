@@ -1,0 +1,6 @@
+Raw.kt:7:11: warning: unnecessary non-null assertion (!!) on a non-null receiver of type 'Int'.
+  return x!! + old()
+          ^^
+Raw.kt:7:16: warning: 'fun old(): Int' is deprecated. old.
+  return x!! + old()
+               ^^^

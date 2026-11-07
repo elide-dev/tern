@@ -1,0 +1,30 @@
+/w/raw/Bad.java:5: error: incompatible types: int cannot be converted to String
+    String s = value * 2;
+                     ^
+/w/raw/Bad.java:6: warning: [rawtypes] found raw type: List
+    List raw = new ArrayList();
+    ^
+  missing type arguments for generic class List<E>
+  where E is a type-variable:
+    E extends Object declared in interface List
+/w/raw/Bad.java:6: warning: [rawtypes] found raw type: ArrayList
+    List raw = new ArrayList();
+                   ^
+  missing type arguments for generic class ArrayList<E>
+  where E is a type-variable:
+    E extends Object declared in class ArrayList
+/w/raw/Bad.java:7: warning: [unchecked] unchecked call to add(E) as a member of the raw type List
+    raw.add(s);
+           ^
+  where E is a type-variable:
+    E extends Object declared in interface List
+/w/raw/Bad.java:8: error: incompatible types: String cannot be converted to int
+    return s;
+           ^
+/w/raw/Bad.java:10: error: cannot find symbol
+  void missing() { undefinedCall(); }
+                   ^
+  symbol:   method undefinedCall()
+  location: class Bad
+3 errors
+3 warnings

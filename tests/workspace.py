@@ -47,6 +47,7 @@ with tempfile.TemporaryDirectory(prefix='tw-', dir='/tmp') as temporary:
 case "$*" in
   *--help-all*) printf 'Commands:\\n  tern          Host a native Tern surface\\n'; exit 0 ;;
   *--surface=probe*) echo "--surface expects inline, screen or auto, got 'probe'" >&2; exit 2 ;;
+  *build*--help*) echo "      --surface <MODE>  How to draw the build in Tern: inline, screen or auto"; exit 0 ;;
 esac
 echo "fake-elide $*"
 sleep 300
@@ -270,6 +271,9 @@ sleep 300
             ctl('click', '[data-role="project-test"]')
             page = wait(lambda: launched(str(fake_runtime) + ' --ignore-version tern project '))
             assert page.rstrip().endswith(str(other.resolve())), page
+            # Each launch's split can overrun the timer budget under `tern serve`, pausing the plugin's
+            # timers for 5 s; probes open their panes from a timer, so let the pause pass.
+            time.sleep(6)
             # Outside a project, Run tests asks for a subject and opens the page with --surface=screen.
             outside_pane = lua('cx.layout:split(cx.session:focused(), "down", {cwd = ' + json.dumps(str(state)) + '})')
             wait(lambda: not ctl('tree', '.sl-plugin').get('nodes'))
@@ -279,6 +283,17 @@ sleep 300
             screen = wait(lambda: launched(str(fake_runtime) + ' --ignore-version test --surface=screen '))
             assert Path(screen.split(' --surface=screen ', 1)[1].strip()).resolve() == state.resolve(), (screen, outside_pane)
             print('PASS: Run tests opens the project page, and the screen page outside a project', flush=True)
+            # Build opens the full Build page when the runtime lists --surface in `build --help`. The
+            # outside run opened its page in a new tab; focus the workspace's editor to go back.
+            lua('cx.layout:close(' + str(outside_pane) + ')')
+            time.sleep(6)
+            def toolbar_shown():
+                return any(n.get('rect', [0, 0, 0, 0])[2] > 0 for n in ctl('tree', '[data-role="project-build"]').get('nodes', []))
+            lua('cx.layout:focus(' + str(other_editor) + ')')
+            wait(toolbar_shown)
+            ctl('click', '[data-role="project-build"]')
+            assert wait(lambda: launched(str(fake_runtime) + ' --ignore-version build --surface=screen'))
+            print('PASS: Build opens the full Build page', flush=True)
             assert 'exceeded its budget' not in before_launches
             assert 'plugin style sheet has errors' not in (out / 'tern.log').read_text()
             print('PASS: native workspace routing, modifiers, retained edits, reopening, and project isolation', flush=True)
