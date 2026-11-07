@@ -124,23 +124,37 @@ function M.same(candidate, path, relative, roots)
   return false
 end
 
--- Measured coverage lines (`{line, covered, branches?}`) as per-line marks, plus the covered and
--- measured counts. A covered line with fewer covered than total branches is `partial`.
+-- Line states a coverage page names in `state`; any other named state is treated as unmeasured, so
+-- a newer producer's states never break an older block.
+local LINE_STATES = { covered = true, uncovered = true, partial = true, inferred = true }
+
+-- Measured coverage lines (`{line, covered, branches?, state?}`) as per-line marks, plus the covered
+-- and measured counts. A covered line with fewer covered than total branches is `partial`.
+-- `inferred` lines (closers, blanks and comment-only lines that inherit their block's coverage) are
+-- marked but not counted.
 function M.coverage(entries)
   local marks, covered, total = {}, 0, 0
   for _, entry in ipairs(entries) do
     if type(entry) == "table" and type(entry.line) == "number" and not marks[entry.line] then
-      local state = "uncovered"
+      local named = type(entry.state) == "string" and entry.state or nil
       local branches = type(entry.branches) == "table" and entry.branches or nil
-      if entry.covered then
-        covered = covered + 1
-        state = "covered"
-        if branches and (branches.total or 0) > 0 and (branches.covered or 0) < branches.total then
-          state = "partial"
+      if named == "inferred" then
+        marks[entry.line] = { state = "inferred" }
+      elseif not named or LINE_STATES[named] then
+        local state = "uncovered"
+        if entry.covered or named == "covered" or named == "partial" then
+          covered = covered + 1
+          state = "covered"
+          if
+            named == "partial"
+            or (branches and (branches.total or 0) > 0 and (branches.covered or 0) < branches.total)
+          then
+            state = "partial"
+          end
         end
+        total = total + 1
+        marks[entry.line] = { state = state, branches = branches }
       end
-      total = total + 1
-      marks[entry.line] = { state = state, branches = branches }
     end
   end
   return marks, covered, total
