@@ -216,14 +216,18 @@ Offsets are UTF-16 code units.
   dock fields, and draws the line tints below.
 - **Line tints, and overlays that move nothing.** Probed in the editor kind: `mark` is the only span
   token that paints a background, untoned; `ins` colors text, `del` strikes it, tone tokens color
-  text, unknown tokens are dropped, and a run's box-shadow beyond its text did not show. Every line
+  text, and unknown tokens are dropped. Every line
   (in files up to 600 lines; past that only tinted lines) carries one `mark <tone>` run on its first
   character at all times, `mark dim` when no overlay applies, so switching overlays only changes a
   token: no run, sign cell or note slot appears or disappears and no text moves (the harness checks
-  the first line's text rect across None, Coverage, Debug and None). The stylesheet gives the run an
-  opaque tint mixed into the page color and repeats it with zero-spread shadows to the
-  right every 0.9ch (overlapping, so no seams show), a one-row band the scroller clips and later text paints over (W1's approach in the Tests
-  surface); `dim` is transparent. Tints fade over 140 ms (`ease-out`), not under reduced motion.
+  the first line's text rect across None, Coverage, Debug and None). The stylesheet gives the run a tint mixed into the page color
+  and forced opaque (the glass themes make the page translucent, and translucent copies stripe), 1 px of vertical padding (so adjacent rows meet without a hairline, without changing
+  the line's layout) and zero-spread shadows of the same tint every 0.9ch to the right, which overlap
+  so no seams show; the scroller clips the band, and later text, the caret and the end-of-line note
+  paint over it. Other attempts left visible blocks or did not render: a background on every run
+  broke at spaces and token edges; copies every 1ch seamed at fractional pixel edges; a single
+  `100vw` shadow showed nothing past the text; and a `::before` band is not positioned against an
+  inline run by Tern's renderer, so every band collapsed onto the text block. `dim` is transparent. Tints fade over 140 ms (`ease-out`), not under reduced motion.
   Covered lines are `success`, partial `warning`, uncovered `error`, lines changed since the
   measurement `muted`, a breakpoint line `error` and the paused line a stronger `accent`.
 - **Large files.** The block sends the whole text, because the node needs it for offsets, and

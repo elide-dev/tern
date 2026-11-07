@@ -1186,9 +1186,9 @@ end
 --
 -- Line tints: every line carries one `mark <tone>` run on its first character at all times, `mark
 -- dim` when nothing applies, so switching overlays changes tokens and never adds or removes runs (no
--- text moves). plugin/styles/source.css draws `mark dim` transparent and each tone as a faint band
--- across the row (the run's background plus shadows repeated every 0.9ch, clipped by the scroller),
--- fading between them. Past HIGHLIGHT_LINES only tinted lines get runs, to keep the decor small.
+-- text moves). plugin/styles/source.css draws `mark dim` transparent and each tone as one band from
+-- the text column to the row's edge (the run's opaque background repeated by overlapping box-shadows,
+-- clipped by the scroller), fading between them. Past HIGHLIGHT_LINES only tinted lines get runs, to keep the decor small.
 local function lines_view(state, starts)
   local buf = state.buf
   local count = #buf.lines
