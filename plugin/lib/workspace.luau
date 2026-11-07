@@ -1,3 +1,4 @@
+local source = require("./source")
 local opening = {}
 local M = {}
 local ui = tern.ui
@@ -40,7 +41,21 @@ local function separator()
   return ui.el("span", { role = "project-separator", attrs = { ["aria-hidden"] = "true" } })
 end
 
-local function controls(context)
+-- The toolbar for the file the workspace editor shows (`nil` when none): Source appears
+-- only for a file the source block shows; Debug names the file it would launch, else it
+-- opens the debugger's target picker.
+local function controls(context, file)
+  local debug_title = if file and source.debuggable(file)
+    then "Debug " .. (string.match(file, "([^/]+)$") or file)
+    else "Open debugger"
+  local tools = {
+    button("Open REPL", "repl", "terminal"),
+    button("Serve project files", "serve", "server"),
+    button("Show project files", "files", "folder"),
+  }
+  if file and source.lang(file) then
+    table.insert(tools, 1, button("Source", "source", "file"))
+  end
   return ui.node("row", { role = "project-actions", gap = "md", aria = "Project toolbar" }, {
     ui.el("span", { role = "project-name", text = context.name or "Project", title = context.root }),
     separator(),
@@ -48,17 +63,29 @@ local function controls(context)
       button("Build project", "build", "wrench"),
       button("Run tests", "test", "list-checks"),
       button("Run project", "run", "play"),
-      button("Debug source", "debug", "bug"),
+      button(debug_title, "debug", "bug"),
     }),
     ui.node("row", { grow = 1 }),
     separator(),
-    ui.node("buttons", { variant = "toolbar", label = "Project tools", role = "project-tools" }, {
-      button("Source", "source", "file"),
-      button("Open REPL", "repl", "terminal"),
-      button("Serve project files", "serve", "server"),
-      button("Show project files", "files", "folder"),
-    }),
+    ui.node("buttons", { variant = "toolbar", label = "Project tools", role = "project-tools" }, tools),
   })
+end
+
+-- The file the workspace's editor shows, or nil.
+local function editor_file(cx, workspace)
+  local read = workspace.editor
+    and cx.session:pane(workspace.editor)
+    and cx.session:read(workspace.editor, { lines = 1, max_chars = 1 })
+  return type(read) == "table" and type(read.path) == "string" and read.path or nil
+end
+
+-- Redraws a workspace's toolbar when the editor's file changed since the last draw.
+local function render(cx, pane, workspace, force)
+  local file = editor_file(cx, workspace)
+  if force or workspace.shown ~= (file or "") then
+    workspace.shown = file or ""
+    cx.canvas:set(pane, { view = controls(workspace.context, file) })
+  end
 end
 
 function M.install(actions)
@@ -89,10 +116,21 @@ function M.install(actions)
         local workspace = entries[canvas.pane] or tern.kv.get(key(cx, canvas.pane))
         if workspace and workspace.context then
           entries[canvas.pane] = workspace
-          cx.canvas:set(canvas.pane, { view = controls(workspace.context) })
+          render(cx, canvas.pane, workspace, true)
         end
       end
     end
+  end
+  -- Follows the editor's file without a timer: these events fire when it can change.
+  local function follow(_, cx)
+    for pane, workspace in entries do
+      if cx.session:pane(pane) then
+        render(cx, pane, workspace, false)
+      end
+    end
+  end
+  for _, event in { "focus", "title" } do
+    tern.on(event, follow)
   end
   tern.on("window_start", refresh)
   -- Reloading an existing window does not emit window_start.
@@ -138,6 +176,13 @@ function M.install(actions)
           end
           entries[canvas.pane] = workspace
           tern.kv.set(key(cx, canvas.pane), workspace)
+          -- The editor reports its new file once the open lands; redraw the toolbar then.
+          local toolbar = canvas.pane
+          tern.timer(100, function(current)
+            if current and entries[toolbar] == workspace and current.session:pane(toolbar) then
+              render(current, toolbar, workspace, false)
+            end
+          end)
           return { handled = true }
         end
       end
@@ -207,7 +252,7 @@ function M.open(context, cx)
         editor_in(cx, existing, cx.session:tab_of(canvas.pane))
         entries[canvas.pane] = existing
         tern.kv.set(key(cx, canvas.pane), existing)
-        cx.canvas:set(canvas.pane, { view = controls(existing.context) })
+        render(cx, canvas.pane, existing, true)
         cx:open(context.root)
         cx.layout:focus(cx.session:pane(existing.editor) and existing.editor or canvas.pane)
         return
