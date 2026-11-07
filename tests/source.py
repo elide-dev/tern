@@ -109,9 +109,16 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         return value
 
     def shots(name):
+        wait(lambda: not nodes('.toast'), 12)
+        ctl('prefs', 'preview', 'light')
+        ctl('prefs', 'close')
+        time.sleep(.5)
         ctl('shot', name + '-light')
         ctl('prefs', 'preview', 'dark-nord')
+        ctl('prefs', 'close')
+        time.sleep(.5)
         ctl('shot', name + '-dark')
+        ctl('prefs', 'preview', 'light')
         ctl('prefs', 'close')
 
     def tinted(tone, text):
