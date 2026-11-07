@@ -58,7 +58,8 @@ test("refreshes expired sessions", {skip: true}, () => {});
             return value in tree('[data-role="run-status"]')
         try:
             wait(socket.exists)
-            ctl('run', shlex.join([str(root / 'dist/elide-tern-test'), runtime, str(script)]))
+            # The full page; bare runs draw inline (checked at the end).
+            ctl('run', shlex.join([str(root / 'dist/elide-tern-test'), runtime, '--surface=screen', str(script)]))
             wait(lambda: status('Failed') or status('Incomplete'))
             assert status('Failed'), tree()
             assert '1 passed' in tree('[data-role="totals"]')
@@ -111,7 +112,19 @@ test("refreshes expired sessions", {skip: true}, () => {});
             running_pid, host_pid = child()
             os.kill(host_pid, signal.SIGKILL)
             wait(lambda: gone(running_pid))
-            print('PASS: live results, failure/output/source/duration, filters, raw TAP, rerun, cancellation, teardown, host death')
+            # Bare, the run draws inline and its block stays in scrollback after it exits.
+            script.write_text('import {test} from "node:test"; import assert from "node:assert/strict"; test("inline failure", () => assert.equal(1, 2));')
+            ctl('run', shlex.join([str(root / 'dist/elide-tern-test'), runtime, str(script)]))
+            wait(lambda: status('Failed'))
+            def host_running():
+                rows = subprocess.check_output(['ps', '-axo', 'command'], text=True)
+                return any('elide-tern-test' in row and str(script) in row for row in rows.splitlines())
+            wait(lambda: not host_running())
+            time.sleep(1)
+            assert status('Failed'), tree()
+            assert ctl('tree', '.sf-main').get('nodes'), 'the inline block left scrollback'
+            assert 'inline failure' in tree('[data-role="test-list"]'), tree()
+            print('PASS: live results, failure/output/source/duration, filters, raw TAP, rerun, cancellation, teardown, host death, inline block')
         finally:
             server.terminate()
             try: server.wait(timeout=10)
