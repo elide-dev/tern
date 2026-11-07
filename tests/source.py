@@ -25,11 +25,12 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
     source = project / 'classify.mjs'
     # Line 3 runs under the test and the debug launch; line 5 never does.
     source.write_text('export function classify(value) {\n  if (value > 0) {\n    return "positive";\n  }\n'
-                      '  return "other";\n}\nclassify(1);\n')
+                      '  return "other";\n}\nexport const sign = (v) => (v > 0 ? "+" : "-");\nclassify(1);\n')
     (project / 'classify.test.mjs').write_text(
         'import {test} from "node:test";\nimport assert from "node:assert/strict";\n'
-        'import {classify} from "./classify.mjs";\n'
-        'test("positive values", () => assert.equal(classify(1), "positive"));\n')
+        'import {classify, sign} from "./classify.mjs";\n'
+        'test("positive values", () => assert.equal(classify(1), "positive"));\n'
+        'test("signs", () => assert.equal(sign(1), "+"));\n')
     (project / 'notes.txt').write_text('not a source\n')
     # Near the size limit, and one past it.
     large = project / 'large.mjs'
@@ -86,7 +87,9 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
     def gutter():
         found = {}
         for node in nodes('.sf-editor .sf-ed-gutter'):
-            words = (node.get('text') or '').split()
+            words = [w for w in (node.get('text') or '').split() if w != '│']
+            if words and not words[0].isdigit():
+                words = words[1:] + words[:1]
             if words and words[0].isdigit():
                 found[int(words[0])] = words[1] if len(words) > 1 else ''
         return found
@@ -94,6 +97,25 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
     def signed(line, glyph, tone):
         selector = '.sf-editor .sf-ed-gutter .sf-t-' + tone
         return gutter().get(line) == glyph and any((n.get('text') or '').strip() == glyph for n in nodes(selector))
+
+    def lua(code):
+        marker = 'w5-' + str(uuid.uuid4()) + ':'
+        ctl('carly', 'lua', code + '\nprint(' + json.dumps(marker) + ')')
+        def done():
+            value = ctl('state').get('carly', {}).get('last_tool')
+            return value if value and (marker in value.get('text', '') or value.get('error')) else None
+        value = wait(done, 30)
+        ctl('carly', 'close')
+        return value
+
+    def shots(name):
+        ctl('shot', name + '-light')
+        ctl('prefs', 'preview', 'dark-nord')
+        ctl('shot', name + '-dark')
+        ctl('prefs', 'close')
+
+    def tinted(tone, text):
+        return any(text in (n.get('text') or '') for n in nodes('.sf-editor .sf-t-mark.sf-t-' + tone))
 
     def click(selector):
         enabled = selector + ':not(.disabled):not([disabled]):not([aria-disabled="true"])'
@@ -117,7 +139,7 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
               for b in ctl('state').get('file_blocks', []) if b.get('path')), ctl('state').get('file_blocks'))
         check('line numbers in gutter', wait(lambda: len(gutter()) >= 7, 10), tree('.sf-editor .sf-ed-gutter'))
         check('caret starts on linked line', wait(lambda: any('2' == (n.get('text') or '').strip()
-              for n in nodes('.sf-editor .sf-ed-gutter .sf-t-accent')), 10), tree('.sf-editor .sf-ed-gutter'))
+              for n in nodes('.sf-editor .sf-ed-gutter .sf-t-strong')), 10), tree('.sf-editor .sf-ed-gutter'))
         click('[data-role="source-editor"]')
 
         def editor_text():
@@ -139,7 +161,7 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         ctl('type', '// edited')
         check('typing edits the buffer', wait(lambda: '// edited' in editor_text(), 10), editor_text())
         check('modified shown', wait(lambda: 'Modified' in tree('[data-role="source-modified"]')
-              and 'Unsaved' in tree('[data-role="source-badge"]'), 10), tree('.sf-main'))
+              and nodes('[data-role="source-dirty"]') and nodes('[data-role="source-btn-save"]'), 10), tree('.sf-main'))
         ctl('key', 'Meta+s')
         check('save writes the file', wait(lambda: source.read_text().splitlines()[6] == '// edited', 10), source.read_text())
         check('clean after save', wait(lambda: not nodes('[data-role="source-modified"]'), 10), tree('.sf-dock'))
@@ -161,12 +183,12 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         ctl('key', 'Meta+z')
         wait(lambda: nodes('[data-role="source-modified"]'), 10)
         ctl('key', 'Meta+s')
-        check('saved without the undone line', wait(lambda: len(source.read_text().splitlines()) == 8 and not nodes('[data-role="source-modified"]'), 10),
+        check('saved without the undone line', wait(lambda: len(source.read_text().splitlines()) == 9 and not nodes('[data-role="source-modified"]'), 10),
               source.read_text())
 
         # The file changes underneath a clean buffer: the block reloads it.
         source.write_text(source.read_text() + '// external\n')
-        check('reload from disk', wait(lambda: '// external' in editor_text(), 15), editor_text())
+        check('reload from disk', wait(lambda: 'Reloaded classify.mjs' in tree('.toast') and 10 in gutter(), 15), tree('.toast'))
 
         # Find marks matches and selects the next one; go to line moves the caret.
         ctl('key', 'Control+f')
@@ -176,7 +198,7 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         check('find marks matches', wait(lambda: len([n for n in nodes('[data-role="source-editor"] .sf-t-mark')
               if 'return' in (n.get('text') or '')]) >= 2, 10), tree('[data-role="source-editor"] .sf-t-mark'))
         ctl('key', 'Enter')
-        check('find selects next', wait(lambda: 'selected' in position(), 10), position())
+        check('find selects next', wait(lambda: '6 selected' in tree('[data-role="source-selection"]'), 10), tree('.sf-dock'))
         ctl('shot', 'source-find')
         ctl('key', 'Escape')
         check('find closes', wait(lambda: not nodes('[data-role="source-find"]'), 10), tree('.sf-dock'))
@@ -186,17 +208,18 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         check('coverage empty state', wait(lambda: 'No coverage yet' in tree('[data-role="source-empty"]'), 60),
               tree('.sf-main'))
         click('[data-role="source-run-coverage"]')
-        check('covered line marked', wait(lambda: signed(3, '●', 'success'), 240), tree('.sf-editor .sf-ed-gutter'))
-        check('uncovered line marked', signed(5, '●', 'error'), gutter())
+        check('covered line tinted', wait(lambda: tinted('success', 'positive'), 240), tree('.sf-editor .sf-t-mark'))
+        check('uncovered line tinted', tinted('error', 'other'), tree('.sf-editor .sf-t-mark'))
+        check('no coverage dots in the gutter', not any(g for g in gutter().values()), gutter())
         check('coverage badge', wait(lambda: '% covered' in tree('.sf-main .sf-badge'), 10), tree('.sf-main .sf-badge'))
-        ctl('shot', 'source-coverage')
-        # An unsaved edit above shifts the marks with their lines and dims the edited line.
-        go_line(1)
+        print('     partial line tinted: %s' % tinted('warning', 'sign'), flush=True)
+        shots('source-coverage')
+        # An unsaved edit on a measured line dims its tint; untouched lines keep theirs.
+        go_line(3)
         ctl('key', 'Home')
         ctl('type', '/* a */ ')
-        check('marks dim on edited line', wait(lambda: any((n.get('text') or '').strip() == '●' for n in nodes('.sf-editor .sf-ed-gutter .sf-t-dim')), 10)
-              or not gutter().get(1), gutter())
-        check('marks kept on untouched lines', signed(3, '●', 'success') and signed(5, '●', 'error'), gutter())
+        check('edited line tint dims', wait(lambda: tinted('dim', 'positive'), 10), tree('.sf-editor .sf-t-mark'))
+        check('untouched lines keep tints', tinted('error', 'other') and tinted('success', 'if'), tree('.sf-editor .sf-t-mark'))
         for _ in range(6):
             if not nodes('[data-role="source-modified"]'):
                 break
@@ -204,24 +227,31 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
             time.sleep(.3)
         check('undo back to the saved text', wait(lambda: '/* a */' not in editor_text() and not nodes('[data-role="source-modified"]'), 10), editor_text())
 
-        # Debug: F9 on the caret line, F5 launches, the stop marker lands on that line.
+        # Debug: F9 on two lines, F5 launches; the target pauses at the call first, then in the function.
         click('[data-role="source-overlays"] .sf-tab[data-tab="debug"]')
-        check('debug launch offered', wait(lambda: nodes('[data-role="source-debug-launch"]'), 30), tree('.sf-main'))
+        check('debug launch offered', wait(lambda: nodes('[data-role="source-btn-debug-resume"]'), 30), tree('.sf-main'))
         click('[data-role="source-editor"]')
         go_line(3)
         ctl('key', 'F9')
         check('breakpoint sign', wait(lambda: signed(3, '●', 'error'), 10), gutter())
+        check('breakpoint line tinted', wait(lambda: tinted('error', 'positive'), 10), tree('.sf-editor .sf-t-mark'))
+        go_line(9)
+        ctl('key', 'F9')
+        wait(lambda: signed(9, '●', 'error'), 10)
         ctl('key', 'F5')
-        check('stop marker', wait(lambda: signed(3, '▶', 'accent'), 120), tree('.sf-main'))
-        check('paused badge', wait(lambda: 'Paused' in tree('.sf-main .sf-badge'), 10), tree('.sf-main .sf-badge'))
+        check('stop marker', wait(lambda: signed(9, '▶', 'accent'), 120), tree('.sf-main'))
+        check('stop line tinted stronger', wait(lambda: tinted('accent', 'classify'), 10), tree('.sf-editor .sf-t-mark'))
+        check('paused badge with line', wait(lambda: 'Paused at 9' in tree('.sf-main .sf-badge'), 10), tree('.sf-main .sf-badge'))
+        shots('source-debug-split')
+        ctl('key', 'F5')
+        check('second stop', wait(lambda: signed(3, '▶', 'accent'), 60), gutter())
         binding = broker('project_attach', root=str(project), runtime=runtime)
         snapshot = broker('project_debug_snapshot', binding=binding, compact=True)
         check('broker agrees on stop', snapshot and snapshot['debug']['state'] == 'stopped'
               and snapshot['debug']['frames'][0]['line'] == 3, snapshot and snapshot['debug'])
-        ctl('shot', 'source-debug-light')
-        ctl('prefs', 'preview', 'dark-nord')
-        ctl('shot', 'source-debug-dark')
-        ctl('prefs', 'close')
+        lua('cx.layout:move_to_new_tab(cx.session:focused())')
+        time.sleep(1)
+        shots('source-debug-wide')
         ctl('key', 'F5')
         check('continue runs to exit', wait(lambda: 'Exited' in tree('.sf-main .sf-badge'), 60), tree('.sf-main'))
         # Large files: a ~380 KiB file opens and takes edits; one past the limit says so.
