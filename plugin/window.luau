@@ -72,7 +72,17 @@ local function host(cx, config, kind, argv, open, opened)
       { runtime, "--ignore-version", "--no-color", "--help-all" },
       { timeout_ms = 15000 },
       function(result, current)
-        supports_tern[runtime] = result.status == 0 and string.find(result.stdout or "", "[\r\n]%s+tern%s+") ~= nil
+        -- Cache only a clean exit; a timeout (status -1) or crash is probed again next time.
+        if result.status == 0 then
+          supports_tern[runtime] = string.find(result.stdout or "", "[\r\n]%s+tern%s+") ~= nil
+        end
+        if current and supports_tern[runtime] == nil then
+          current:toast("error", "Could not probe the runtime; try again.", runtime)
+          if opened then
+            opened(current, nil)
+          end
+          return
+        end
         if current then
           local pane = host(current, config, kind, argv, open)
           if opened then
@@ -159,15 +169,18 @@ local function with_surface(cx, runtime, command, run)
       function(result, current)
         local text = "\n" .. (result.stdout or "") .. "\n" .. (result.stderr or "")
         -- An option line (`  --surface <MODE>  …`), not a mention in prose.
-        surface_support[key] = result.status == 0 and string.find(text, "\n%s+%-%-surface[%s=<%[]") ~= nil
+        local supported = result.status == 0 and string.find(text, "\n%s+%-%-surface[%s=<%[]") ~= nil
+        -- Only a clean exit answers for good; a timeout or crash is asked again next time.
+        if result.status == 0 then
+          surface_support[key] = supported
+        end
         if current then
-          run(current, surface_support[key], true)
+          run(current, supported, true)
         end
       end
     )
   end)
   if not ok then
-    surface_support[key] = false
     return run(cx, false)
   end
   return false
