@@ -84,3 +84,4 @@ Hand-off record for the plan in `2026-11-06-tern-integration-points.md`. Keep it
 - 16:16 Sam corrected spacing: tighter horizontally, vertical is now too tight → sent W5 (restore vertical rhythm, tighten toolbar/gutter/virt horizontally).
 - 16:30 W3 Task 11 done (b8745b1, 76b271e: elide://help route → `<runtime> --ignore-version help <url>` split beside the pane; integration.py PASS; workspace.py:210 still flaky also on main); merged into main. Resuming W2 on Task 12. Active: W1, W2, W5.
 - 16:40 W1 b2e878dff: coverage card as code kind with toned row marks; long files split into two code blocks for reveal (seam). Merged into tern-pr. Asked W1 to compare with editor+scoped token stylesheet (seamless, topline) and keep the better.
+- 16:50 W3 context-sensitive plugin UI (a20cb3a, c08f87a: Source button only for accepted files, Debug tooltip, "View test runs" only after a run) merged into main; integration/coverage/debug PASS, workspace 2 of 3. Active: W1, W2, W5.
