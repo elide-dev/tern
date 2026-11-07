@@ -107,6 +107,11 @@ with tempfile.TemporaryDirectory(prefix='help-') as temporary:
             assert 'Get Started' in crumbs(), crumbs()
             # The page is named once, by its heading; the trail stops at its group.
             assert heading() and heading() not in crumbs(), (heading(), crumbs())
+            # Paragraphs reflow: a source line wrapped mid-sentence is a space, not a
+            # line break (Tern's md draws every in-paragraph line end as span.br).
+            def broken_rows():
+                return [n.get('text', '') for n in nodes('.sf-md p .br, .sf-md li .br')]
+            assert not broken_rows(), broken_rows()
             assert nodes('[data-role="help-nav"]'), tree()
             # The nav groups pages by their part of the docs; only the reader's is open.
             def open_sections():
@@ -167,6 +172,8 @@ with tempfile.TemporaryDirectory(prefix='help-') as temporary:
             ctl('key', 'Enter')
             wait(lambda: 'Getting started' in heading())
             linking = place()
+            assert page_has('running program and its next steps'), tree('.sf-md')
+            assert not broken_rows(), broken_rows()
             wait(lambda: nodes('[data-role="help-links"] .sf-item'))
             ctl('click', '[data-role="help-links"] .sf-item')
             wait(lambda: place() != linking)
@@ -207,7 +214,7 @@ with tempfile.TemporaryDirectory(prefix='help-') as temporary:
             ctl('key', 'End')
             wait(lambda: nodes('[data-role="help-nav-section"]'))
             ctl('key', 'Home')
-            wait(lambda: not nodes('[data-role="help-nav-section"]'))
+            wait(lambda: heading())
             crumb = rect('[data-role="help-breadcrumb"]')
             assert crumb[3] < 40, ('the trail takes one line', crumb)
             ctl('appearance', 'light')
@@ -236,7 +243,7 @@ with tempfile.TemporaryDirectory(prefix='help-') as temporary:
             wait(lambda: nodes('.sf-md'))
             ctl('key', 'q')
             wait(lambda: not nodes('[data-role="help-heading"]'))
-            print(f'PASS: markdown has no TSP bytes, landing page named once, nav sections with one open, nav click, search cap with more line, search and Enter, back/forward, next page, link rows, stable page rect across search states, narrow stack at {narrow_cols} cols and split at {wide_cols} cols, unknown topic suggestions, light/dark shots')
+            print(f'PASS: markdown has no TSP bytes, landing page named once, paragraphs reflowed, nav sections with one open, nav click, search cap with more line, search and Enter, back/forward, next page, link rows, stable page rect across search states, narrow stack at {narrow_cols} cols and split at {wide_cols} cols, unknown topic suggestions, light/dark shots')
         finally:
             server.terminate()
             try: server.wait(timeout=10)
