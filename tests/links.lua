@@ -94,6 +94,12 @@ check("empty path", p("elide://source?path="), nil)
 check("not a string", p(nil), nil)
 check("too long", p("elide://source?path=/" .. string.rep("a", 9000)), nil)
 
+check("known root", links.known("/p", { "/q", "/p" }), true)
+check("unknown root", links.known("/x", { "/q", "/p" }), false)
+check("prefix is not known", links.known("/p/sub", { "/p" }), false)
+check("sibling prefix is not known", links.known("/px", { "/p" }), false)
+check("no roots", links.known("/p", {}), false)
+check("nil root", links.known(nil, { "/p" }), false)
 check("within", links.within("/p/a", "/p"), true)
 check("within prefix", links.within("/pa", "/p"), false)
 

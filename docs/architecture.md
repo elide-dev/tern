@@ -121,9 +121,13 @@ Rules, implemented by the pure parser `plugin/lib/links.luau` (unit-tested by
   `col` needs `line`.
 - Paths are compared as written, so emit canonical (symlink-resolved) paths, as the
   project probe reports roots: `/tmp/x` does not match a root at `/private/tmp/x`.
-- `path` must lie strictly inside `root`. A `root` must contain `elide.pkl`. Without
-  `root` (`source` only), `path` must lie inside a project this window already
-  detected. The linked file must exist. Links act on local hosts only.
+- `path` must lie strictly inside `root`. A `root` must contain `elide.pkl`, and it is
+  trusted only when this window detected that project itself (`links.known`): a link's
+  text can be anything, such as an OSC 8 hyperlink in `cat`'s output. For any other root,
+  `debug`, `tests` and a `source` link that would attach the source block show a picker
+  naming the root, and act only when the user chooses to open it. Without `root`
+  (`source` only), `path` must lie inside a project this window already detected. The
+  linked file must exist. Links act on local hosts only.
 - A rejected `elide://` URL is claimed and dropped with an info toast, so it never
   reaches the system's URL handlers; every other scheme returns `nil` to the next route.
 - `help` takes no path or root. `topic` must match `[a-z0-9][a-z0-9-]*` after

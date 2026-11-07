@@ -700,6 +700,26 @@ tern.on("command_finished", function(ev, cx)
   end
 end)
 
+-- Runs `act(cx)` for a link that names project `root`: at once when this window detected that
+-- project, else only after the user confirms it in a picker naming the root. A link's text can be
+-- anything (an OSC 8 hyperlink in `cat`'s output), so a root it names is not trusted on its own.
+local function with_root(cx, root, act)
+  if links.known(root, project.roots()) then
+    return act(cx)
+  end
+  cx:pick({
+    placeholder = "An elide:// link wants to open " .. root,
+    items = {
+      { label = "Open project " .. root, value = "open", icon = "warn" },
+      { label = "Cancel", value = "cancel", icon = "x" },
+    },
+  }):next(function(item, _, current)
+    if current and item and item.value == "open" then
+      act(current)
+    end
+  end)
+end
+
 -- `elide://` links (contract in docs/architecture.md). Every elide:// link is claimed, so a
 -- rejected one is dropped with a toast instead of reaching the system's URL handlers.
 tern.route.link(function(request, cx)
@@ -764,13 +784,24 @@ tern.route.link(function(request, cx)
       if target.line then
         table.insert(args, tostring(target.line))
       end
+      -- The block attaches to the project, so a root the link named must be one this window knows.
+      if target.root and not links.known(target.root, project.roots()) then
+        with_root(cx, target.root, function(current)
+          current:new_block("elide.source", args, "beside")
+        end)
+        return { handled = true }
+      end
       return { block = "elide.source", args = args }
     end
     cx.docs:open(target.path, { line = target.line })
   elseif target.action == "debug" then
-    launch_debug(cx, { root = target.root }, nil, nil, target.path)
+    with_root(cx, target.root, function(current)
+      launch_debug(current, { root = target.root }, nil, nil, target.path)
+    end)
   elseif target.action == "tests" then
-    view_tests({ root = target.root }, cx)
+    with_root(cx, target.root, function(current)
+      view_tests({ root = target.root }, current)
+    end)
   end
   return { handled = true }
 end)
