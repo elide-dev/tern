@@ -235,13 +235,13 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         visible = sum(1 for p in ink if abs(lum(p) - lum(band)) > 60) >= 4
         return tinted and visible, {'band': band, 'clear': clear, 'tinted': tinted, 'text_visible': visible}
 
-    # The hairline is one 1px column at (digits + 3) cells from the gutter's left edge: sampled at every
+    # The hairline is one 1px column at (digits + 4) cells from the gutter's left edge: sampled at every
     # row boundary and mid-row it must be one colour, distinct from the background beside it.
     def hairline_ok(shot, digits, lines, scope='.sf-editor'):
         pixel = png(out / 'live' / (shot + '.png'))
         rows = gutter_rows(scope)
         first = rows[min(rows)]
-        x = round((first[0] + first[2] - 2 * cell_width[0] - 0.5) * 2)
+        x = round((first[0] + first[2] - cell_width[0] - 0.5) * 2)
         x = settle(pixel, x, round((first[1] + first[3] / 2) * 2))
         samples, beside = [], []
         for line in lines:
@@ -287,11 +287,9 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
 
     # Opens the block in a tab of its own and waits for `ready`; consecutive Carly calls sometimes
     # do nothing, so it retries.
-    # From rects: the hairline (the gutter's right border) sits two cells after the number's right edge,
-    # and the code (the caret at column 0) two cells after the hairline.
     # From rects: the hairline (the right edge of the bordered air run) sits two cells after the number's
     # right edge, and the code's column 0 (the line's tint run, or the caret at column 0 in files
-    # without runs) two cells after it. The caret line's number carries no token, so the number is
+    # without runs) one cell after it. The caret line's number carries no token, so the number is
     # measured on the line below.
     def gutter_geometry(line):
         rows = gutter_rows()
@@ -309,7 +307,7 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
             return False, detail
         hairline = air[0] + air[2]
         detail['hairline'] = hairline
-        ok = abs(number[0] + number[2] + 2 * cell - hairline) <= 1.5 and abs(code[0] - (hairline + 2 * cell)) <= 1.5
+        ok = abs(number[0] + number[2] + 2 * cell - hairline) <= 1.5 and abs(code[0] - (hairline + cell)) <= 1.5
         return ok, detail
 
     def sheet_errors():
@@ -372,18 +370,30 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         check('toolbar measured in the split pane', toolbar_clean is not None, tree('.sf-main'))
         check('caret starts on linked line', wait(lambda: 'Ln 2,' in tree('[data-role="source-position"]'), 10),
               tree('[data-role="source-position"]'))
-        # The gutter is exactly sign + digits + space + hairline + two spaces: 1 + 2 + 1 + 1 + 2 cells here.
+        # The gutter is exactly sign + space + digits + two cells + hairline + one cell: 1 + 1 + 1 + 2 + 1 cells here.
         def gutter_cells(digits):
             cell = nodes('.sf-editor .sf-t-mark')[0]['rect'][2] if nodes('.sf-editor .sf-t-mark') else cell_width[0]
             cell_width[0] = cell
-            # `[sign 2][digits][2] hairline [2]`, the hairline drawn inside the last four cells; the
+            # `[sign 2][digits][2] hairline [1]`, the hairline drawn inside the last three cells; the
             # editor's `digits-N` role scopes the measure when several editors are on screen.
             width = max(n['rect'][2] for n in nodes('[data-role~="digits-' + str(digits) + '"] .sf-ed-gutter'))
-            return abs(width - ((6 + digits) * cell + 1)) < 1.5, {'gutter': width, 'cell': cell, 'cells': (width - 1) / cell}
+            return abs(width - ((5 + digits) * cell + 1)) < 1.5, {'gutter': width, 'cell': cell, 'cells': (width - 1) / cell}
         ok, detail = gutter_cells(1)
         check('gutter width, single-digit file', ok, detail)
         ok, detail = gutter_geometry(2)
-        check('hairline 2 cells after the digits and before the code (1 digit)', ok, detail)
+        check('hairline 2 cells after the digits, 1 before the code (1 digit)', ok, detail)
+        # Half a line of air above the first row: row 1's gutter and code sit that far below the
+        # editor's top edge, and the gutter row still shares its code row's top.
+        def top_padding():
+            editor = [n['rect'] for n in nodes('[data-role~="digits-1"]') if onscreen(n)]
+            rows = gutter_rows('[data-role~="digits-1"]')
+            if not editor or 1 not in rows:
+                return False, {'editor': editor, 'rows': sorted(rows)[:3]}
+            pitch = rows[2][1] - rows[1][1]
+            gap = rows[1][1] - editor[0][1]
+            return abs(gap - pitch / 2) <= 1.5, {'gap': gap, 'pitch': pitch}
+        ok, detail = top_padding()
+        check('half a line above the first row', ok, detail)
         click('[data-role~="source-editor"]')
 
         def editor_text():
@@ -634,7 +644,7 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         ctl('open-url', 'elide://source?root=' + str(project) + '&path=' + str(project / 'notes.txt'))
         check('non-source link opens the editor', wait(lambda: any(Path(b['path']).resolve() == (project / 'notes.txt').resolve()
               for b in ctl('state').get('file_blocks', []) if b.get('path')), 15), ctl('state').get('file_blocks'))
-        # Wider gutters, each file in a tab of its own: the width is 2 + digits + 1 + 2 cells and the
+        # Wider gutters, each file in a tab of its own: the width is 2 + digits + 2 + 1 cells and the
         # signs stay inside the sign column on four- and five-digit lines.
         # Sam's case: four-digit numbers on rows 1245-1256 of a 1,300-line file.
         check('1,300-line file opens at line 1249', open_tab(thirteen, lambda: 'Ln 1249,' in tree('[data-role="source-position"]'), 1249),
@@ -643,7 +653,7 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         go_line(1250)
         wait(lambda: 1250 in gutter_rows() and 1251 in gutter_rows(), 15)
         ok, geometry = gutter_geometry(1250)
-        check('hairline 2 cells after the digits and before the code (4 digits)', ok, geometry)
+        check('hairline 2 cells after the digits, 1 before the code (4 digits)', ok, geometry)
         row_1250 = gutter_rows()[1250]
         ok, detail = gutter_cells(4)
         check('gutter width, 1,300-line file', ok, detail)

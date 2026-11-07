@@ -212,26 +212,28 @@ Offsets are UTF-16 code units.
   yet, not measured, launching, paused elsewhere, failures) is the state badge's text, with details
   in its tooltip, and the status bar's overlay segment; actions sit in the toolbar (Run with
   coverage, `primary` while there is no coverage; Retry after a failed attach). The harness checks
-  the first line's text rect before, during and after a coverage run. The gutter is laid out as VS Code and IDEA do: `[sign 2][digits][2] │ [2]`: a two-cell sign
+  the first line's text rect before, during and after a coverage run. The gutter is laid out as VS Code and IDEA do: `[sign 2][digits][2] │ [1]`: a two-cell sign
   column (the glyph and a cell of air, so a breakpoint, the paused arrow or a later marker never
   touches the pane edge or the digits and never shifts them), the numbers right-aligned to the
-  widest, two cells of air, the hairline, two cells before the code. The hairline is the right border
+  widest, two cells of air, the hairline, one cell before the code. The hairline is the right border
   of the two air cells (a `muted` run the sheet makes an inline-block exactly one line tall, so the
   border spans the row and rows abut into one continuous line); it sits wherever the digits end,
   with nothing computed from `ch`. Tried and dropped: a `│` glyph (rows overlap or gap at the row
   boundaries), shadows or a padded background on gutter runs (clipped per row or not painted), a
   border with a margin (this renderer drops margins on inline-blocks), and a 1px gradient on the
   scroller placed in `ch` (the scroller has the region's sans face, so the line landed inside the
-  digits in other setups). The harness measures, from rects: the gutter is 2 + digits + 2 + 2 cells
+  digits in other setups). The harness measures, from rects: the gutter is 2 + digits + 2 + 1 cells
   plus the 1px border for 1-, 2-, 3-, 4- and 5-digit files; the hairline is two cells after the
-  number's right edge and two cells before the code's column 0 (on a 9-line file and on rows
+  number's right edge and one cell before the code's column 0 (on a 9-line file and on rows
   1245-1256 of a 1,300-line file); breakpoint and paused signs on lines 1234 and 12345 sit inside the
   sign column; and the hairline column is one colour at every row boundary in the screenshots.
   Numbers are `dim`; the caret line's is the normal ink. The dirty marker is a small `•` in `warning`
-  with the tooltip "Unsaved changes". The code sits flush: the scoped sheet removes the editor field's
-  padding, corners and hairline and the regions' 16 px gaps. The block's line height is about 13%
+  with the tooltip "Unsaved changes". The code sits half a line under the toolbar: the scoped sheet removes the editor field's
+  corners and hairline and the regions' 16 px gaps, and replaces the field's padding with half a line
+  (`--sf-lh`) on top, outside the scroller, so gutter, code and tints move together (the harness
+  checks row 1 sits half a row pitch below the editor's top). The block's line height is about 13%
   over Tern's (`--sf-lh: calc(1em * 1.35)` on this editor, 17.55 px against 15.5 px at 13 px);
-  `maxLines` counts lines of that height, so the block divides the rows it has by 1.35 / 1.192, and
+  `maxLines` counts lines of that height, so the block divides the rows it has by 1.35 / 1.192 and keeps half a line for the top padding, and
   the harness checks every gutter row sits on its code row. ⌥1 to ⌥3 pick an available overlay (in the desktop harness they did not
   reach the block, presumably taken by window bindings, so the harness uses the switch).
 - **Stylesheet.** `plugin/styles/source.css` (the manifest's `styles`) is scoped to
