@@ -82,8 +82,13 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
         line = next((line for line in text.splitlines() if marker in line), None)
         return json.loads(line.split(marker, 1)[1]) if line else None
 
+    # Types a line and Enter. Not `ctl run`, which waits for the pane's output to settle: a live
+    # inline surface (the Build or Tests page in flow mode) can keep it from settling past ctl's
+    # 30 s. The shell runs typed lines in order, and every check waits for its own result.
     def run(line):
-        ctl('run', line)
+        ctl('type', line)
+        ctl('key', 'Enter')
+        time.sleep(.3)
 
     try:
         wait(sock.exists)
