@@ -57,7 +57,7 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
 
     def ctl(command, *words):
         r = subprocess.run(['tern', 'ctl', '--control', str(sock), command,
-                            *(str(w) if command == 'tree' else json.dumps(str(w), ensure_ascii=False) for w in words)],
+                            *(str(w) if command == 'tree' or isinstance(w, (int, float)) else json.dumps(str(w), ensure_ascii=False) for w in words)],
                            capture_output=True, text=True, timeout=30)
         return json.loads(r.stdout)
 
@@ -119,8 +119,29 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         ctl('prefs', 'preview', 'light')
         ctl('prefs', 'close')
 
-    def toned(tone, text):
-        return any(text in (n.get('text') or '') for n in nodes('.sf-code .sf-ln[data-tone="' + tone + '"]'))
+    # Each line's tint is a `mark <tone>` run on its first character; match it to a line number by
+    # the gutter row at the same height.
+    def tinted(tone, line):
+        rows = {}
+        for node in nodes('.sf-editor .sf-ed-gutter'):
+            match = re.match(r'^\s*[^\d\s]?\s*(\d+)', node.get('text') or '')
+            if match:
+                rows[int(match.group(1))] = node['rect'][1]
+        y = rows.get(line)
+        return y is not None and any(abs(n['rect'][1] - y) < 4 for n in nodes('.sf-editor .sf-t-mark.sf-t-' + tone))
+
+    # Wide panes show the overlay switch as tabs, split panes (under about 150 columns) as a well of
+    # icon toggles.
+    def overlay(mode):
+        if nodes('[data-role="source-overlays"]'):
+            click('[data-role="source-overlays"] .sf-tab[data-tab="' + mode + '"]')
+        else:
+            click('[data-role="source-btn-overlay-' + mode + '"]')
+        time.sleep(.6)
+
+    def first_text_rect():
+        found = nodes('[data-role="source-editor"] .sf-ed-text .tk-keyword')
+        return found[0].get('rect') if found else None
 
     def numbered(line, token):
         return any((n.get('text') or '').strip() == str(line) for n in nodes('.sf-editor .sf-ed-gutter .sf-t-' + token))
@@ -163,6 +184,8 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
             return wait(lambda: f'Ln {n},' in position(), 10)
 
         # Editing: go to a line, type, save, undo and redo.
+        check('overlay toggles in a split pane', all(nodes('[data-role="source-btn-overlay-' + m + '"]')
+              for m in ['none', 'coverage', 'debug']), tree('[data-role="source-toolbar"]'))
         check('go to line', go_line(6), position())
         ctl('key', 'End')
         ctl('key', 'Enter')
@@ -212,31 +235,25 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         check('find closes', wait(lambda: not nodes('[data-role="source-find"]'), 10), tree('.sf-dock'))
 
         # Coverage: the empty state offers a run; its result marks lines.
-        click('[data-role="source-overlays"] .sf-tab[data-tab="coverage"]')
+        overlay('coverage')
         check('coverage empty state', wait(lambda: 'No coverage yet' in tree('[data-role="source-empty"]'), 60),
               tree('.sf-main'))
         click('[data-role="source-run-coverage"]')
-        check('covered rows toned', wait(lambda: toned('success', 'positive'), 240), tree('.sf-code'))
-        check('uncovered row toned', toned('error', 'other'), tree('.sf-code'))
-        check('coverage view is read-only', not nodes('[data-role="source-editor"]')
-              and 'read-only' in tree('[data-role="source-readonly"]'), tree('.sf-dock'))
-        check('hotness hidden', not nodes('[data-role="source-overlays"] .sf-tab[data-tab="hotness"]'), tree('[data-role="source-overlays"]'))
+        check('covered lines tinted', wait(lambda: tinted('success', 3), 240), tree('.sf-editor .sf-t-mark'))
+        check('uncovered line tinted', tinted('error', 5), tree('.sf-editor .sf-t-mark'))
+        check('coverage keeps the editor', nodes('[data-role="source-editor"]'), tree('.sf-main'))
+        check('hotness hidden', not nodes('[data-role="source-btn-overlay-hotness"]') and 'Hotness' not in tree('[data-role="source-overlays"]'),
+              tree('[data-role="source-toolbar"]'))
         check('coverage badge', wait(lambda: '% covered' in tree('.sf-main .sf-badge'), 10), tree('.sf-main .sf-badge'))
-        print('     partial row toned: %s' % toned('warning', 'sign'), flush=True)
+        print('     partial line tinted: %s' % tinted('warning', 8), flush=True)
         shots('source-coverage')
-        # An unsaved edit on a measured line mutes its row; untouched lines keep their tones.
-        click('[data-role="source-overlays"] .sf-tab[data-tab="none"]')
-        wait(lambda: nodes('[data-role="source-editor"]'), 10)
+        # An unsaved edit on a measured line mutes its tint; untouched lines keep theirs.
         click('[data-role="source-editor"]')
         go_line(3)
         ctl('key', 'Home')
         ctl('type', '/* a */ ')
-        click('[data-role="source-overlays"] .sf-tab[data-tab="coverage"]')
-        check('edited row muted', wait(lambda: toned('muted', 'positive'), 10), tree('.sf-code'))
-        check('untouched rows keep tones', toned('error', 'other') and toned('success', 'if'), tree('.sf-code'))
-        click('[data-role="source-overlays"] .sf-tab[data-tab="none"]')
-        wait(lambda: nodes('[data-role="source-editor"]'), 10)
-        click('[data-role="source-editor"]')
+        check('edited line muted', wait(lambda: tinted('muted', 3), 10), tree('.sf-editor .sf-t-mark'))
+        check('untouched lines keep tints', tinted('error', 5) and tinted('success', 2), tree('.sf-editor .sf-t-mark'))
         for _ in range(6):
             if not nodes('[data-role="source-modified"]'):
                 break
@@ -244,8 +261,18 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
             time.sleep(.3)
         check('undo back to the saved text', wait(lambda: '/* a */' not in editor_text() and not nodes('[data-role="source-modified"]'), 10), editor_text())
 
+        # Switching overlays changes only colors: the first line's text stays where it was.
+        overlay('none')
+        time.sleep(.5)
+        rects = [first_text_rect()]
+        for tab in ['coverage', 'debug', 'none']:
+            overlay(tab)
+            time.sleep(.8)
+            rects.append(first_text_rect())
+        check('overlay switches move no text', rects[0] and all(r and r[:2] == rects[0][:2] for r in rects), rects)
+
         # Debug: F9 on two lines, F5 launches; the target pauses at the call first, then in the function.
-        click('[data-role="source-overlays"] .sf-tab[data-tab="debug"]')
+        overlay('debug')
         check('debug launch offered', wait(lambda: nodes('[data-role="source-btn-debug-launch"]'), 30), tree('.sf-main'))
         check('no stepping before a target', not nodes('[data-role="source-debug-steps"]'), tree('[data-role="source-toolbar"]'))
         click('[data-role="source-editor"]')
@@ -253,16 +280,17 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         ctl('key', 'F9')
         check('breakpoint sign', wait(lambda: signed(3, '●', 'error'), 10), gutter())
         check('breakpoint number in error', wait(lambda: numbered(3, 'error'), 10), tree('.sf-editor .sf-ed-gutter'))
+        check('breakpoint line tinted', tinted('error', 3), tree('.sf-editor .sf-t-mark'))
         go_line(9)
         ctl('key', 'F9')
         wait(lambda: signed(9, '●', 'error'), 10)
         ctl('key', 'F5')
         check('stop marker', wait(lambda: signed(9, '▶', 'accent'), 120), tree('.sf-main'))
-        check('stop line marked', wait(lambda: any('classify' in (n.get('text') or '') for n in nodes('.sf-editor .sf-t-mark'))
-              and numbered(9, 'accent'), 10), tree('.sf-editor .sf-t-mark'))
+        check('stop line tinted', wait(lambda: tinted('accent', 9) and numbered(9, 'accent'), 10), tree('.sf-editor .sf-t-mark'))
         check('stepping wells while paused', nodes('[data-role="source-debug-run"]') and nodes('[data-role="source-debug-steps"]')
               and nodes('[data-role="source-btn-debug-resume"]'), tree('[data-role="source-toolbar"]'))
-        check('paused badge with line', wait(lambda: 'Paused at 9' in tree('.sf-main .sf-badge'), 10), tree('.sf-main .sf-badge'))
+        # A split pane leaves the state to the status bar while the debugger's wells show.
+        check('paused state with line', wait(lambda: 'Paused at 9' in tree('[data-role="source-overlay-state"]'), 10), tree('.sf-dock'))
         shots('source-debug-split')
         ctl('key', 'F5')
         check('second stop', wait(lambda: signed(3, '▶', 'accent'), 60), gutter())
