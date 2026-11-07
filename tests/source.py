@@ -1,7 +1,7 @@
 """The Elide source block in an isolated desktop window: elide://source opens it, a coverage run from the
 block marks covered and uncovered lines, and the Debug overlay sets a breakpoint with `b`, launches and
 shows the stop marker. Usage: python3 tests/source.py --runtime /path/to/elide [--sdk /path/to/embedder]"""
-import argparse, json, os, re, shutil, subprocess, sys, tempfile, time, uuid
+import argparse, json, os, re, shutil, struct, subprocess, sys, tempfile, time, uuid, zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -146,6 +146,71 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
     def numbered(line, token):
         return any((n.get('text') or '').strip() == str(line) for n in nodes('.sf-editor .sf-ed-gutter .sf-t-' + token))
 
+    # Screenshot pixels, to check what the tints paint (a run's background is not a node).
+    decoded = {}
+    def png(path):
+        if str(path) in decoded:
+            return decoded[str(path)]
+        data = Path(path).read_bytes()
+        pos, chunks, width = 8, [], 0
+        while pos < len(data):
+            length, kind = struct.unpack('>I4s', data[pos:pos + 8])
+            body = data[pos + 8:pos + 8 + length]
+            if kind == b'IHDR':
+                width, height, depth, color = struct.unpack('>IIBB', body[:10])
+                channels = {2: 3, 6: 4}[color]
+            elif kind == b'IDAT':
+                chunks.append(body)
+            pos += 12 + length
+        raw = zlib.decompress(b''.join(chunks))
+        stride = width * channels
+        rows, prev = [], bytearray(stride)
+        for y in range(height):
+            kind = raw[y * (stride + 1)]
+            line = bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
+            for i in range(stride):
+                a = line[i - channels] if i >= channels else 0
+                b = prev[i]
+                c = prev[i - channels] if i >= channels else 0
+                if kind == 1:
+                    line[i] = (line[i] + a) & 255
+                elif kind == 2:
+                    line[i] = (line[i] + b) & 255
+                elif kind == 3:
+                    line[i] = (line[i] + (a + b) // 2) & 255
+                elif kind == 4:
+                    pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
+                    line[i] = (line[i] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+            rows.append(bytes(line))
+            prev = line
+        decoded[str(path)] = lambda x, y: tuple(rows[int(y)][int(x) * channels:int(x) * channels + 3])
+        return decoded[str(path)]
+
+    def gutter_rows():
+        rows = {}
+        for node in nodes('.sf-editor .sf-ed-gutter'):
+            match = re.match(r'^\s*[^\d\s]?\s*(\d+)', node.get('text') or '')
+            if match:
+                rows[int(match.group(1))] = node['rect']
+        return rows
+
+    # A tinted row: past the text, its middle differs from an untinted row's at the same x (the band
+    # is there and row-aligned), the neighbouring untinted row is untouched, and inside the text some
+    # pixels stay far darker or lighter than the band (the text paints over it).
+    def band_ok(shot, line, clear_line):
+        pixel = png(out / 'live' / (shot + '.png'))
+        rows = gutter_rows()
+        editor = nodes('[data-role="source-editor"]')[0]['rect']
+        far = (editor[0] + editor[2] - 24) * 2
+        mid = lambda r: (rows[r][1] + rows[r][3] / 2) * 2
+        band, clear = pixel(far, mid(line)), pixel(far, mid(clear_line))
+        tinted = sum(abs(p - q) for p, q in zip(band, clear)) > 12
+        text_x = (rows[line][0] + rows[line][2] + 4) * 2
+        ink = [pixel(text_x + dx, mid(line)) for dx in range(0, 360, 2)]
+        lum = lambda p: sum(p) / 3
+        visible = sum(1 for p in ink if abs(lum(p) - lum(band)) > 60) >= 4
+        return tinted and visible, {'band': band, 'clear': clear, 'tinted': tinted, 'text_visible': visible}
+
     def click(selector):
         enabled = selector + ':not(.disabled):not([disabled]):not([aria-disabled="true"])'
         wait(lambda: any(n.get('rect', [0, 0, 0, 0])[2] > 0 for n in nodes(enabled)), 30)
@@ -236,10 +301,17 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
 
         # Coverage: the empty state offers a run; its result marks lines.
         overlay('coverage')
-        check('coverage empty state', wait(lambda: 'No coverage yet' in tree('[data-role="source-empty"]'), 60),
-              tree('.sf-main'))
-        click('[data-role="source-run-coverage"]')
+        check('coverage empty state', wait(lambda: 'No coverage yet' in tree('[data-role="source-badge"]'), 60),
+              tree('[data-role="source-toolbar"]'))
+        # Running tests reports in the badge and status bar only: the code never moves.
+        rect_before = first_text_rect()
+        click('[data-role="source-btn-run-coverage"]')
+        wait(lambda: 'Running tests' in tree('[data-role="source-badge"]') + tree('[data-role="source-overlay-state"]'), 30)
+        rect_during = first_text_rect()
         check('covered lines tinted', wait(lambda: tinted('success', 3), 240), tree('.sf-editor .sf-t-mark'))
+        rect_after = first_text_rect()
+        check('running tests moves no text', rect_before and rect_before[:2] == (rect_during or [])[:2] == (rect_after or [])[:2],
+              [rect_before, rect_during, rect_after])
         check('uncovered line tinted', tinted('error', 5), tree('.sf-editor .sf-t-mark'))
         check('coverage keeps the editor', nodes('[data-role="source-editor"]'), tree('.sf-main'))
         check('hotness hidden', not nodes('[data-role="source-btn-overlay-hotness"]') and 'Hotness' not in tree('[data-role="source-overlays"]'),
@@ -247,6 +319,15 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         check('coverage badge', wait(lambda: '% covered' in tree('.sf-main .sf-badge'), 10), tree('.sf-main .sf-badge'))
         print('     partial line tinted: %s' % tinted('warning', 8), flush=True)
         shots('source-coverage')
+        ok, detail = band_ok('source-coverage-light', 5, 4)
+        check('uncovered band row-aligned, under the text (light)', ok, detail)
+        ok, detail = band_ok('source-coverage-light', 3, 4)
+        check('covered band row-aligned, under the text (light)', ok, detail)
+        ok, detail = band_ok('source-coverage-dark', 5, 4)
+        check('uncovered band row-aligned, under the text (dark)', ok, detail)
+        # Negative control: an unmeasured row (4) reads untinted against another (1).
+        ok, detail = band_ok('source-coverage-light', 4, 1)
+        check('unmeasured row stays untinted', not detail['tinted'], detail)
         # An unsaved edit on a measured line mutes its tint; untouched lines keep theirs.
         click('[data-role="source-editor"]')
         go_line(3)
