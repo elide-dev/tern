@@ -1470,11 +1470,16 @@ local function toolbar(state)
     )
   end
   local dirty = buffer.dirty(buf)
+  -- One primary on screen: Save takes it only while no overlay offers its own (Resume, Run with
+  -- coverage in the empty state).
+  local save_primary = dirty
+    and state.mode ~= "debug"
+    and not (state.mode == "coverage" and state.coverage.state == "missing")
   table.insert(
     right,
     ui.node("buttons", { key = "tools", role = "source-tools", variant = "toolbar", label = "Editor" }, {
       icon_button("save", "Save (⌘S)", "save", nil, "save", {
-        variant = dirty and "primary" or nil,
+        variant = save_primary and "primary" or nil,
         disabled = not dirty and "No unsaved changes" or nil,
       }),
       icon_button("find", "Find (⌃F)", "search", nil, "find", { on = state.find ~= nil }),
@@ -1685,7 +1690,7 @@ local function status_bar(state)
         key = "overlay",
         role = "source-overlay-state",
         side = "right",
-        text = (state.mode == "coverage" and "Coverage " or "") .. word,
+        text = state.mode == "coverage" and ("Coverage " .. string.gsub(word, " covered$", "")) or word,
         tone = tone,
         priority = 4,
       })
