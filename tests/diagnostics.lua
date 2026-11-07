@@ -203,6 +203,11 @@ local report = diagnostics.report({
 check("report counts", { report.errors, report.warnings, report.dropped, #report.diagnostics }, { 3, 1, 0, 1 })
 check("report excerpt", report.diagnostics[1].excerpt, { first_line = 2, text = "x" })
 check("not a report", diagnostics.report({ version = 1 }), nil)
+local big = { version = 1, diagnostics = {} }
+for n = 1, 600 do
+  table.insert(big.diagnostics, { severity = "warning", message = "w" .. n, line = n })
+end
+check("report capped at KEPT", #diagnostics.report(big).diagnostics, diagnostics.KEPT)
 check("phrase", diagnostics.phrase(3, 1, 0), "3 errors, 1 warning")
 check("phrase one", diagnostics.phrase(1, 0, 2), "1 error")
 check("phrase notes", diagnostics.phrase(0, 0, 2), "2 notes")

@@ -527,6 +527,10 @@ function M.report(decoded)
   end
   local list = {}
   for _, d in ipairs(decoded.diagnostics) do
+    -- The runtime keeps at most KEPT; a larger report is not trusted to be small.
+    if #list >= M.KEPT then
+      break
+    end
     if type(d) == "table" and RANK[d.severity] and type(d.message) == "string" then
       local excerpt = d.excerpt
       if type(excerpt) ~= "table" or type(excerpt.text) ~= "string" or type(excerpt.first_line) ~= "number" then
