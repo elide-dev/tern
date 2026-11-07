@@ -114,3 +114,4 @@ Hand-off record for the plan in `2026-11-06-tern-integration-points.md`. Keep it
 - 20:50 W1 70986ea26 (seamless 0.5ch band copies, no-reflow: empty-line message, dock slot, fixed 50ch card) merged into tern-pr; testing.py rect assertion committed on main. W1 now on Task 14.
 - 20:31 Sam: more padding between the gutter border and the code (comfortable) → sent W5 (~2ch after the hairline, 1 cell before it).
 - 20:32 Sam: gutter takes too much space; match VS Code/IDEA → sent W5 exact cell layout [sign 1][digits][1][hairline][2][code], no extra leading space.
+- 20:35 Sam: gutter spacing good; reduce padding around the code area so gutter/code sit flush under the toolbar → sent W5 (neutralise the editor field frame in the scoped sheet, no side inset, natural leading only).
