@@ -209,9 +209,13 @@ Offsets are UTF-16 code units.
   yet, not measured, launching, paused elsewhere, failures) is the state badge's text, with details
   in its tooltip, and the status bar's overlay segment; actions sit in the toolbar (Run with
   coverage, `primary` while there is no coverage; Retry after a failed attach). The harness checks
-  the first line's text rect before, during and after a coverage run. The gutter is `[sign][number] ` (one sign cell, numbers
-  right-aligned to the widest, one space), identical in width on every line; the caret line's
-  number is `strong`. ⌥1 to ⌥3 pick an available overlay (in the desktop harness they did not
+  the first line's text rect before, during and after a coverage run. The gutter is `[sign] [number] │ ` (one sign cell, numbers
+  right-aligned to the widest, a cell of space on each side, a `dim` box-drawing hairline that spans
+  the line's height, one cell before the code), identical in width on every line; the caret line's
+  number is `strong`. The dirty marker is a small `•` in `warning` with the tooltip "Unsaved
+  changes". Rows cannot get more vertical room without changing the editor's line height: Tern's
+  renderer does not grow a line box for a padded inline-block, so the padding overlapped the next
+  row instead. ⌥1 to ⌥3 pick an available overlay (in the desktop harness they did not
   reach the block, presumably taken by window bindings, so the harness uses the switch).
 - **Stylesheet.** `plugin/styles/source.css` (the manifest's `styles`) is scoped to
   `[data-surface="plugin.elide.source"]` and colored only with Tern's tokens; it is the design
@@ -235,8 +239,10 @@ Offsets are UTF-16 code units.
   isolated text block, the band covered the whole text block and painted over the text. The harness
   checks the band in the screenshots' pixels: a tinted row differs from an untinted one past its
   text, the neighbouring row stays untinted, and the text stays visible over it. `dim` is transparent. Tints fade over 140 ms (`ease-out`), not under reduced motion.
-  Covered lines are `success`, partial `warning`, uncovered `error`, lines changed since the
-  measurement `muted`, a breakpoint line `error` and the paused line a stronger `accent`.
+  Covered lines are `success`, `inferred` lines (closers, blanks and comment-only lines
+  that inherit their block's coverage, a state the coverage page is gaining) the success tint at half
+  strength, partial `warning`, uncovered `error`, lines changed since the measurement `muted`;
+  states the block does not know are treated as unmeasured, a breakpoint line `error` and the paused line a stronger `accent`.
 - **Large files.** The block sends the whole text, because the node needs it for offsets, and
   refuses files over 512 KiB (the `tern.fs.read` limit it passes) with an `empty` state that says
   so; unreadable and non-UTF-8 files get the same. Tern's highlighter recolors the whole text on

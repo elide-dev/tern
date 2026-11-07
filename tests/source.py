@@ -256,6 +256,7 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         ctl('key', 'Enter')
         ctl('type', '// edited')
         check('typing edits the buffer', wait(lambda: '// edited' in editor_text(), 10), editor_text())
+        shots('source-dirty')
         check('modified shown', wait(lambda: 'Modified' in tree('[data-role="source-modified"]')
               and nodes('[data-role="source-dirty"]') and nodes('[data-role="source-btn-save"]'), 10), tree('.sf-main'))
         ctl('key', 'Meta+s')
@@ -318,6 +319,21 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
               tree('[data-role="source-toolbar"]'))
         check('coverage badge', wait(lambda: '% covered' in tree('.sf-main .sf-badge'), 10), tree('.sf-main .sf-badge'))
         print('     partial line tinted: %s' % tinted('warning', 8), flush=True)
+        # `inferred` lines (closers, blanks, comments) render at half the covered tint once the
+        # broker's coverage page carries that state.
+        probe = broker('project_attach', root=str(project), runtime=runtime)
+        try:
+            runs = [r for r in broker('project_snapshot', binding=probe)['runs'] if r['options'].get('coverage')]
+            files = broker('project_coverage_page', binding=probe, run=runs[-1]['id'])['files']
+            index = next(f['index'] for f in files if f['path'].endswith('classify.mjs'))
+            measured = broker('project_coverage_page', binding=probe, run=runs[-1]['id'], file=index)['lines']
+        finally:
+            broker('project_detach', binding=probe)
+        inferred = [l['line'] for l in measured if l.get('state') == 'inferred']
+        if inferred:
+            check('inferred line at half tint', tinted('success.sf-t-dim', inferred[0]), tree('.sf-editor .sf-t-mark'))
+        else:
+            print('     inferred lines: none in this runtime\'s coverage page yet', flush=True)
         shots('source-coverage')
         ok, detail = band_ok('source-coverage-light', 5, 4)
         check('uncovered band row-aligned, under the text (light)', ok, detail)

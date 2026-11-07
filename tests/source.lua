@@ -49,6 +49,18 @@ check("uncovered mark", marks[5].state, "uncovered")
 check("unmeasured", marks[3], nil)
 check("covered count", covered, 2)
 check("total count", total, 3)
+-- A synthetic page with the coming `inferred` state and a state this block does not know.
+local later, later_covered, later_total = source.coverage({
+  { line = 1, covered = true },
+  { line = 2, covered = true, state = "inferred" },
+  { line = 3, covered = false, state = "uncovered" },
+  { line = 4, covered = true, state = "speculative" },
+})
+check("inferred mark", later[2].state, "inferred")
+check("inferred not counted", later_total, 2)
+check("inferred not covered", later_covered, 1)
+check("named uncovered", later[3].state, "uncovered")
+check("unknown state unmeasured", later[4], nil)
 check("percent", source.percent(2, 3), 66)
 check("percent none", source.percent(0, 0), nil)
 local lines, added = source.toggle({ 2, 9 }, 5)
