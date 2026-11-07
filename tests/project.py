@@ -85,14 +85,20 @@ with tempfile.TemporaryDirectory(prefix='tp-', dir='/tmp') as temporary:
         def tree(selector):
             return json.dumps(ctl('tree', selector), ensure_ascii=False)
         def native_panel(program):
-            pane = ctl('state')['focused']['id']
-            listing = json.loads(subprocess.check_output(['tern', 'ls', '--json'], env=environment, text=True))
-            blocks = [block for session in listing['sessions'] for tab in session['tabs'] for block in tab['blocks']]
-            launch = next(block for block in blocks if block['id'] == pane)
+            # The window runs its panes in-process here (the daemon lists no sessions), so read the
+            # launched command from the process table: the pane execs the runtime directly. The
+            # plugin opens the panel once its runtime probe answers, so poll briefly for it.
             kind = program.removeprefix('elide-tern-')
-            assert runtime in (launch['command'] or ''), launch
-            assert f"'tern' '{kind}'" in launch['command'], launch
-            assert '-c' in launch['args'] and launch['args'][-1] == launch['command'], launch
+            expected = runtime + ' --ignore-version ' + ('serve ' if kind == 'serve' else 'tern ' + kind + ' ')
+            def launched():
+                rows = subprocess.run(['ps', '-axo', 'args'], capture_output=True, text=True).stdout.splitlines()
+                return next((row for row in rows if row.startswith(expected)), None)
+            deadline = time.monotonic() + 15
+            launch = launched()
+            while not launch and time.monotonic() < deadline:
+                time.sleep(.25)
+                launch = launched()
+            assert launch, ('No ' + kind + ' panel was launched', expected, ctl('state')['focused'])
         def wait(predicate, seconds=45):
             deadline = time.monotonic() + seconds
             while time.monotonic() < deadline:
@@ -124,7 +130,12 @@ with tempfile.TemporaryDirectory(prefix='tp-', dir='/tmp') as temporary:
             command = str(uuid.uuid4())
             ctl('carly', 'lua', 'agent_run = await(plugins.elide.test_run(project_binding, ".", ' + json.dumps(command) + ')); return "agent-started:" .. agent_run.run')
             wait(lambda: 'agent-started:' in str(ctl('state').get('carly', {}).get('last_tool', '')))
-            wait(lambda: '2 · Passed' in tree('[data-role="project-runs"]'))
+            # The Tests page shows a run picker once there are two runs (its closed label names the
+            # run on screen, not the newest); the agent's read confirms the new run passed.
+            wait(lambda: ctl('tree', '[data-role="project-runs"]').get('nodes'))
+            ctl('carly', 'lua', 'local snapshot = await(plugins.elide.project_read(project_binding)); local last = snapshot.runs[#snapshot.runs]; '
+                'return "agent-run:" .. #snapshot.runs .. ":" .. tostring(last.running) .. ":" .. tostring(last.status)')
+            wait(lambda: re.search(r'agent-run:(\d+):false:Passed', str(ctl('state').get('carly', {}).get('last_tool', ''))), 60)
             ctl('carly', 'lua', 'local repeated = await(plugins.elide.test_run(project_binding, ".", ' + json.dumps(command) + ')); assert(repeated.run == agent_run.run); return "agent-deduplicated"')
             wait(lambda: 'agent-deduplicated' in str(ctl('state').get('carly', {}).get('last_tool', '')))
             ctl('carly', 'lua', 'await(plugins.elide.project_close(project_binding)); return "agent-detached"')

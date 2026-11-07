@@ -989,13 +989,13 @@ local function excerpt_line(d)
   return nil
 end
 
--- This file's diagnostics by current line, built once per edit (keyed by the block's revision),
+-- This file's diagnostics by current line, built once per edit (keyed by the block's edit count),
 -- leaving out each one whose line no longer reads as its excerpt: edited since the build, so it
 -- may be fixed. Returns `{ [line] = { d, … } }` and the live count per severity.
 local function live_diagnostics(state)
   local diag = state.diag
   local map = state.buf.maps.diagnostics
-  local stamp = state.revision or 0
+  local stamp = state.edits or 0
   if diag.live and diag.live_map == map and diag.live_items == diag.items and diag.live_stamp == stamp then
     return diag.live, diag.live_counts
   end
@@ -1443,8 +1443,9 @@ end
 
 -- After an edit: breakpoints follow their lines, find results follow the text.
 local function edited(state, edit)
-  -- Every edit, undo and redo passes here; cached views of the text key on this.
-  state.revision = (state.revision or 0) + 1
+  -- Every edit, undo and redo passes here; cached views of the text key on this. (Not
+  -- `state.revision`: that is the project snapshot revision the lease renewal sends.)
+  state.edits = (state.edits or 0) + 1
   if edit then
     state.breakpoints = buffer.remap(state.breakpoints, edit)
     refind(state)
