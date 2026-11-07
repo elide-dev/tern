@@ -200,22 +200,24 @@ Offsets are UTF-16 code units.
   Coverage `list-checks`, Debug `bug`, the active one `on`; a `menu` was tried, but in the harness a
   click on its row only closed it), the editor well keeps only Save (its commands stay in the keyboard menu), the debugger's keycaps move
   into the tooltips, and the state badge leaves it to the status bar while the debugger's wells
-  show; as a last resort the row wraps rather than clips. Below it `gap: "sm"` separates the
-  toolbar, the editor (the only element that grows, with `maxLines` from the pane's rows) and the
-  dock, which holds only open strips (find, go to line, confirm) and a `status` bar whose segments
+  show; as a last resort the row wraps rather than clips. Below it the editor (the only element that grows, with `maxLines` from the pane's rows) runs
+  flush to the dock, which holds only open strips (find, go to line, confirm) and a `status` bar whose segments
   appear only when they mean something: the path; the overlay state; `Ln, Col`; the selection
   length; language; indentation; LF/CRLF; Modified. Nothing is ever inserted above or below the editor, so the
   code never moves: every overlay state (attaching, running tests, fetching coverage, no coverage
   yet, not measured, launching, paused elsewhere, failures) is the state badge's text, with details
   in its tooltip, and the status bar's overlay segment; actions sit in the toolbar (Run with
   coverage, `primary` while there is no coverage; Retry after a failed attach). The harness checks
-  the first line's text rect before, during and after a coverage run. The gutter is `[sign] [number] │ ` (one sign cell, numbers
-  right-aligned to the widest, a cell of space on each side, a `dim` box-drawing hairline that spans
-  the line's height, one cell before the code), identical in width on every line; the caret line's
-  number is `strong`. The dirty marker is a small `•` in `warning` with the tooltip "Unsaved
-  changes". Rows cannot get more vertical room without changing the editor's line height: Tern's
-  renderer does not grow a line box for a padded inline-block, so the padding overlapped the next
-  row instead. ⌥1 to ⌥3 pick an available overlay (in the desktop harness they did not
+  the first line's text rect before, during and after a coverage run. The gutter is laid out as VS Code and IDEA do: `[sign][number] │  ` (one sign cell, the
+  numbers right-aligned to the widest, a space, a `dim` box-drawing hairline that spans the line's
+  height, two cells before the code), 1 + digits + 1 + 1 + 2 cells and nothing more, identical in
+  width on every line (the harness measures it for one-, two- and four-digit files). Numbers are
+  `dim`; the caret line's is the normal ink, since `strong` could widen the glyphs. The dirty marker
+  is a small `•` in `warning` with the tooltip "Unsaved changes". The code sits flush: the scoped
+  sheet removes the editor field's padding, corners and hairline and the regions' 16 px gaps, so the
+  first row starts under the toolbar's hairline and the gutter at the pane's left edge. Rows cannot
+  get more vertical room without changing the editor's line height: Tern's renderer does not grow a
+  line box for a padded inline-block, so the padding overlapped the next row instead. ⌥1 to ⌥3 pick an available overlay (in the desktop harness they did not
   reach the block, presumably taken by window bindings, so the harness uses the switch).
 - **Stylesheet.** `plugin/styles/source.css` (the manifest's `styles`) is scoped to
   `[data-surface="plugin.elide.source"]` and colored only with Tern's tokens; it is the design

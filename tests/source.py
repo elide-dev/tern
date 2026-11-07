@@ -139,6 +139,8 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
             click('[data-role="source-btn-overlay-' + mode + '"]')
         time.sleep(.6)
 
+    cell_width = [8.04]
+
     def first_text_rect():
         found = nodes('[data-role="source-editor"] .sf-ed-text .tk-keyword')
         return found[0].get('rect') if found else None
@@ -232,8 +234,17 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         check('no file block for source link', not any(Path(b['path']).resolve() == source.resolve()
               for b in ctl('state').get('file_blocks', []) if b.get('path')), ctl('state').get('file_blocks'))
         check('line numbers in gutter', wait(lambda: len(gutter()) >= 7, 10), tree('.sf-editor .sf-ed-gutter'))
-        check('caret starts on linked line', wait(lambda: any('2' == (n.get('text') or '').strip()
-              for n in nodes('.sf-editor .sf-ed-gutter .sf-t-strong')), 10), tree('.sf-editor .sf-ed-gutter'))
+        check('caret starts on linked line', wait(lambda: 'Ln 2,' in tree('[data-role="source-position"]'), 10),
+              tree('[data-role="source-position"]'))
+        # The gutter is exactly sign + digits + space + hairline + two spaces: 1 + 2 + 1 + 1 + 2 cells here.
+        def gutter_cells(digits):
+            cell = nodes('.sf-editor .sf-t-mark')[0]['rect'][2] if nodes('.sf-editor .sf-t-mark') else cell_width[0]
+            cell_width[0] = cell
+            # With two editors on screen, the widest gutter is the file with the most digits.
+            width = max(n['rect'][2] for n in nodes('.sf-editor .sf-ed-gutter'))
+            return abs(width - (5 + digits) * cell) < 1.5, {'gutter': width, 'cell': cell, 'cells': width / cell}
+        ok, detail = gutter_cells(1)
+        check('gutter width, single-digit file', ok, detail)
         click('[data-role="source-editor"]')
 
         def editor_text():
@@ -335,6 +346,8 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         else:
             print('     inferred lines: none in this runtime\'s coverage page yet', flush=True)
         shots('source-coverage')
+        ok, detail = gutter_cells(2)
+        check('gutter width, 10-line file', ok, detail)
         ok, detail = band_ok('source-coverage-light', 5, 4)
         check('uncovered band row-aligned, under the text (light)', ok, detail)
         ok, detail = band_ok('source-coverage-light', 3, 4)
@@ -412,6 +425,8 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         check('large file takes edits', wait(lambda: len(statuses()) == 2 and 'Modified' in statuses()[-1], 10), statuses())
         check('edit stays in its block', 'Modified' not in statuses()[0], statuses())
         # Past 600 lines the editor is sent without `lang`, so it is not `.code`; the small file is.
+        ok, detail = gutter_cells(4)
+        check('gutter width, 5,000-line file', ok, detail)
         check('large file not highlighted', len(nodes('.sf-editor.code')) == 1 and len(nodes('.sf-editor:not(.code)')) == 1,
               tree('.sf-editor'))
         print('     large file edit round trip: %.2fs' % (time.monotonic() - started), flush=True)
