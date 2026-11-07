@@ -104,6 +104,7 @@ contract Elide emits against:
 | `elide://source?path=<abs>[&root=<abs>][&line=<n>[&col=<n>]]` | Opens the Elide source block on the file at `line` when it is a JavaScript, TypeScript, Python or Kotlin source in a known project (`root`, or a detected project containing `path`) and the plugin is configured; otherwise opens the file in Tern's editor at `line`. |
 | `elide://debug?root=<abs>&path=<abs>[&line=<n>]` | Launches the project debugger for `root` with `path` as its source. |
 | `elide://tests?root=<abs>` | Opens the project's test runs for `root`. |
+| `elide://help?topic=<slug>` | Runs `<runtime> --ignore-version help elide://help?topic=<slug>` in a new pane beside the link's pane (a new tab when the link came from no pane); `elide help` resolves the URL to its topic. |
 
 Rules, implemented by the pure parser `plugin/lib/links.luau` (unit-tested by
 `lua tests/links.lua`) and checked by the window route:
@@ -121,6 +122,12 @@ Rules, implemented by the pure parser `plugin/lib/links.luau` (unit-tested by
   detected. The linked file must exist. Links act on local hosts only.
 - A rejected `elide://` URL is claimed and dropped with an info toast, so it never
   reaches the system's URL handlers; every other scheme returns `nil` to the next route.
+- `help` takes no path or root. `topic` must match `[a-z0-9][a-z0-9-]*` after
+  percent-decoding and is at most 128 bytes; anything else is rejected like any other
+  malformed link. The command line carries a URL rebuilt from the validated slug, never
+  the URL as received, and the runtime is the one `config.runtime` names. Elide's native
+  help surface puts these links on its internal `href`s, so its own navigation arrives
+  here rather than at the program.
 - Limits of this version: `col` is validated but not applied (`cx.docs:open` takes a
   line only), `debug`'s `line` is validated but not applied (the debug launcher takes
   no breakpoint), and confinement is lexical: `tern.fs` cannot resolve symlinks, so a
