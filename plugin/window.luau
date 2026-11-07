@@ -228,11 +228,9 @@ local function launch_job(cx, kind, subject, cwd, target, opened)
   end
 end
 
-local DEBUGGABLE = { js = true, mjs = true, cjs = true, ts = true, mts = true, cts = true, py = true }
-
--- Launches the debugger for `context.root`; `source` names the file to debug, else the
--- focused file block's file when it is debuggable.
-local function launch_debug(cx, context, target, opened, source)
+-- Launches the debugger for `context.root`; `file` names the source to debug, else the
+-- focused file block's file when it is debuggable (extensions in any case, as the source block).
+local function launch_debug(cx, context, target, opened, file)
   if not local_host(cx) or not context then
     return
   end
@@ -249,12 +247,12 @@ local function launch_debug(cx, context, target, opened, source)
   )
   table.insert(argv, runtime)
   table.insert(argv, context.root)
-  if source then
-    if not DEBUGGABLE[string.match(source, "%.([%w]+)$") or ""] then
-      cx:toast("info", "Debugging takes JavaScript, TypeScript or Python sources.", source)
+  if file then
+    if not source.debuggable(file) then
+      cx:toast("info", "Debugging takes JavaScript, TypeScript or Python sources.", file)
       return
     end
-    table.insert(argv, source)
+    table.insert(argv, file)
     return host(cx, config, "debug", argv, function(current, command)
       return terminal(current, command, context.root, target)
     end, opened)
@@ -262,7 +260,7 @@ local function launch_debug(cx, context, target, opened, source)
   local pane = target or cx.session:focused()
   local read = pane and cx.session:read(pane, { lines = 1, max_chars = 1 })
   if type(read) == "table" and type(read.path) == "string" then
-    if DEBUGGABLE[string.match(read.path, "%.([%w]+)$") or ""] then
+    if source.debuggable(read.path) then
       if read.dirty then
         cx:toast("info", "Save this file before debugging.")
         return
