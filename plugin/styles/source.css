@@ -33,37 +33,41 @@
   background: transparent;
 }
 
-/* Line tints. Tern's only background span token is `mark`. Every line carries a `mark <tone>` run
-   on its first character; these rules give the run an opaque tint (mixed into the page color, so
-   overlapping copies never stripe) and repeat it with zero-spread shadows every 0.9ch to the right (overlapping, so no seams show),
-   drawing a one-row band that the editor's scroller clips and that later text (the line, the
-   end-of-line note, the caret) paints over. `dim` is transparent. The run's box never changes, so
-   switching overlays moves nothing; colors fade. Syntax colors stay. */
+/* Line tints. Tern's only background span token is `mark`. Every line carries a `mark <tone>` run on
+   its first character. The run gets an opaque tint (mixed into the page color, then forced opaque
+   because the glass themes make the page translucent and translucent copies stripe), 1px of vertical
+   padding so adjacent rows meet, and zero-spread shadows of the same tint every 0.9ch to the right,
+   which overlap so no seams show: one solid band from the text column to the row's edge, clipped by
+   the scroller, under the text, caret and end-of-line note. `dim` is transparent. The run's box never
+   changes, so switching overlays moves nothing; colors fade. Syntax colors stay. A ::before band was
+   tried: Tern's renderer does not position a pseudo-element against an inline run. */
 [data-surface="plugin.elide.source"] .sf-editor .sf-t-mark {
   --elide-tint: transparent;
   color: inherit;
   border-radius: 0;
-  padding: 0;
+  /* Vertical padding paints over the line box's half-pixel leading, so adjacent rows meet; it does not
+     change the line's layout. */
+  padding: 1px 0;
   margin: 0;
   background-color: var(--elide-tint);
   box-shadow: none;
   transition: background-color 140ms ease-out, box-shadow 140ms ease-out;
 }
 [data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-success {
-  --elide-tint: color-mix(in srgb, var(--ok) 13%, var(--page));
+  --elide-tint: rgb(from color-mix(in srgb, var(--ok) 13%, var(--page)) r g b / 1);
 }
 [data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-error {
-  --elide-tint: color-mix(in srgb, var(--bad) 12%, var(--page));
+  --elide-tint: rgb(from color-mix(in srgb, var(--bad) 10%, var(--page)) r g b / 1);
 }
 [data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-warning {
-  --elide-tint: color-mix(in srgb, var(--warn) 16%, var(--page));
+  --elide-tint: rgb(from color-mix(in srgb, var(--warn) 16%, var(--page)) r g b / 1);
 }
 [data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-muted {
-  --elide-tint: color-mix(in srgb, var(--t3) 9%, var(--page));
+  --elide-tint: rgb(from color-mix(in srgb, var(--t3) 9%, var(--page)) r g b / 1);
 }
 /* The paused line reads stronger than a breakpoint line. */
 [data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-accent {
-  --elide-tint: color-mix(in srgb, var(--accent) 22%, var(--page));
+  --elide-tint: rgb(from color-mix(in srgb, var(--accent) 18%, var(--page)) r g b / 1);
 }
 /* Only toned runs draw the band, so neutral lines cost nothing to paint. */
 [data-surface="plugin.elide.source"] .sf-editor .sf-t-mark.sf-t-success,
