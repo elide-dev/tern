@@ -177,11 +177,33 @@ Offsets are UTF-16 code units.
   `/` is not a find key, because it types a slash in the editor. ⌃G opens go to line
   (`line` or `line:column`). Program moves (find, go to line, a new debugger stop, a linked line)
   set `topline` for one frame; otherwise Tern keeps the caret in view.
-- **Chrome.** A sans head row (file name, folders and project, badges, **Save**, the overlay
-  switch), the overlay's bar, the editor sized from the pane's rows, and a `status` bar in the dock
-  with segments for the path, Modified, the overlay and its state, `Ln, Col` (and the selection
-  size), language, indentation, UTF-8, LF/CRLF and soft wrap (click it or ⌥Z). Line numbers are
-  right-aligned; the caret line's number is accented. ⌥1 to ⌥4 pick an overlay.
+- **Chrome.** The block is laid out like an IDE editor. One compact toolbar row: a `path`
+  `breadcrumb` (project, folders, file; a parent crumb opens that folder), a `warning` `●` while
+  dirty, and the overlay's state `badge` ("Paused at 9", "80% covered"); at the right the
+  segmented overlay `tabs`, the overlay's tools, an editor well of icon buttons (Save `save`, Find
+  `search`, Go to line `hash`, Soft wrap `corner-down-right` with `on`, Edit in Tern `open`, which
+  opens the file's `href` in Tern's own editor as the escape hatch) and a `keyboard` `menu` listing
+  every shortcut (its rows run the commands). Shortcuts for the editor well are in its tooltips and
+  that menu rather than keycaps, so the row fits a split pane; the debugger's wells keep keycaps as
+  the Debug surface does. Save is the screen's `primary` only while dirty and no overlay offers its
+  own primary. Under the toolbar the editor fills the pane, `grow`ing in a `col` with `maxLines`
+  from the pane's rows (an extra toolbar row is assumed below about 110 columns, another for the
+  debugger below about 150), down to a dock that holds only transient strips (find, go to line,
+  confirm) and a `status` bar: the path, then the overlay state, `Ln, Col`, the selection length,
+  language, indentation, LF/CRLF and Modified. Overlay loading, empty and error states appear as a
+  strip under the toolbar; a ready overlay reports through the badge and status bar. The gutter is
+  `[sign] [number] │`: a fixed sign cell (blank on lines without one, so nothing shifts), numbers
+  right-aligned to the widest, the caret line's in `strong`. ⌥1 to ⌥4 pick an overlay.
+- **Stylesheet.** `plugin/styles/source.css` (the manifest's `styles`) is scoped to
+  `[data-surface="plugin.elide.source"]` and colored only with Tern's tokens. It exists because two
+  things have no prop: region padding (removed so the editor runs full-bleed, with the toolbar,
+  strips and dock fields given their own spacing) and background tints. Tern's only background
+  span token is `mark`; `ins` colors text, `del` strikes it through, and `success`, `error`,
+  `pending` and the rest color text; unknown tokens are dropped. So a tinted line is a `decor` over
+  the whole line (indentation included) with `mark` plus a tone token, and the sheet turns
+  `.sf-t-mark.sf-t-<tone>` into that tone's faint background (`--ok` 13%, `--bad` 12%, `--warn`
+  16%, `--accent` 24%, `--t3` 8%) with `color: inherit`, so syntax colors stay. The tint covers the
+  line's text, not the empty width to its right.
 - **Large files.** The block sends the whole text, because the node needs it for offsets, and
   refuses files over 512 KiB (the `tern.fs.read` limit it passes) with an `empty` state that says
   so; unreadable and non-UTF-8 files get the same. Tern's highlighter recolors the whole text on
@@ -198,28 +220,35 @@ Offsets are UTF-16 code units.
 - **Overlays survive edits.** Each overlay keeps a line map in the buffer (current line to the line
   of the text it was measured against), updated by every edit: lines inserted above shift the
   marks, edited lines keep theirs, deleted lines drop theirs. Breakpoint lines move the same way.
-  A coverage mark whose line text differs from the measured text draws `dim`, and when the
-  artifact's `sourceDigest` (sha256 of the UTF-16BE source, checked with the system's
-  `shasum`/`sha256sum`) does not match the file on disk every mark dims and the head row says
-  "Measured an older version".
+  A coverage tint whose line text differs from the measured text turns neutral (`mark dim`), and
+  when the artifact's `sourceDigest` (`sha256-utf16be`: sha256 of the UTF-16BE source, checked with
+  the system's `shasum`/`sha256sum`) does not match the file on disk every tint does and a strip
+  says "Coverage measured an older version".
 - **Coverage.** The newest snapshot run with `options.coverage` is paged through
   `project_coverage_page` until the file whose path matches, then its lines through `next`.
-  Covered lines get a `success` dot, uncovered an `error` dot, covered lines with fewer covered
-  than total branches a `warning` half dot and a branch count in `virt`; the head row shows the
-  percentage. The artifact records only covered/uncovered and branch counts, so there are no hit
-  counts. With no coverage run the block offers **Run with coverage** (F5; `project_test` on the
-  root with `coverage: true`) and polls each second until it finishes; F6 refreshes.
+  Covered lines are tinted `success`, uncovered `error`, and covered lines with fewer covered than
+  total branches `warning` with the branch count in `virt`; the gutter carries no coverage signs.
+  The badge and status bar show the file's percentage. The artifact records only covered/uncovered
+  and branch counts, so there are no hit counts, and the JavaScript producer reported no branch
+  counts for the harness's ternary, so partial lines have not been seen with real data yet. With no
+  coverage run the block offers **Run with coverage** (F5; `project_test` on the root with
+  `coverage: true`) and polls each second until it finishes; F6 refreshes.
 - **Debug.** While active the block polls `project_debug_snapshot` (`compact`) every 500 ms and
   re-renders only when the revision, pending flag, controller or error changes. The stop is a `▶`
-  `accent` sign, a `mark` line and a `virt` note; the caret jumps to each new stop and F6 returns
-  to it. Breakpoints are `●` (`○` with the adapter's message while unverified). F9 toggles one on
-  the caret line: before a launch it is kept locally and passed to `project_debug_launch`; with a
-  live target the file's replacement `lines` (mapped back to the launched text) go through
-  `project_debug_request` `breakpoints`. F5 launches when no target is live (test files in `test`
-  mode, `stop_on_entry` false) and continues otherwise; F10, F11, ⇧F11 and ⇧F5 step over, in, out
-  and stop. Letters type, so the debugger keys are function keys. Control needs `controller ==
-  "you"`; observers get a toast and disabled buttons. Every command carries a fresh UUID and is
-  resent with the same UUID and payload only when no response arrived.
+  `accent` sign, a stronger `accent` line tint and a `paused` note; a breakpoint is a `●` `error`
+  sign, a light `error` tint and a `breakpoint` note (`○` with the adapter's message while
+  unverified); where both fall on one line the stop wins. The caret jumps to each new stop and F7
+  returns to it. F9 toggles a breakpoint on the caret line: before a launch it is kept locally and
+  passed to `project_debug_launch`; with a live target the file's replacement `lines` (mapped back
+  to the launched text) go through `project_debug_request` `breakpoints`. The toolbar shows the
+  Debug surface's two wells of icon-only buttons with keycaps: run control (Resume `play` F5,
+  `primary` only while it can act, launching when no target is live; Pause `pause` F6; Stop `stop`
+  ⇧F5, `danger`) and stepping (Step over `redo` F10, Step into `arrow-down` F11, Step out `arrow-up`
+  ⇧F11), each with `aria`, a `title` naming the action and key, and a `disabled` reason. Test files
+  launch in `test` mode, all with `stop_on_entry` false. Letters type, so the debugger keys are
+  function keys. Control needs `controller == "you"`; observers get disabled buttons with that
+  reason. Every command carries a fresh UUID and is resent with the same UUID and payload only when
+  no response arrived.
 - **Hotness** is shown disabled: selecting it toasts the reason. Neither the broker nor
   `elide-project-session` keeps source-located profile samples, so a read-only
   `project_profile_page` op cannot be added from existing data. The missing piece is a profile
@@ -234,7 +263,7 @@ save (checked on disk), undo and redo, auto-indent, a reload after an outside wr
 coverage run from the block with covered and uncovered marks and their behavior across an unsaved
 edit, a breakpoint with F9 and a launch with F5 checked against the broker's own snapshot, a large
 file taking edits without highlighting, and an oversized file's empty state. It takes light and
-dark screenshots.
+dark screenshots, split beside a terminal and wide in a tab of its own.
 
 ### Why workspaces don't use `cx.layout:tab`
 
