@@ -1162,15 +1162,10 @@ end
 
 -- View -----------------------------------------------------------------------------------------
 
--- Lines the editor shows: the pane's rows less the head, overlay bar, dock fields and status bar.
--- Lines the editor shows: the pane's rows less the toolbar, any overlay strip, the dock's fields
--- and the status bar.
+-- Lines the editor shows: the pane's rows less the toolbar, the dock's fields and the status bar.
 local function visible(state, cx)
   -- The toolbar row (it never wraps), the gaps around the editor and the status bar.
   local chrome = 5
-  if state.strip then
-    chrome += 4
-  end
   if state.find or state.go then
     chrome += 2
   end
@@ -1279,22 +1274,58 @@ end
 
 -- The overlay's state in words and tone, for the toolbar badge and the status bar.
 local function overlay_state(state)
+  if state.mode == "none" or state.mode == "hotness" then
+    return nil
+  end
+  if state.attach == "attaching" or state.attach == "idle" then
+    return "Attaching…", "accent", "Attaching to " .. (state.project or "the project")
+  elseif state.attach == "error" then
+    return "Attach failed", "error", state.attach_error
+  end
   if state.mode == "coverage" then
     local coverage = state.coverage
-    if coverage.state == "ready" then
+    local s = coverage.state
+    if s == "ready" then
       local percent = source.percent(coverage.covered, coverage.total)
       if not percent then
         return "No measured lines", "muted"
       end
-      return percent .. "% covered", coverage.stale and "muted" or coverage_tone(percent)
-    elseif coverage.state == "running" then
-      return "Running tests", "accent"
+      if coverage.stale then
+        return percent .. "% · older version",
+          "muted",
+          "The file changed since this run measured it; its tints are muted."
+      end
+      return percent .. "% covered",
+        coverage_tone(percent),
+        coverage.covered .. " of " .. coverage.total .. " measured lines"
+    elseif s == "running" then
+      return "Running tests…", "accent"
+    elseif s == "loading" or s == "idle" then
+      return "Fetching coverage…", "accent"
+    elseif s == "missing" then
+      return "No coverage yet",
+        "muted",
+        "Run the project's tests with coverage (F5) to tint covered and uncovered lines."
+    elseif s == "absent" then
+      return "Not measured", "muted", "The latest coverage run measured other files."
+    elseif s == "unavailable" then
+      return "No coverage", "warning", coverage.message
+    elseif s == "error" then
+      return "Coverage failed", "error", coverage.error
     end
     return nil
-  elseif state.mode == "debug" and state.debug.snap then
-    local target = state.debug.snap.debug
+  end
+  local debug = state.debug
+  if debug.error then
+    return "Debugger error", "error", debug.error
+  elseif debug.launching then
+    return "Launching…", "accent", "Launching " .. tostring(state.relative)
+  elseif debug.elsewhere then
+    return "Paused elsewhere", "pending", debug.elsewhere
+  elseif debug.snap then
+    local target = debug.snap.debug
     if target.state == "stopped" then
-      return state.debug.stop and ("Paused at " .. state.debug.stop) or "Paused", "pending"
+      return debug.stop and ("Paused at " .. debug.stop) or "Paused", "pending"
     end
     local word = DEBUG_WORDS[target.state] or { tostring(target.state), "muted" }
     return word[1], word[2]
@@ -1488,9 +1519,10 @@ local function toolbar(state)
   -- editor tools in the keyboard menu, and the state badge left to the status bar while the
   -- debugger's wells show.
   local narrow = (state.cols or 200) < 150
-  local word, tone = overlay_state(state)
+  local word, tone, detail = overlay_state(state)
   if word and not (narrow and state.mode == "debug" and active(state.debug)) then
     local badge = ui.badge(word, tone)
+    badge.p.title = detail
     badge.p.key = "state"
     badge.p.role = "source-badge"
     table.insert(left, badge)
@@ -1542,23 +1574,35 @@ local function toolbar(state)
     for _, control in debug_controls(state) do
       table.insert(right, control)
     end
-  elseif coverage_ready(state) and state.attach == "ready" then
+  elseif state.mode == "coverage" and state.attach == "ready" then
+    -- Run with coverage is the screen's primary while there is no coverage to show.
+    local coverage = state.coverage
+    local idle = coverage.state ~= "running" and coverage.state ~= "loading" and coverage.state ~= "idle"
+    local tools = {
+      icon_button("run-coverage", "Run with coverage (F5)", "run", { "f5" }, "run_coverage", {
+        variant = coverage.state == "missing" and "primary" or nil,
+        busy = not idle or coverage.starting == true,
+      }),
+    }
+    if coverage_ready(state) or coverage.state == "error" then
+      table.insert(tools, icon_button("refresh", "Refresh coverage (F6)", "repeat", { "f6" }, "refresh"))
+    end
     table.insert(
       right,
       ui.node(
         "buttons",
         { key = "coverage", role = "source-coverage-tools", variant = "toolbar", label = "Coverage" },
-        {
-          icon_button("run-coverage", "Run with coverage (F5)", "run", { "f5" }, "run_coverage"),
-          icon_button("refresh", "Refresh coverage (F6)", "repeat", { "f6" }, "refresh"),
-        }
+        tools
       )
     )
+  end
+  if state.mode ~= "none" and state.attach == "error" then
+    table.insert(right, icon_button("retry", "Retry attaching to the project", "repeat", nil, "retry"))
   end
   local tools = {}
   -- One primary on screen: Save takes it while dirty unless an overlay shows its own.
   if dirty then
-    local primary = state.mode == "none" or (state.mode == "coverage" and coverage_ready(state))
+    local primary = state.mode == "none" or (state.mode == "coverage" and state.coverage.state ~= "missing")
     table.insert(
       tools,
       icon_button("save", "Save (⌘S)", "save", nil, "save", { variant = primary and "primary" or nil })
@@ -1606,95 +1650,6 @@ local function toolbar(state)
     ui.node("row", { key = "start", gap = "sm", align = "center", shrink = 1 }, left),
     ui.node("row", { key = "end", gap = "sm", align = "center" }, right),
   })
-end
-
-local function error_card(title, message, act)
-  return ui.card(title, {
-    ui.button("Retry", { key = "end", icon = "repeat", size = "sm", actions = { click = act } }),
-    ui.code(message),
-  }, { key = "strip", role = "source-error", tone = "error", ["end"] = "main.strip.end" })
-end
-
-local function inline_empty(title, text, button, tone)
-  return ui.node("empty", {
-    key = "strip",
-    role = "source-empty",
-    variant = "inline",
-    frame = true,
-    title = title,
-    text = text,
-    tone = tone,
-  }, button and { button } or nil)
-end
-
-local function run_button(variant)
-  return ui.button("Run with coverage", {
-    key = "run",
-    role = "source-run-coverage",
-    variant = variant,
-    size = "sm",
-    icon = "run",
-    keys = { "f5" },
-    actions = { click = "run_coverage" },
-  })
-end
-
-local function shimmer(text)
-  return ui.node("shimmer", { key = "strip", role = "source-loading", text = text })
-end
-
--- The overlay's transient state under the toolbar: loading, empty and error states only. A ready
--- overlay says how it is doing in the toolbar badge and the status bar.
-local function strip(state)
-  if state.mode == "none" or state.mode == "hotness" then
-    return nil
-  end
-  if not state.root then
-    return inline_empty("No Elide project", "Overlays need an elide.pkl in this file's folder or a parent.")
-  end
-  if state.attach == "attaching" or state.attach == "idle" then
-    return shimmer("Attaching to " .. (state.project or "the project") .. "…")
-  end
-  if state.attach == "error" then
-    return error_card("Couldn't attach to the project", state.attach_error or "", "retry")
-  end
-  if state.mode == "coverage" then
-    local coverage = state.coverage
-    if coverage.state == "missing" then
-      return inline_empty(
-        "No coverage yet",
-        "Run the project's tests with coverage to tint covered and uncovered lines.",
-        run_button("primary")
-      )
-    elseif coverage.state == "running" then
-      return shimmer("Running tests with coverage…")
-    elseif coverage.state == "loading" or coverage.state == "idle" then
-      return shimmer("Fetching coverage…")
-    elseif coverage.state == "absent" then
-      return inline_empty("This file wasn't measured", "The latest coverage run measured other files.", run_button())
-    elseif coverage.state == "unavailable" then
-      return inline_empty("No coverage for this run", coverage.message, run_button(), "warning")
-    elseif coverage.state == "error" then
-      return error_card("Couldn't fetch coverage", coverage.error or "", "refresh")
-    elseif coverage.stale then
-      return inline_empty(
-        "Coverage measured an older version",
-        "The file changed since this run; its tints are dimmed.",
-        run_button()
-      )
-    end
-    return nil
-  end
-  if not source.debuggable(state.path) then
-    return inline_empty("Can't debug this file", "Debugging takes JavaScript, TypeScript or Python sources.")
-  end
-  if state.debug.error then
-    return inline_empty("Debugger", state.debug.error, nil, "error")
-  end
-  if state.debug.elsewhere then
-    return inline_empty("Paused in another file", state.debug.elsewhere)
-  end
-  return nil
 end
 
 local function confirm_strip(state)
@@ -1774,7 +1729,7 @@ local function status_bar(state)
       priority = 5,
     }),
   }
-  local word, tone = overlay_state(state)
+  local word, tone, detail = overlay_state(state)
   if word then
     table.insert(
       segs,
@@ -1782,8 +1737,9 @@ local function status_bar(state)
         key = "overlay",
         role = "source-overlay-state",
         side = "right",
-        text = state.mode == "coverage" and ("Coverage " .. string.gsub(word, " covered$", "")) or word,
+        text = string.match(word, "^(%d+%%) covered$") and ("Coverage " .. string.match(word, "^(%d+%%)")) or word,
         tone = tone,
+        title = detail,
         priority = 4,
       })
     )
@@ -2202,11 +2158,8 @@ tern.block.define("source", {
     state.cols = cx.cols
     local gutter, virt, decor = lines_view(state, starts)
     local children = { toolbar(state) }
-    local note = strip(state)
-    state.strip = note ~= nil
-    if note then
-      table.insert(children, note)
-    end
+    -- Transient and empty states live in the toolbar badge and the status bar, never in a node
+    -- above the editor, so nothing reflows the code.
     local top = nil
     if state.jump then
       -- Program moves put the line a few rows below the top; afterwards Tern follows the caret.
