@@ -1,6 +1,11 @@
 use elide_project_session::coverage::{Artifact, File, LineState, line_states};
 use serde_json::{Value, json};
-use std::path::Path;
+use std::{
+  collections::{HashMap, VecDeque},
+  io::Read,
+  path::{Path, PathBuf},
+  sync::Arc,
+};
 
 const MAX_PAGE_BYTES: usize = 256 * 1024;
 /// Source files above this size are not read for inference (the Tests view's limit).
@@ -12,10 +17,48 @@ const MAX_SOURCE_BYTES: u64 = 2 * 1024 * 1024;
 fn read_source(root: &Path, relative: &str) -> Option<String> {
   let root = root.canonicalize().ok()?;
   let path = root.join(relative).canonicalize().ok()?;
-  if !path.starts_with(&root) || std::fs::metadata(&path).ok()?.len() > MAX_SOURCE_BYTES {
+  // Only a regular file: a FIFO or device would block the request thread on open or read.
+  if !path.starts_with(&root) || !std::fs::metadata(&path).ok()?.is_file() {
     return None;
   }
-  std::fs::read_to_string(path).ok()
+  let mut text = String::new();
+  std::fs::File::open(path)
+    .ok()?
+    .take(MAX_SOURCE_BYTES + 1)
+    .read_to_string(&mut text)
+    .ok()?;
+  (text.len() as u64 <= MAX_SOURCE_BYTES).then_some(text)
+}
+
+/// How many files' line entries stay cached across pages.
+const CACHED_FILES: usize = 32;
+
+/// Line entries per run and file, so paging a file reads its source and infers its lines once
+/// rather than once per page. A run's artifact is immutable; the source is read at the first page.
+#[derive(Default)]
+pub struct Inferred {
+  entries: HashMap<(PathBuf, String, usize), Arc<Vec<Value>>>,
+  order: VecDeque<(PathBuf, String, usize)>,
+  /// How many times entries were computed (for tests).
+  pub computed: usize,
+}
+
+impl Inferred {
+  fn get(&mut self, key: (PathBuf, String, usize), file: &File, root: Option<&Path>) -> Arc<Vec<Value>> {
+    if let Some(found) = self.entries.get(&key) {
+      return found.clone();
+    }
+    self.computed += 1;
+    let computed = Arc::new(entries(file, root));
+    if self.order.len() >= CACHED_FILES
+      && let Some(oldest) = self.order.pop_front()
+    {
+      self.entries.remove(&oldest);
+    }
+    self.order.push_back(key.clone());
+    self.entries.insert(key, computed.clone());
+    computed
+  }
 }
 
 /// A file's coverage entries in line order: each measured line with its `state`, plus an
@@ -63,20 +106,24 @@ fn source(index: usize, file: &File) -> Value {
 }
 
 /// A page of the artifact: the file listing, or one file's line entries. `root` is the
-/// attached project root used to read sources for inferred lines (`None` skips inference).
+/// attached project root used to read sources for inferred lines (`None` skips inference);
+/// `run` and `cache` share one computation across a file's pages.
 pub fn page(
   artifact: &Artifact,
   file: Option<usize>,
   offset: usize,
   limit: usize,
   root: Option<&Path>,
+  run: &str,
+  cache: &mut Inferred,
 ) -> Result<Value, String> {
   if !(1..=100).contains(&limit) {
     return Err("Coverage page limit must be between 1 and 100".into());
   }
   if let Some(index) = file {
     let file = artifact.files.get(index).ok_or("Unknown coverage file index")?;
-    let lines = entries(file, root);
+    let key = (root.map(Path::to_path_buf).unwrap_or_default(), run.to_owned(), index);
+    let lines = cache.get(key, file, root);
     if offset > lines.len() {
       return Err("Coverage line offset exceeds the file's measurement".into());
     }
@@ -130,7 +177,7 @@ mod tests {
       ]
     }))
     .unwrap();
-    let first = page(&artifact, None, 0, 1, None).unwrap();
+    let first = page(&artifact, None, 0, 1, None, "r", &mut Inferred::default()).unwrap();
     assert_eq!(first["next"], 1);
     assert_eq!(first["files"][0]["covered_lines"], 1);
     assert_eq!(first["files"][0]["sourceDigest"], Value::Null);
@@ -138,14 +185,14 @@ mod tests {
     assert_eq!(first["files"][0]["language"], "python");
     assert_eq!(first["complete"], false);
     assert!(first["files"][0].get("lines").is_none());
-    let last = page(&artifact, Some(0), 1, 1, None).unwrap();
+    let last = page(&artifact, Some(0), 1, 1, None, "r", &mut Inferred::default()).unwrap();
     assert_eq!(last["lines"][0]["line"], 5);
     assert_eq!(last["next"], Value::Null);
-    assert!(page(&artifact, Some(2), 0, 1, None).is_err());
-    assert!(page(&artifact, Some(0), 3, 1, None).is_err());
-    assert!(page(&artifact, None, 3, 1, None).is_err());
-    assert!(page(&artifact, None, 0, 101, None).is_err());
-    assert!(page(&artifact, None, 0, 0, None).is_err());
+    assert!(page(&artifact, Some(2), 0, 1, None, "r", &mut Inferred::default()).is_err());
+    assert!(page(&artifact, Some(0), 3, 1, None, "r", &mut Inferred::default()).is_err());
+    assert!(page(&artifact, None, 3, 1, None, "r", &mut Inferred::default()).is_err());
+    assert!(page(&artifact, None, 0, 101, None, "r", &mut Inferred::default()).is_err());
+    assert!(page(&artifact, None, 0, 0, None, "r", &mut Inferred::default()).is_err());
   }
 
   #[test]
@@ -160,7 +207,7 @@ mod tests {
     let mut offset = 0;
     let mut count = 0;
     loop {
-      let result = page(&artifact, None, offset, 100, None).unwrap();
+      let result = page(&artifact, None, offset, 100, None, "r", &mut Inferred::default()).unwrap();
       assert!(serde_json::to_vec(&result).unwrap().len() < MAX_PAGE_BYTES);
       let files = result["files"].as_array().unwrap();
       assert!(!files.is_empty());
@@ -208,7 +255,7 @@ mod tests {
       ]}]
     }))
     .unwrap();
-    let result = page(&artifact, Some(0), 0, 100, Some(&root)).unwrap();
+    let result = page(&artifact, Some(0), 0, 100, Some(&root), "r", &mut Inferred::default()).unwrap();
     let lines: Vec<(u64, String)> = result["lines"]
       .as_array()
       .unwrap()
@@ -240,9 +287,62 @@ mod tests {
       "inferred lines are not measured"
     );
     // Paging covers the merged entries.
-    let second = page(&artifact, Some(0), 3, 1, Some(&root)).unwrap();
+    let second = page(&artifact, Some(0), 3, 1, Some(&root), "r", &mut Inferred::default()).unwrap();
     assert_eq!(second["lines"][0]["state"], "inferred");
     assert_eq!(second["next"], 4);
+    std::fs::remove_dir_all(root).unwrap();
+  }
+
+  #[test]
+  fn pages_of_one_file_share_one_inference() {
+    let root = project(&[("a.js", "if (x) {\n  y();\n}\n")]);
+    let artifact: Artifact = serde_json::from_value(json!({
+      "version":1, "complete":true, "files":[{"engine":"js","path":"a.js","lines":[
+        {"line":1,"covered":true},{"line":2,"covered":true}
+      ]}]
+    }))
+    .unwrap();
+    let mut cache = Inferred::default();
+    let first = page(&artifact, Some(0), 0, 1, Some(&root), "run-1", &mut cache).unwrap();
+    let second = page(&artifact, Some(0), 1, 2, Some(&root), "run-1", &mut cache).unwrap();
+    assert_eq!(cache.computed, 1, "both pages come from one computation");
+    assert_eq!(first["total"], 3);
+    assert_eq!(second["lines"][1]["state"], "inferred");
+    page(&artifact, Some(0), 0, 1, Some(&root), "run-2", &mut cache).unwrap();
+    assert_eq!(cache.computed, 2, "another run computes its own");
+    std::fs::remove_dir_all(root).unwrap();
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn a_fifo_source_is_never_opened() {
+    let root = project(&[]);
+    std::fs::create_dir_all(&root).unwrap();
+    let fifo = root.join("pipe.js");
+    let name = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    let artifact: Artifact = serde_json::from_value(json!({
+      "version":1, "complete":true, "files":[{"engine":"js","path":"pipe.js","lines":[{"line":1,"covered":true}]}]
+    }))
+    .unwrap();
+    let (sent, received) = std::sync::mpsc::channel();
+    let thread_root = root.clone();
+    std::thread::spawn(move || {
+      let result = page(
+        &artifact,
+        Some(0),
+        0,
+        10,
+        Some(&thread_root),
+        "r",
+        &mut Inferred::default(),
+      );
+      let _ = sent.send(result.map(|page| page["total"].clone()));
+    });
+    let total = received
+      .recv_timeout(std::time::Duration::from_secs(5))
+      .expect("a FIFO must not block the page");
+    assert_eq!(total.unwrap(), 1, "measured lines only");
     std::fs::remove_dir_all(root).unwrap();
   }
 
@@ -258,27 +358,75 @@ mod tests {
     };
     let root = project(&[("a.js", "if (x) {\n  y();\n}\n")]);
     // A measured line past the end of the current file: the source changed, no inference.
-    let shrunk = page(&measured("a.js", 9), Some(0), 0, 100, Some(&root)).unwrap();
+    let shrunk = page(
+      &measured("a.js", 9),
+      Some(0),
+      0,
+      100,
+      Some(&root),
+      "r",
+      &mut Inferred::default(),
+    )
+    .unwrap();
     assert_eq!(shrunk["total"], 2);
     assert!(shrunk["lines"][0].get("state").is_none());
     // A missing file and no root behave the same way.
     assert_eq!(
-      page(&measured("missing.js", 2), Some(0), 0, 100, Some(&root)).unwrap()["total"],
+      page(
+        &measured("missing.js", 2),
+        Some(0),
+        0,
+        100,
+        Some(&root),
+        "r",
+        &mut Inferred::default()
+      )
+      .unwrap()["total"],
       2
     );
-    assert_eq!(page(&measured("a.js", 2), Some(0), 0, 100, None).unwrap()["total"], 2);
+    assert_eq!(
+      page(
+        &measured("a.js", 2),
+        Some(0),
+        0,
+        100,
+        None,
+        "r",
+        &mut Inferred::default()
+      )
+      .unwrap()["total"],
+      2
+    );
     // A symlink that leaves the root is never read.
     let outside = project(&[("secret.js", "if (x) {\n  y();\n}\n")]);
     #[cfg(unix)]
     std::os::unix::fs::symlink(outside.join("secret.js"), root.join("link.js")).unwrap();
     #[cfg(unix)]
     assert_eq!(
-      page(&measured("link.js", 2), Some(0), 0, 100, Some(&root)).unwrap()["total"],
+      page(
+        &measured("link.js", 2),
+        Some(0),
+        0,
+        100,
+        Some(&root),
+        "r",
+        &mut Inferred::default()
+      )
+      .unwrap()["total"],
       2
     );
     // Inside the root the same text infers the closer.
     assert_eq!(
-      page(&measured("a.js", 2), Some(0), 0, 100, Some(&root)).unwrap()["total"],
+      page(
+        &measured("a.js", 2),
+        Some(0),
+        0,
+        100,
+        Some(&root),
+        "r",
+        &mut Inferred::default()
+      )
+      .unwrap()["total"],
       3
     );
     std::fs::remove_dir_all(root).unwrap();
