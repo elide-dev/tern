@@ -396,7 +396,7 @@ local function fail(state, cx, problem)
   cx:render()
 end
 
-local load_coverage, poll_debug
+local load_coverage, poll_debug, overlay_modes
 
 local function enter(state, cx)
   if state.attach ~= "ready" then
@@ -1072,10 +1072,11 @@ local function set_mode(state, cx, mode)
     cx:toast("info", HOTNESS_REASON)
     return
   end
-  if mode == state.mode or not table.find(OVERLAYS, mode) then
+  if mode == state.mode or not table.find(overlay_modes(state), mode) then
     return
   end
   state.mode = mode
+  focus(state, cx, "editor")
   if mode ~= "debug" and state.timers.debug then
     state.timers.debug:cancel()
     state.timers.debug = nil
@@ -1187,25 +1188,10 @@ local function visible(state, cx)
   return math.max(4, (cx.rows or 24) - chrome)
 end
 
--- Whole-line tints. Tern's only background token is `mark`; plugin/styles/source.css gives
--- `mark` with a tone token that tone's faint tint inside this block (docs/architecture.md).
-local TINTS = {
-  covered = "mark success",
-  uncovered = "mark error",
-  partial = "mark warning",
-  stale = "mark dim",
-  breakpoint = "mark error",
-  stop = "mark accent",
-}
-
-local function tint(decor, starts, buf, line, kind)
-  if buf.lens[line] > 0 then
-    table.insert(decor, { from = starts[line], to = starts[line] + buf.lens[line], s = TINTS[kind] })
-  end
-end
-
--- Gutter cells are `[sign] [number] │ `: a fixed sign cell left of right-aligned numbers, blank on
--- lines without a sign, so toggling a breakpoint shifts nothing.
+-- Gutter cells are `[sign][number] `: one sign cell left of numbers right-aligned to the widest, so
+-- every line's cell is the same width and toggling a breakpoint shifts nothing. Breakpoint lines
+-- number in `error`, the paused line in `accent` with a `mark` over its text, the caret line in
+-- `strong`. No span token paints a toned background in the editor, so breakpoints get no row tint.
 local function lines_view(state, starts)
   local buf = state.buf
   local count = #buf.lines
@@ -1214,8 +1200,6 @@ local function lines_view(state, starts)
   local width = #tostring(shown)
   local gutter, virt, decor = {}, {}, {}
   local any_virt = false
-  local coverage = state.coverage
-  local marks = state.mode == "coverage" and coverage.state == "ready" and coverage.marks or nil
   local debugging = state.mode == "debug"
   local debug = state.debug
   local points = {}
@@ -1226,38 +1210,28 @@ local function lines_view(state, starts)
   end
   local caret = count <= ACCENT_LINES and buf.cursor.l or nil
   for line = 1, shown do
-    local glyph, tone, note = " ", nil, ""
-    if marks then
-      local base = base_line(state, "coverage", line)
-      local mark = base and marks[base]
-      if mark then
-        local stale = coverage.stale or coverage.lines[base] ~= buf.lines[line]
-        tint(decor, starts, buf, line, stale and "stale" or mark.state)
-        if mark.state == "partial" and mark.branches and not stale then
-          note = { ui.span("  " .. mark.branches.covered .. "/" .. mark.branches.total .. " branches", "muted") }
-        end
-      end
-    elseif debugging then
+    local glyph, tone, number, note = " ", nil, line == caret and "strong" or "dim", ""
+    if debugging then
       if debug.stop == line then
-        glyph, tone = "▶", "accent"
-        note = { ui.span("  paused", "accent") }
-        tint(decor, starts, buf, line, "stop")
+        glyph, tone, number = "▶", "accent", "accent"
+        note = { ui.span(" paused", "accent") }
+        if buf.lens[line] > 0 then
+          table.insert(decor, { from = starts[line], to = starts[line] + buf.lens[line], s = "mark" })
+        end
       elseif points[line] then
         local point = debug.verified and debug.verified[line]
         if point and not point.verified and active(debug) then
-          glyph, tone = "○", "warning"
-          note = { ui.span("  " .. (type(point.message) == "string" and point.message or "unverified"), "muted") }
+          glyph, tone, number = "○", "warning", "warning"
+          note = { ui.span(" " .. (type(point.message) == "string" and point.message or "unverified"), "muted") }
         else
-          glyph, tone = "●", "error"
-          note = { ui.span("  breakpoint", "dim") }
-          tint(decor, starts, buf, line, "breakpoint")
+          glyph, tone, number = "●", "error", "error"
         end
       end
     end
     gutter[line] = {
       tone and ui.span(glyph, tone) or ui.span(glyph),
-      ui.span(" " .. source.number(line, width), line == caret and "strong" or "dim"),
-      ui.span(" │ ", "dim"),
+      ui.span(source.number(line, width), number),
+      ui.span(" "),
     }
     virt[line] = note
     any_virt = any_virt or note ~= ""
@@ -1273,6 +1247,32 @@ local function lines_view(state, starts)
     end
   end
   return gutter, any_virt and virt or nil, #decor > 0 and decor or nil
+end
+
+-- Whether the Coverage overlay shows its read-only `code` view: the editor kind cannot tint rows,
+-- the `code` kind's toned `marks` can.
+local function coverage_view(state)
+  return state.mode == "coverage" and state.coverage.state == "ready"
+end
+
+-- Coverage as toned row marks on the current text: covered `success`, partial `warning`,
+-- uncovered `error`, and `muted` for lines changed since the measurement.
+local function coverage_marks(state)
+  local buf, coverage = state.buf, state.coverage
+  local marks = {}
+  for line = 1, #buf.lines do
+    local base = base_line(state, "coverage", line)
+    local mark = base and coverage.marks[base]
+    if mark then
+      local stale = coverage.stale or coverage.lines[base] ~= buf.lines[line]
+      local tone = stale and "muted"
+        or (mark.state == "covered" and "success")
+        or (mark.state == "partial" and "warning")
+        or "error"
+      table.insert(marks, { line = line, tone = tone })
+    end
+  end
+  return marks
 end
 
 -- The tone of a file's coverage percentage, shared by the badge and the status bar.
@@ -1305,6 +1305,20 @@ local function overlay_state(state)
   return nil
 end
 
+-- The overlays that can act here: coverage and debugging need a project, debugging a JavaScript,
+-- TypeScript or Python source. Hotness stays hidden until the project session records
+-- source-located profile samples.
+function overlay_modes(state)
+  local modes = { "none" }
+  if state.root then
+    table.insert(modes, "coverage")
+    if source.debuggable(state.path) then
+      table.insert(modes, "debug")
+    end
+  end
+  return modes
+end
+
 local function icon_button(key, label, icon, keys, act, extra)
   local props = {
     key = key,
@@ -1321,44 +1335,42 @@ local function icon_button(key, label, icon, keys, act, extra)
   return ui.button("", props)
 end
 
--- The debugger's two wells, as the Debug surface draws them: run control, then stepping.
-local function debug_wells(state)
+-- Debug controls by context: none outside the Debug overlay, a single Launch while no target exists,
+-- and the Debug surface's two wells (run control, stepping) while a target is launched, running or
+-- paused.
+local function debug_controls(state)
   local debug = state.debug
-  local live = active(debug)
-  local target = live and debug.snap.debug or nil
-  local controls = live and debug.snap.controller == "you"
-  local reason = nil
-  if state.attach ~= "ready" then
-    reason = "Attaching to the project"
-  elseif not source.debuggable(state.path) then
-    reason = "Debugging takes JavaScript, TypeScript or Python sources"
-  elseif live and not controls then
-    reason = "Another attachment controls this target"
+  if not source.debuggable(state.path) or state.attach ~= "ready" then
+    return {}
   end
-  local paused = target and target.state == "stopped"
-  local resume_reason = reason or (target and not paused and "The target is running") or nil
-  local busy = target and target.pending == true or debug.launching == true
-  local step_reason = reason
-    or (not live and "No target is running")
-    or (not paused and "The target is not paused")
-    or nil
-  return ui.node("buttons", { key = "run", role = "source-debug-run", variant = "toolbar", label = "Run control" }, {
-    icon_button(
-      "debug-resume",
-      live and "Resume (F5)" or ("Launch " .. state.name .. " (F5)"),
-      "play",
-      { "f5" },
-      live and "continue" or "launch",
-      { variant = not resume_reason and "primary" or nil, disabled = resume_reason, busy = busy }
-    ),
-    icon_button("debug-pause", "Pause (F6)", "pause", { "f6" }, "pause", {
-      disabled = reason or (not live and "No target is running") or (paused and "The target is paused") or nil,
+  if not active(debug) then
+    return {
+      icon_button("debug-launch", "Launch " .. state.name .. " (F5)", "play", { "f5" }, "launch", {
+        variant = "primary",
+        busy = debug.launching == true,
+      }),
+    }
+  end
+  local target = debug.snap.debug
+  local reason = debug.snap.controller ~= "you" and "Another attachment controls this target" or nil
+  local paused = target.state == "stopped"
+  local busy = target.pending == true
+  local step_reason = reason or (not paused and "The target is running") or nil
+  return {
+    ui.node("buttons", { key = "run", role = "source-debug-run", variant = "toolbar", label = "Run control" }, {
+      icon_button("debug-resume", "Resume (F5)", "play", { "f5" }, "continue", {
+        variant = not step_reason and "primary" or nil,
+        disabled = step_reason,
+        busy = busy,
+      }),
+      icon_button("debug-pause", "Pause (F6)", "pause", { "f6" }, "pause", {
+        disabled = reason or (paused and "The target is already paused") or nil,
+      }),
+      icon_button("debug-stop", "Stop (⇧F5)", "stop", { "shift", "f5" }, "stop", {
+        variant = "danger",
+        disabled = reason,
+      }),
     }),
-    icon_button("debug-stop", "Stop (⇧F5)", "stop", { "shift", "f5" }, "stop", {
-      variant = "danger",
-      disabled = reason or (not live and "No target is running") or nil,
-    }),
-  }),
     ui.node("buttons", { key = "steps", role = "source-debug-steps", variant = "toolbar", label = "Stepping" }, {
       icon_button("debug-next", "Step over (F10)", "redo", { "f10" }, "next", { disabled = step_reason, busy = busy }),
       icon_button("debug-step_in", "Step into (F11)", "arrow-down", { "f11" }, "step_in", {
@@ -1369,32 +1381,69 @@ local function debug_wells(state)
         disabled = step_reason,
         busy = busy,
       }),
-    })
+    }),
+  }
 end
 
-local KEYS = {
-  { header = "File" },
-  { id = "save", label = "Save", icon = "save", keys = { "cmd", "S" } },
-  { id = "open", label = "Edit in Tern", icon = "open" },
-  { header = "Edit" },
-  { id = "undo", label = "Undo", icon = "undo", keys = { "cmd", "Z" } },
-  { id = "redo", label = "Redo", icon = "redo", keys = { "cmd", "shift", "Z" } },
-  { id = "comment", label = "Toggle line comment", keys = { "cmd", "/" } },
-  { id = "line_below", label = "New line below", keys = { "cmd", "enter" } },
-  { id = "select_all", label = "Select all", icon = "selection", keys = { "cmd", "A" } },
-  { header = "Navigate" },
-  { id = "find", label = "Find", icon = "search", keys = { "ctrl", "F" } },
-  { id = "goto", label = "Go to line", icon = "hash", keys = { "ctrl", "G" } },
-  { id = "wrap", label = "Soft wrap", icon = "corner-down-right", keys = { "alt", "Z" } },
-  { header = "Overlays" },
-  { id = "mode=none", label = "No overlay", keys = { "alt", "1" } },
-  { id = "mode=coverage", label = "Coverage", keys = { "alt", "2" } },
-  { id = "mode=debug", label = "Debug", keys = { "alt", "3" } },
-  { id = "run_coverage", label = "Run with coverage", icon = "run", keys = "F5" },
-  { id = "refresh", label = "Refresh coverage", icon = "repeat", keys = "F6" },
-  { id = "breakpoint", label = "Toggle breakpoint", keys = "F9" },
-  { id = "stop_line", label = "Go to the paused line", keys = "F7" },
-}
+-- The keyboard menu lists only the shortcuts that act in the current state; its rows run them.
+local function key_rows(state)
+  local buf = state.buf
+  local editing = not coverage_view(state)
+  local rows = {}
+  local function add(row)
+    table.insert(rows, row)
+  end
+  add({ header = "File" })
+  if buffer.dirty(buf) then
+    add({ id = "save", label = "Save", icon = "save", keys = { "cmd", "S" } })
+  end
+  add({ id = "open", label = "Edit in Tern", icon = "open" })
+  if editing then
+    add({ header = "Edit" })
+    if #buf.undo > 0 then
+      add({ id = "undo", label = "Undo", icon = "undo", keys = { "cmd", "Z" } })
+    end
+    if #buf.redo > 0 then
+      add({ id = "redo", label = "Redo", icon = "redo", keys = { "cmd", "shift", "Z" } })
+    end
+    if source.comment(state.path) then
+      add({ id = "comment", label = "Toggle line comment", keys = { "cmd", "/" } })
+    end
+    add({ id = "line_below", label = "New line below", keys = { "cmd", "enter" } })
+    add({ id = "select_all", label = "Select all", icon = "selection", keys = { "cmd", "A" } })
+    add({ header = "Navigate" })
+    add({ id = "find", label = "Find", icon = "search", keys = { "ctrl", "F" } })
+    add({ id = "goto", label = "Go to line", icon = "hash", keys = { "ctrl", "G" } })
+    add({ id = "wrap", label = "Soft wrap", icon = "corner-down-right", keys = { "alt", "Z" }, checked = state.wrap })
+  end
+  local modes = overlay_modes(state)
+  if #modes > 1 then
+    add({ header = "Overlays" })
+    for index, mode in modes do
+      add({
+        id = "mode=" .. mode,
+        label = mode == "none" and "No overlay" or (string.upper(string.sub(mode, 1, 1)) .. string.sub(mode, 2)),
+        keys = { "alt", tostring(index) },
+        radio = "overlay",
+        checked = state.mode == mode,
+      })
+    end
+  end
+  if state.mode == "coverage" and state.attach == "ready" then
+    add({ header = "Coverage" })
+    add({ id = "run_coverage", label = "Run with coverage", icon = "run", keys = "F5" })
+    if coverage_view(state) then
+      add({ id = "refresh", label = "Refresh coverage", icon = "repeat", keys = "F6" })
+    end
+  elseif state.mode == "debug" and state.attach == "ready" and source.debuggable(state.path) then
+    add({ header = "Debug" })
+    add({ id = "breakpoint", label = "Toggle breakpoint", keys = "F9" })
+    if state.debug.stop then
+      add({ id = "stop_line", label = "Go to the paused line", keys = "F7" })
+    end
+  end
+  return rows
+end
 
 local function toolbar(state)
   local buf = state.buf
@@ -1408,6 +1457,7 @@ local function toolbar(state)
     walked = walked .. "/" .. part
     table.insert(crumbs, { id = walked, label = part })
   end
+  local dirty = buffer.dirty(buf)
   local left = {
     ui.node("breadcrumb", {
       key = "path",
@@ -1418,7 +1468,7 @@ local function toolbar(state)
       shrink = 1,
     }),
   }
-  if buffer.dirty(buf) then
+  if dirty then
     local dot = ui.text({ ui.span("●", "warning") })
     dot.p.key = "dirty"
     dot.p.role = "source-dirty"
@@ -1438,57 +1488,69 @@ local function toolbar(state)
     badge.p.role = "source-badge"
     table.insert(left, badge)
   end
-  local right = {
-    ui.node("tabs", {
-      key = "overlay",
-      role = "source-overlays",
-      variant = "segmented",
-      active = state.mode,
-      items = {
-        { id = "none", label = "None" },
-        { id = "coverage", label = "Coverage" },
-        { id = "debug", label = "Debug" },
-        { id = "hotness", label = { ui.span("Hotness", "dim") }, disabled = HOTNESS_REASON },
-      },
-    }),
-  }
+  local right = {}
+  local modes = overlay_modes(state)
+  if #modes > 1 then
+    local labels = { none = "None", coverage = "Coverage", debug = "Debug", hotness = "Hotness" }
+    local items = {}
+    for _, mode in modes do
+      table.insert(items, { id = mode, label = labels[mode] })
+    end
+    table.insert(
+      right,
+      ui.node(
+        "tabs",
+        { key = "overlay", role = "source-overlays", variant = "segmented", active = state.mode, items = items }
+      )
+    )
+  end
   if state.mode == "debug" then
-    local run, steps = debug_wells(state)
-    table.insert(right, run)
-    table.insert(right, steps)
-  elseif state.mode == "coverage" and state.coverage.state == "ready" then
+    for _, control in debug_controls(state) do
+      table.insert(right, control)
+    end
+  elseif coverage_view(state) and state.attach == "ready" then
     table.insert(
       right,
       ui.node(
         "buttons",
         { key = "coverage", role = "source-coverage-tools", variant = "toolbar", label = "Coverage" },
         {
-          icon_button("run-coverage", "Run with coverage (F5)", "run", nil, "run_coverage"),
-          icon_button("refresh", "Refresh coverage (F6)", "repeat", nil, "refresh"),
+          icon_button("run-coverage", "Run with coverage (F5)", "run", { "f5" }, "run_coverage"),
+          icon_button("refresh", "Refresh coverage (F6)", "repeat", { "f6" }, "refresh"),
         }
       )
     )
   end
-  local dirty = buffer.dirty(buf)
-  -- One primary on screen: Save takes it only while no overlay offers its own (Resume, Run with
-  -- coverage in the empty state).
-  local save_primary = dirty
-    and state.mode ~= "debug"
-    and not (state.mode == "coverage" and state.coverage.state == "missing")
+  local tools = {}
+  -- One primary on screen: Save takes it while dirty unless an overlay shows its own.
+  if dirty then
+    local primary = state.mode == "none" or (state.mode == "coverage" and coverage_view(state))
+    table.insert(
+      tools,
+      icon_button("save", "Save (⌘S)", "save", { "cmd", "s" }, "save", { variant = primary and "primary" or nil })
+    )
+  end
+  if not coverage_view(state) then
+    table.insert(
+      tools,
+      icon_button("find", "Find (⌃F)", "search", { "ctrl", "f" }, "find", { on = state.find ~= nil })
+    )
+    table.insert(
+      tools,
+      icon_button("goto", "Go to line (⌃G)", "hash", { "ctrl", "g" }, "goto", { on = state.go ~= nil })
+    )
+    table.insert(
+      tools,
+      icon_button("wrap", "Soft wrap (⌥Z)", "corner-down-right", { "alt", "z" }, "wrap", { on = state.wrap })
+    )
+  end
+  table.insert(
+    tools,
+    icon_button("edit", "Edit in Tern", "open", nil, "open", { href = source.file_url(state.path, buf.cursor.l) })
+  )
   table.insert(
     right,
-    ui.node("buttons", { key = "tools", role = "source-tools", variant = "toolbar", label = "Editor" }, {
-      icon_button("save", "Save (⌘S)", "save", nil, "save", {
-        variant = save_primary and "primary" or nil,
-        disabled = not dirty and "No unsaved changes" or nil,
-      }),
-      icon_button("find", "Find (⌃F)", "search", nil, "find", { on = state.find ~= nil }),
-      icon_button("goto", "Go to line (⌃G)", "hash", nil, "goto", { on = state.go ~= nil }),
-      icon_button("wrap", "Soft wrap (⌥Z)", "corner-down-right", nil, "wrap", { on = state.wrap }),
-      icon_button("edit", "Edit in Tern", "open", nil, "open", {
-        href = source.file_url(state.path, buf.cursor.l),
-      }),
-    })
+    ui.node("buttons", { key = "tools", role = "source-tools", variant = "toolbar", label = "Editor" }, tools)
   )
   table.insert(
     right,
@@ -1500,7 +1562,7 @@ local function toolbar(state)
       trigger = "quiet",
       align = "end",
       variant = "dense",
-      items = KEYS,
+      items = key_rows(state),
     })
   )
   return ui.node("row", {
@@ -1508,7 +1570,7 @@ local function toolbar(state)
     role = "source-toolbar",
     justify = "between",
     align = "center",
-    gap = "md",
+    gap = "sm",
     wrap = true,
   }, {
     ui.node("row", { key = "start", gap = "sm", align = "center", shrink = 1 }, left),
@@ -1693,6 +1755,18 @@ local function status_bar(state)
         text = state.mode == "coverage" and ("Coverage " .. string.gsub(word, " covered$", "")) or word,
         tone = tone,
         priority = 4,
+      })
+    )
+  end
+  if coverage_view(state) then
+    table.insert(
+      segs,
+      ui.node("seg", {
+        key = "readonly",
+        role = "source-readonly",
+        side = "right",
+        text = "Coverage view · read-only",
+        priority = 6,
       })
     )
   end
@@ -1946,14 +2020,18 @@ local function overlay_keys(state, cx, key)
   if state.mode == "coverage" and state.attach == "ready" then
     if name == "f5" then
       start_coverage(state, cx)
-    elseif name == "f6" then
+    elseif name == "f6" and coverage_view(state) then
       load_coverage(state, cx, true)
     else
       return false
     end
     return true
   end
-  if state.mode == "debug" and state.attach == "ready" then
+  if state.mode == "debug" and state.attach == "ready" and source.debuggable(state.path) then
+    local live = active(state.debug)
+    if name ~= "f9" and name ~= "f5" and not live then
+      return false
+    end
     if name == "f9" then
       toggle_breakpoint(state, cx)
     elseif name == "f5" then
@@ -1993,6 +2071,9 @@ local function key_handler(state, key, cx)
   end
   if cmd and name == "s" then
     save(state, cx)
+  elseif coverage_view(state) and name ~= "escape" and not string.find(name, "^f%d+$") and not key.alt then
+    -- The coverage view is read-only; None or Debug edits again.
+    return false
   elseif cmd and name == "f" then
     open_find(state, cx)
   elseif key.ctrl and name == "g" then
@@ -2002,7 +2083,8 @@ local function key_handler(state, key, cx)
   elseif key.alt and not key.meta and (name == "z" or name == "Ω") then
     state.wrap = not state.wrap
   elseif key.alt and not key.meta and string.find(name, "^[1-4]$") then
-    set_mode(state, cx, OVERLAYS[tonumber(name)])
+    local modes = overlay_modes(state)
+    set_mode(state, cx, modes[tonumber(name)] or state.mode)
   elseif (cmd and name == "z" and not key.shift) and state.focus == "editor" then
     edited(state, buffer.undo(state.buf))
   elseif ((cmd and name == "z" and key.shift) or (key.ctrl and name == "y")) and state.focus == "editor" then
@@ -2116,26 +2198,43 @@ tern.block.define("source", {
       state.jump = nil
     end
     local a = buffer.selection(buf)
-    table.insert(
-      children,
-      ui.node("editor", {
-        key = "editor",
-        role = "source-editor",
-        aria = state.name,
-        grow = 1,
-        text = buffer.text(buf),
-        cursor = buffer.offset(buf, buf.cursor),
-        anchor = a and buffer.offset(buf, buf.anchor) or nil,
-        -- Even `highlight = false` keeps part of the cost, so large files drop `lang` entirely.
-        lang = #buf.lines <= HIGHLIGHT_LINES and state.lang or nil,
-        nowrap = not state.wrap,
-        maxLines = visible(state, cx),
-        topline = top,
-        gutter = gutter,
-        virt = virt,
-        decor = decor,
-      })
-    )
+    if coverage_view(state) then
+      table.insert(
+        children,
+        ui.node("code", {
+          key = "coverage",
+          role = "source-coverage",
+          -- No empty row for the line after a trailing newline, as the editor draws none.
+          text = (string.gsub(buffer.text(buf), "\n$", "")),
+          lang = state.lang,
+          numbers = true,
+          start = 1,
+          marks = coverage_marks(state),
+          grow = 1,
+        })
+      )
+    else
+      table.insert(
+        children,
+        ui.node("editor", {
+          key = "editor",
+          role = "source-editor",
+          aria = state.name,
+          grow = 1,
+          text = buffer.text(buf),
+          cursor = buffer.offset(buf, buf.cursor),
+          anchor = a and buffer.offset(buf, buf.anchor) or nil,
+          -- Even `highlight = false` keeps part of the cost, so large files drop `lang` entirely.
+          lang = #buf.lines <= HIGHLIGHT_LINES and state.lang or nil,
+          nowrap = not state.wrap,
+          maxLines = visible(state, cx),
+          topline = top,
+          gutter = gutter,
+          virt = virt,
+          decor = decor,
+        })
+      )
+    end
     local dock = {}
     if state.confirm then
       table.insert(dock, confirm_strip(state))
