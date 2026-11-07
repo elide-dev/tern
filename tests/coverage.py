@@ -6,9 +6,11 @@ import re
 import os
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import tempfile
 import time
+import zlib
 
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
@@ -26,9 +28,12 @@ with tempfile.TemporaryDirectory(prefix='tc-', dir='/tmp') as temporary:
     project.mkdir()
     (project / 'elide.pkl').write_text('amends "elide:project.pkl"\nname = "coverage-example"\n')
     source = project / 'classify.mjs'
+    # Line 4 is blank inside the covered `if`: inferred, it must carry the band too.
     source.write_text('''export function classify(value) {
   if (value > 0) {
-    return "positive";
+    const label = "positive";
+
+    return label;
   }
   return "other";
 }
@@ -85,6 +90,59 @@ test("positive values", () => assert.equal(classify(1), "positive"));
             (out / 'failure-tree.json').write_text(tree())
             raise AssertionError(tree('[data-role="coverage-view"]') + tree('[data-role="run-status"]'))
 
+        def png(path):
+            data = Path(path).read_bytes()
+            pos, chunks = 8, []
+            while pos < len(data):
+                length, kind = struct.unpack('>I4s', data[pos:pos + 8])
+                body = data[pos + 8:pos + 8 + length]
+                if kind == b'IHDR':
+                    width, height, _, color = struct.unpack('>IIBB', body[:10])
+                    channels = {2: 3, 6: 4}[color]
+                elif kind == b'IDAT':
+                    chunks.append(body)
+                pos += 12 + length
+            raw = zlib.decompress(b''.join(chunks))
+            stride = width * channels
+            rows, prev = [], bytearray(stride)
+            for y in range(height):
+                kind = raw[y * (stride + 1)]
+                line = bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
+                for i in range(stride):
+                    a = line[i - channels] if i >= channels else 0
+                    b = prev[i]
+                    c = prev[i - channels] if i >= channels else 0
+                    if kind == 1:
+                        line[i] = (line[i] + a) & 255
+                    elif kind == 2:
+                        line[i] = (line[i] + b) & 255
+                    elif kind == 3:
+                        line[i] = (line[i] + (a + b) // 2) & 255
+                    elif kind == 4:
+                        pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
+                        line[i] = (line[i] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+                rows.append(bytes(line))
+                prev = line
+            return lambda x, y: tuple(rows[int(y)][int(x) * channels:int(x) * channels + 3])
+
+        # The blank line inside the covered block is tinted across its whole row, like the
+        # inferred closer below it, and unlike the function's closer, which nothing reaches.
+        def blank_band(shot):
+            pixel = png(out / 'live' / (shot + '.png'))
+            rows = {}
+            for node in ctl('tree', '[data-role="coverage-editor"] .sf-ed-gutter').get('nodes', []):
+                match = re.match(r'^\s*[^\d\s]?\s*(\d+)', node.get('text') or '')
+                if match:
+                    rows[int(match.group(1))] = node['rect']
+            editor = ctl('tree', '[data-role="coverage-editor"]')['nodes'][0]['rect']
+            mid = lambda line: (rows[line][1] + rows[line][3] / 2) * 2
+            start, end = (rows[4][0] + rows[4][2] + 4) * 2, (editor[0] + editor[2] - 24) * 2
+            closer, clear = pixel(end, mid(6)), pixel(end, mid(8))
+            near = lambda p, q, d: sum(abs(x - y) for x, y in zip(p, q)) <= d
+            across = [pixel(x, mid(4)) for x in range(int(start), int(end), 6)]
+            ok = not near(closer, clear, 12) and all(near(p, closer, 6) for p in across)
+            return ok, {'closer': closer, 'clear': clear, 'blank': sorted(set(across))[:6]}
+
         def reports():
             return sorted(project.glob('.dev/reports/tests/tern/run-*/coverage.json'), key=lambda path: path.stat().st_mtime_ns)
 
@@ -118,6 +176,8 @@ test("positive values", () => assert.equal(classify(1), "positive"));
                 ctl('click', '[data-role="coverage-lines"] .sf-tbl-body .sf-tbl-row:first-child')
             wait(lambda: f'line {missing}' in tree('[data-role="coverage-source"]'))
             ctl('shot', 'coverage-light')
+            ok, band = blank_band('coverage-light')
+            assert ok, band
             ctl('prefs', 'preview', 'dark-nord')
             ctl('shot', 'coverage-dark')
             ctl('prefs', 'close')
@@ -154,7 +214,7 @@ test("positive values", () => assert.equal(classify(1), "positive"));
             wait(lambda: 'coverage-page-ready' in str(ctl('state').get('carly', {}).get('last_tool', '')))
             ctl('carly', 'lua', 'local detail = await(plugins.elide.coverage_read(coverage_binding, coverage_run, {file=0,limit=1})); assert(#detail.lines == 1); return "coverage-detail-ready"')
             wait(lambda: 'coverage-detail-ready' in str(ctl('state').get('carly', {}).get('last_tool', '')))
-            # The broker serves closers of covered blocks as `inferred`: line 4 of classify.mjs
+            # The broker serves closers of covered blocks as `inferred`: line 6 of classify.mjs
             # closes the covered `if`.
             ctl('carly', 'lua', 'local listing = await(plugins.elide.coverage_read(coverage_binding, coverage_run, {limit=100})); '
                 'local index; for _, file in listing.files do if string.find(file.path, "classify%.mjs$") and not string.find(file.path, "%.test%.") then index = file.index end end; '
@@ -166,7 +226,7 @@ test("positive values", () => assert.equal(classify(1), "positive"));
                 return re.search(r'coverage-inferred:([0-9,]*)', str((ctl('state').get('carly', {}).get('last_tool') or {}).get('text', '')))
             wait(inferred_reply)
             inferred = inferred_reply()
-            assert '4' in inferred.group(1).split(','), inferred.group(0)
+            assert '6' in inferred.group(1).split(','), inferred.group(0)
             assert 'exceeded its budget' not in (out / 'tern.log').read_text()
             print('PASS: real coverage, native source/line navigation, edit/save/rerun, immutable history, shared agent pages')
         finally:
