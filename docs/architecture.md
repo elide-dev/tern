@@ -244,6 +244,24 @@ edit, a breakpoint with F9 and a launch with F5 checked against the broker's own
 file taking edits without highlighting, and an oversized file's empty state. It takes light and
 dark screenshots.
 
+### Context-sensitive controls
+
+The window half shows a control only when it can act or has something to show:
+
+- Status segments appear only inside a detected project, and the outcome segment only
+  after an `elide test`, `build` or `run` finished in that pane.
+- The workspace toolbar follows its editor's file on `focus` and `title` events (no
+  timer, and a redraw only when the file changed). **Source** appears only for a file
+  the source block shows. **Debug** stays, because without a debuggable file it opens
+  the debugger's target picker; its tooltip says which it will do.
+- The project menu lists **View test runs** only once the project has a `run-*` report
+  directory under `.dev/reports/tests/tern/`.
+
+Follow-ups this leaves: the menu does not ask the project host for live runs (a run
+whose reports were deleted still has history in a running host); Build and Run stay
+visible in projects without a JVM or script entry point, which would need the manifest
+evaluated; and Files pane and palette commands are not filtered by project yet.
+
 ### Why workspaces don't use `cx.layout:tab`
 
 `cx.layout:tab(spec)` builds a tab in one call, but its leaves launch only a shell,
