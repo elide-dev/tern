@@ -258,8 +258,9 @@ Offsets are UTF-16 code units.
   token: no run, sign cell or note slot appears or disappears and no text moves (the harness checks
   the first line's text rect across None, Coverage, Debug and None). The stylesheet gives the run a tint mixed into the page color
   and forced opaque (the glass themes make the page translucent, and translucent copies stripe), 1 px of vertical padding (so adjacent rows meet without a hairline, without changing
-  the line's layout) and zero-spread shadows of the same tint every 0.9ch to the right, which overlap
-  so no seams show; the scroller clips the band, and later text, the caret and the end-of-line note
+  the line's layout) and zero-spread shadows of the same tint every 0.9ch to the right, out to about
+  300ch so wide panes have no untinted tail, which overlap so no seams show (only tinted runs carry
+  them: transparent copies on every line stalled the window); the scroller clips the band, and later text, the caret and the end-of-line note
   paint over it. Other attempts left visible blocks or did not render: a background on every run
   broke at spaces and token edges; copies every 1ch seamed at fractional pixel edges; a single
   `100vw` shadow showed nothing past the text; and a `::before` band is not positioned against an
