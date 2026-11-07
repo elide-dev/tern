@@ -1,24 +1,22 @@
 """Compiler diagnostics in an isolated desktop window: the source block's Diagnostics overlay on a real
 `elide build` report (newest run chosen, sign, band, underline, inline message, F8 stepping, count
 badge, no reflow), the build lens on plain javac output with elide:// links, and the status segment's
-counts. Uses W4's fixture project from tests/build.py and its build shim (`make building`).
-Usage: python3 tests/diagnostics_overlay.py --runtime /path/to/elide"""
+counts, and the workspace's Build button opening the runtime's Build page. Uses W4's fixture project
+from tests/build.py. Usage: python3 tests/diagnostics_overlay.py --runtime /path/to/elide (a runtime
+whose `elide build` hosts the Build surface and writes diagnostics.json)"""
 import argparse, json, os, re, shlex, shutil, subprocess, sys, tempfile, time, uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
-parser.add_argument('--runtime', required=True, help='Elide runtime with `elide javac`')
+parser.add_argument('--runtime', required=True, help='Elide runtime with the Build surface and `elide javac`')
 runtime = str(Path(parser.parse_args().runtime).resolve())
-shim = ROOT / 'dist/elide-tern-build'
 saved = ROOT / '.dev/scratch/diagnostics-test'
 results = []
 
 def check(name, ok, detail=''):
     results.append((name, bool(ok)))
     print(('ok   ' if ok else 'FAIL ') + name + ('' if ok else ': ' + str(detail)[:1500]), flush=True)
-
-assert shim.exists(), 'Run `make building ELIDE_SOURCE=…` first: ' + str(shim)
 
 with tempfile.TemporaryDirectory(prefix='w3d-', dir='/tmp') as temporary:
     base = Path(temporary).resolve()
@@ -40,13 +38,7 @@ with tempfile.TemporaryDirectory(prefix='w3d-', dir='/tmp') as temporary:
         'diagnostics': [{'severity': 'error', 'path': str(util), 'line': 2, 'col': 1, 'message': 'decoy from an older run'}],
     }))
     os.utime(decoy, (1, 1))
-    # `elide build` reaches W4's build shim (the dist runtime predates the Build surface); everything
-    # else reaches the runtime.
-    bindir = base / 'bin'; bindir.mkdir()
-    wrapper = bindir / 'elide'
-    wrapper.write_text('#!/bin/sh\nif [ "$1" = build ]; then shift; exec %s %s "$@"; fi\nexec %s "$@"\n'
-                       % (shlex.quote(str(shim)), shlex.quote(runtime), shlex.quote(runtime)))
-    wrapper.chmod(0o755)
+    bindir = Path(runtime).parent
     state = base / 'state'; (state / 'config').mkdir(parents=True)
     package = state / 'crates/plugins/fixtures/elide'
     shutil.copytree(ROOT / 'plugin', package, ignore=shutil.ignore_patterns('config.json', 'tern.d.luau'))
@@ -185,6 +177,20 @@ with tempfile.TemporaryDirectory(prefix='w3d-', dir='/tmp') as temporary:
         check('lens groups by file with counts', lens and 'Util.java' in lens and '1 error' in lens, lens)
         check('lens links the location', lens and 'Open Util.java:5' in lens, lens)
         ctl('shot', 'diagnostics-lens')
+
+        # The workspace's Build button opens the runtime's full Build page.
+        lua('cx.layout:focus(' + str(terminal) + ')')
+        ctl('plugins', 'run', 'plugin.elide.workspace')
+        check('workspace opens', wait(lambda: nodes('[data-role="project-build"]'), 30), tree('.sf-main'))
+        time.sleep(6)  # a pane opened under the harness may have paused process callbacks briefly
+        ctl('click', '[data-role="project-build"]')
+        def launched():
+            rows = subprocess.run(['ps', '-axo', 'args'], capture_output=True, text=True).stdout.splitlines()
+            return next((row for row in rows if row.startswith(runtime + ' --ignore-version build --surface=screen')), None)
+        check('Build button runs build --surface=screen', wait(launched, 60), launched())
+        check('Build page shows the failure', wait(lambda: 'Failed' in tree('[data-role="build-status"]'), 240),
+              tree('[data-role="build-status"]'))
+        ctl('shot', 'diagnostics-build-page')
     finally:
         ctl('quit')
         try:

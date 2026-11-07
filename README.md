@@ -240,8 +240,8 @@ step through them. Java files open here too.
 Run `lua tests/source.lua` for its text model and `python3 tests/source.py --runtime
 /path/to/elide` for the editor itself.
 `lua tests/diagnostics.lua` checks the shared compiler-output parser, and
-`make building ELIDE_SOURCE=…` then `python3 tests/diagnostics_overlay.py --runtime
-/path/to/elide` checks the overlay, the build lens and the status segment.
+`python3 tests/diagnostics_overlay.py --runtime /path/to/elide` checks the overlay, the
+build lens, the status segment and the Build button.
 
 ### Built-in agent project tools
 
