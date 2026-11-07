@@ -207,9 +207,15 @@ Offsets are UTF-16 code units.
   `dim`; the caret line's is the normal ink, since `strong` could widen the glyphs. The dirty marker
   is a small `•` in `warning` with the tooltip "Unsaved changes". The code sits flush: the scoped
   sheet removes the editor field's padding, corners and hairline and the regions' 16 px gaps, so the
-  first row starts under the toolbar's hairline and the gutter at the pane's left edge. Rows cannot
-  get more vertical room without changing the editor's line height: Tern's renderer does not grow a
-  line box for a padded inline-block, so the padding overlapped the next row instead. ⌥1 to ⌥3 pick an available overlay (in the desktop harness they did not
+  first row starts under the toolbar's hairline and the gutter at the pane's left edge. The block's line
+  height is about 13% over Tern's (`--sf-lh: calc(1em * 1.35)` on this editor, 17.55 px against
+  15.5 px at 13 px); the editor's line height and its `maxLines` height both read the variable, so the
+  visible-rows math follows, and the harness checks every gutter row sits on its code row. Padding a
+  gutter inline-block instead does not work: Tern's renderer does not grow a line box for it, so the
+  padding overlapped the next row. The hairline is drawn once, as a 1 px gradient down the editor's
+  scroller (`background-attachment: local`), so it is continuous at any line height; the editor's
+  role carries its digit count (`digits-N`) to place it at (N + 2.5)ch. Hairlines drawn on the gutter
+  runs (shadows, a padded glyph background) were clipped to each row and came out dashed or not at all. ⌥1 to ⌥3 pick an available overlay (in the desktop harness they did not
   reach the block, presumably taken by window bindings, so the harness uses the switch).
 - **Stylesheet.** `plugin/styles/source.css` (the manifest's `styles`) is scoped to
   `[data-surface="plugin.elide.source"]` and colored only with Tern's tokens; it is the design
