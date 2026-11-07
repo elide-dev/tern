@@ -148,6 +148,10 @@ Branch `feat/tern-debug-responsive` from `3f6f17c29`. Share W1's `Band` logic; n
 
 Standalone Debug surface: before a launch show only the target picker and Launch; the two icon wells (Resume/Pause/Stop, Step over/into/out) appear only while a target exists (running or paused) and leave when it exits. Keep roles when present; `tests/debug.py` must pass. Also narrow-pane frames: project-relative paths with the absolute path in `title`.
 
+### Task 13: Design polish from the controller's block-by-block review (19:58)
+
+Tests (W1): drop the status dot (keep the toned word); hide the File column when uniform; project-relative head path with full path in `title`; failure error objects as `json`, not `code`; a duration-share `meter_cell`; a stacked pass/fail/skip meter (`test_summary`) in the dock. Coverage (W1): `meter_parts_cell` for covered/partial/uncovered. Serve (W2): latency sparkline `chart` under the stats in wide panes; trace ids `mono` middle-truncated with copy; hide Spans/Service columns when uniform; per-span `meter_cell` waterfall in the trace card; one state badge. Debug (W2): pause card toned `pending`/`accent`, not `error`; the getters warning as tooltip/one-time line; project-relative frame paths in wide panes too. Help (W6): no duplicate crumb; collapsible nav groups. Source block (W5): remove the "None" segment in favour of deselection/icon; hide "Edit in Tern" once editing is on. Lenses (W3): drop the `#` column; assertion detail on a second line or hovercard. All: harness must stay green; shots in the report.
+
 ### Task 5: Integration, review, rebuild (controller)
 
 - [ ] Merge W1 and W2 branches into `feat/tern-integration-pr` (fast-forward or merge; no conflicts expected since modules are disjoint), merge W3 into plugin `main`, dispatch W4, then a fresh Opus reviewer over both repos' ranges.
