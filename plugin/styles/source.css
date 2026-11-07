@@ -34,11 +34,13 @@
   padding: 6px 10px;
   box-shadow: inset 0 1px 0 var(--l2);
 }
-/* The code sits flush under the toolbar's hairline and against the status bar, its gutter at the
-   pane's left edge: the editor's field frame (padding, corners, hairline, focus ring) is removed. */
+/* The code sits half a line under the toolbar's hairline and against the status bar, its gutter at
+   the pane's left edge: the editor's field frame (corners, hairline, focus ring) is removed and its
+   padding is only that half line on top, outside the scroller, so the gutter, code and tints move
+   together and scrolled rows clip at the same edge. */
 [data-surface="plugin.elide.source"] .sf-editor[data-role~="source-editor"],
 [data-surface="plugin.elide.source"] .sf-editor[data-role~="source-editor"].focused {
-  padding: 0;
+  padding: calc(var(--sf-lh) * 0.5) 0 0;
   border-radius: 0;
   box-shadow: none;
   border: 0;
@@ -62,7 +64,7 @@
 /* The gutter's hairline: the right border of the two cells of air after the digits (the gutter's
    `muted` run), made an inline-block exactly one line tall (vertical-align top, no padding, so line
    boxes do not change) so the border spans the row and rows abut into one continuous line. It sits
-   two cells after the last digit wherever the digits end, and two plain cells follow it before the
+   two cells after the last digit wherever the digits end, and one plain cell follows it before the
    code; nothing is computed from `ch`. Tried and dropped: a border with a margin (this renderer drops
    the margin), a background on the gutter run (not painted), a gradient on the scroller placed in
    `ch` (the scroller's face is the region's sans, so it landed inside the digits). */
