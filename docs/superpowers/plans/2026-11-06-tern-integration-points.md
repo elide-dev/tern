@@ -143,6 +143,10 @@ Branch `feat/tern-debug-responsive` from `3f6f17c29`. Share W1's `Band` logic; n
 
 `tern.route.link` for `elide://help?topic=<slug>`: run `<runtime> help <url>` in a new pane beside the link's pane (the help surface resolves that argument to the topic). Reject malformed slugs. Document in `docs/architecture.md`; extend `tests/integration.py` with one check.
 
+### Task 12: Debug controls only while a session is active (worker W2 follow-up, queued)
+
+Standalone Debug surface: before a launch show only the target picker and Launch; the two icon wells (Resume/Pause/Stop, Step over/into/out) appear only while a target exists (running or paused) and leave when it exits. Keep roles when present; `tests/debug.py` must pass. Also narrow-pane frames: project-relative paths with the absolute path in `title`.
+
 ### Task 5: Integration, review, rebuild (controller)
 
 - [ ] Merge W1 and W2 branches into `feat/tern-integration-pr` (fast-forward or merge; no conflicts expected since modules are disjoint), merge W3 into plugin `main`, dispatch W4, then a fresh Opus reviewer over both repos' ranges.
