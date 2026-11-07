@@ -312,6 +312,25 @@ edit, a breakpoint with F9 and a launch with F5 checked against the broker's own
 file taking edits without highlighting, and an oversized file's empty state. It takes light and
 dark screenshots, split beside a terminal and wide in a tab of its own.
 
+### Full-page Tests from the plugin
+
+Bare `elide test` under Tern draws inline; the plugin's **Run tests** (the workspace
+toolbar's play button, the project menu and the palette command) opens the full page.
+Inside a project that is the shared project surface (`<runtime> tern project …`), which is
+always full-screen. Outside one it is `<runtime> test --surface=screen <subject>`, but only
+when the runtime takes `--surface`; an older runtime gets no flag.
+
+`--surface` is parsed by hand, so neither `--help-all` nor `elide test --help` lists it. The
+window half probes once per runtime and command: `<runtime> --ignore-version --no-color
+<command> --surface=probe` in an empty directory under the plugin data. A runtime that knows
+the flag refuses the value by name (`--surface expects inline, screen or auto`) before doing
+any work; an older one fails on the unknown option. The answer is cached for the window.
+
+Panes the plugin opens after a probe open from a timer rather than the process callback.
+Starting a pane can still take longer than 500 ms under the in-process `tern serve`
+harness, which `tests/workspace.py` tolerates only for its launch checks; desktop windows
+stay within budget.
+
 ### Context-sensitive controls
 
 The window half shows a control only when it can act or has something to show:

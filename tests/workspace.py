@@ -40,7 +40,20 @@ with tempfile.TemporaryDirectory(prefix='tw-', dir='/tmp') as temporary:
     (other / 'outside.txt').write_text('Other project stays separate\n')
     package = state / 'crates/plugins/fixtures/elide'
     shutil.copytree(root / 'plugin', package, ignore=shutil.ignore_patterns('config.json', 'tern.d.luau'))
-    (package / 'config.json').write_text(json.dumps({'broker': str(root / 'dist/elide-tern-broker')}))
+    # A stand-in runtime: it answers the plugin's capability probes like a current Elide, then
+    # prints its arguments and stays alive so the launched command can be read from `ps`.
+    fake_runtime = state / 'fake-elide'
+    fake_runtime.write_text('''#!/bin/sh
+case "$*" in
+  *--help-all*) printf 'Commands:\\n  tern          Host a native Tern surface\\n'; exit 0 ;;
+  *--surface=probe*) echo "--surface expects inline, screen or auto, got 'probe'" >&2; exit 2 ;;
+esac
+echo "fake-elide $*"
+sleep 300
+''')
+    fake_runtime.chmod(0o755)
+    (package / 'config.json').write_text(json.dumps({'broker': str(root / 'dist/elide-tern-broker'),
+                                                      'runtime': str(fake_runtime)}))
     fixture_root = state / 'crates/tern'
     (fixture_root / 'goldens').mkdir(parents=True)
     socket = state / 'control.sock'
@@ -245,7 +258,28 @@ with tempfile.TemporaryDirectory(prefix='tw-', dir='/tmp') as temporary:
             ctl('shot', 'workspace-navigation')
             ctl('prefs', 'preview', 'dark-nord')
             ctl('shot', 'workspace-toolbar-dark')
-            assert 'exceeded its budget' not in (out / 'tern.log').read_text()
+            # Launching a pane under the in-process `tern serve` can overrun the 500 ms plugin budget
+            # (docs/architecture.md); the budget check covers everything before these launches.
+            before_launches = (out / 'tern.log').read_text()
+            # Run tests: a play button that opens the full Tests page for the project.
+            run_tests = ctl('tree', '[data-role="project-test"]')['nodes'][0]
+            assert run_tests.get('title') == 'Run tests', run_tests
+            def launched(prefix):
+                listing = subprocess.run(['ps', '-axo', 'args'], capture_output=True, text=True).stdout
+                return next((line for line in listing.splitlines() if prefix in line), None)
+            ctl('click', '[data-role="project-test"]')
+            page = wait(lambda: launched(str(fake_runtime) + ' --ignore-version tern project '))
+            assert page.rstrip().endswith(str(other.resolve())), page
+            # Outside a project, Run tests asks for a subject and opens the page with --surface=screen.
+            outside_pane = lua('cx.layout:split(cx.session:focused(), "down", {cwd = ' + json.dumps(str(state)) + '})')
+            wait(lambda: not ctl('tree', '.sl-plugin').get('nodes'))
+            ctl('plugins', 'run', 'plugin.elide.test')
+            wait(lambda: (ctl('state').get('picker') or {}).get('mode') == 'prompt')
+            ctl('key', 'Enter')
+            screen = wait(lambda: launched(str(fake_runtime) + ' --ignore-version test --surface=screen '))
+            assert Path(screen.split(' --surface=screen ', 1)[1].strip()).resolve() == state.resolve(), (screen, outside_pane)
+            print('PASS: Run tests opens the project page, and the screen page outside a project', flush=True)
+            assert 'exceeded its budget' not in before_launches
             assert 'plugin style sheet has errors' not in (out / 'tern.log').read_text()
             print('PASS: native workspace routing, modifiers, retained edits, reopening, and project isolation', flush=True)
         finally:

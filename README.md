@@ -47,6 +47,8 @@ Open Tern in a directory containing `elide.pkl` (or any child directory), then c
 **Workspace** in the status bar or choose **Open project workspace** in the palette.
 This creates a project tab with Tern's Files browser, native file editor, a terminal,
 and a compact icon toolbar for Build, Test, Run, Debug, REPL, and static serving.
+The play button runs the project's tests on the full Tests page; `elide test` typed in a
+terminal draws inline instead.
 Buttons have hover labels and accessible names. All panes use Tern's normal
 adjustable splits. Opening the workspace again refreshes its toolbar without resetting
 your layout. Project actions retain their original root as focus changes.

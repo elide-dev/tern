@@ -72,12 +72,15 @@ local function host(cx, config, kind, argv, open, opened)
       { timeout_ms = 15000 },
       function(result, current)
         supports_tern[runtime] = result.status == 0 and string.find(result.stdout or "", "[\r\n]%s+tern%s+") ~= nil
-        if current then
-          local pane = host(current, config, kind, argv, open)
-          if opened then
-            opened(current, pane)
+        -- Open from a timer: starting a pane inside a process callback can overrun its budget.
+        tern.timer(0, function(fresh)
+          if fresh then
+            local pane = host(fresh, config, kind, argv, open)
+            if opened then
+              opened(fresh, pane)
+            end
           end
-        end
+        end)
       end
     )
   end)
@@ -139,6 +142,47 @@ local function launch(cx, language, context, target, opened)
   end, opened)
 end
 
+-- Whether `<runtime> <command>` takes `--surface=inline|screen|auto`, by runtime and command.
+-- The flag is parsed by hand, so no help text lists it; a runtime that knows it refuses an
+-- unknown value by name ("--surface expects …") before running anything, while an older one
+-- fails on the unknown option. The probe runs in an empty directory under the plugin data.
+local surface_support = {}
+
+-- Runs `run(cx, supported, later)` once `<runtime> <command> --surface` support is known;
+-- returns false while the probe is pending, else what `run` returns. `later` is true when
+-- `run` is called from the probe's callback, where its result reaches no caller.
+local function with_surface(cx, runtime, command, run)
+  local key = runtime .. "\0" .. command
+  if surface_support[key] ~= nil then
+    return run(cx, surface_support[key])
+  end
+  local directory = tern.plugin.data .. "/surface-probe"
+  local ok = pcall(function()
+    if not tern.fs.exists(directory) then
+      tern.fs.mkdir(directory)
+    end
+    tern.process.run(
+      { runtime, "--ignore-version", "--no-color", command, "--surface=probe" },
+      { cwd = directory, timeout_ms = 15000 },
+      function(result, current)
+        local text = (result.stdout or "") .. (result.stderr or "")
+        surface_support[key] = string.find(text, "--surface expects", 1, true) ~= nil
+        -- Opening the pane can take longer than a process callback's budget allows.
+        tern.timer(0, function(fresh)
+          if fresh then
+            run(fresh, surface_support[key], true)
+          end
+        end)
+      end
+    )
+  end)
+  if not ok then
+    surface_support[key] = false
+    return run(cx, false)
+  end
+  return false
+end
+
 local function launch_job(cx, kind, subject, cwd, target, opened)
   if not local_host(cx) then
     return
@@ -166,15 +210,31 @@ local function launch_job(cx, kind, subject, cwd, target, opened)
   else
     -- `elide test` and `elide serve` negotiate their own surfaces; an explicit launcher
     -- override still receives the runtime and subject.
-    local argv
     if type(config[kind]) == "string" then
-      argv = { path(config[kind]), runtime, subject }
-    else
-      argv = { runtime, "--ignore-version", kind, subject }
+      return host(cx, config, kind, { path(config[kind]), runtime, subject }, function(current, command)
+        return terminal(current, command, cwd, target)
+      end, opened)
     end
-    return host(cx, config, kind, argv, function(current, command)
-      return terminal(current, command, cwd, target)
-    end, opened)
+    -- Tests outside a project get the full page (`--surface=screen`) when the runtime takes
+    -- it; bare `elide test` under Tern draws inline, and older runtimes get no flag.
+    local function start(current, screen, later)
+      local argv = { runtime, "--ignore-version", kind }
+      if screen then
+        table.insert(argv, "--surface=screen")
+      end
+      table.insert(argv, subject)
+      local pane = host(current, config, kind, argv, function(fresh, command)
+        return terminal(fresh, command, cwd, target)
+      end, opened)
+      if later and pane ~= false and opened then
+        opened(current, pane)
+      end
+      return pane
+    end
+    if kind ~= "test" then
+      return start(cx, false)
+    end
+    return with_surface(cx, runtime, "test", start)
   end
 end
 

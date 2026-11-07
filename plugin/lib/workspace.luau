@@ -61,8 +61,8 @@ local function controls(context, file)
     separator(),
     ui.node("buttons", { variant = "toolbar", label = "Build and execution", role = "project-execution" }, {
       button("Build project", "build", "wrench"),
-      button("Run tests", "test", "list-checks"),
-      button("Run project", "run", "play"),
+      button("Run tests", "test", "play"),
+      button("Run project", "run", "run"),
       button(debug_title, "debug", "bug"),
     }),
     ui.node("row", { grow = 1 }),
@@ -123,9 +123,11 @@ function M.install(actions)
   end
   -- Follows the editor's file without a timer: these events fire when it can change.
   local function follow(_, cx)
-    for pane, workspace in entries do
-      if cx.session:pane(pane) then
-        render(cx, pane, workspace, false)
+    -- Only panes that are still this plugin's canvases: a recorded id can outlive its canvas.
+    for _, canvas in cx.canvas:list() do
+      local workspace = canvas.owner == tern.plugin.id and entries[canvas.pane]
+      if workspace then
+        render(cx, canvas.pane, workspace, false)
       end
     end
   end
@@ -179,8 +181,12 @@ function M.install(actions)
           -- The editor reports its new file once the open lands; redraw the toolbar then.
           local toolbar = canvas.pane
           tern.timer(100, function(current)
-            if current and entries[toolbar] == workspace and current.session:pane(toolbar) then
-              render(current, toolbar, workspace, false)
+            if current and entries[toolbar] == workspace then
+              for _, open in current.canvas:list() do
+                if open.pane == toolbar and open.owner == tern.plugin.id then
+                  render(current, toolbar, workspace, false)
+                end
+              end
             end
           end)
           return { handled = true }
