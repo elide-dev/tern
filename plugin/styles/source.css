@@ -50,6 +50,15 @@
 [data-surface="plugin.elide.source"] .sf-editor[data-role~="source-editor"] {
   --sf-lh: calc(1em * 1.35);
 }
+/* The unsaved-changes dot beside the file name: `●` at about 0.8 of the name's cap height, and
+   transparent while the file is saved, so its slot never appears or disappears. */
+[data-surface="plugin.elide.source"] [data-role="source-dirty"] {
+  font-size: 0.62em;
+}
+[data-surface="plugin.elide.source"] [data-role="source-dirty"] .sf-t-dim {
+  color: transparent;
+}
+
 /* The gutter's hairline: the right border of the two cells of air after the digits (the gutter's
    `muted` run), made an inline-block exactly one line tall (vertical-align top, no padding, so line
    boxes do not change) so the border spans the row and rows abut into one continuous line. It sits

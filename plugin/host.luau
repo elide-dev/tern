@@ -1775,15 +1775,14 @@ local function toolbar(state)
       shrink = 1,
     }),
   }
-  if dirty then
-    -- A small dot, the size of a table status dot, centred on the file name.
-    local dot = ui.text({ ui.span("•", "warning") })
-    dot.p.key = "dirty"
-    dot.p.role = "source-dirty"
-    dot.p.title = "Unsaved changes"
-    table.insert(left, dot)
-  end
-  -- Split panes (under about 150 columns) get a compact row: the overlay switch as a menu, the
+  -- The unsaved-changes dot, a little smaller than the text (the stylesheet sizes it). Its slot is
+  -- always there, transparent while the file is saved, so the name and badge never move.
+  local dot = ui.text({ ui.span("●", dirty and "warning" or "dim") })
+  dot.p.key = "dirty"
+  dot.p.role = "source-dirty"
+  dot.p.title = dirty and "Unsaved changes" or nil
+  table.insert(left, dot)
+  -- Split panes (under about 150 columns) get a compact row: the overlay switch as icon toggles, the
   -- editor tools in the keyboard menu, and the state badge left to the status bar while the
   -- debugger's wells show.
   local narrow = (state.cols or 200) < 150
