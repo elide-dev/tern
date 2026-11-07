@@ -162,6 +162,24 @@ with tempfile.TemporaryDirectory(prefix='w3d-', dir='/tmp') as temporary:
         check('F8 steps to the diagnostic', wait(lambda: 'Ln 5,' in tree('[data-role="source-position"]'), 10),
               tree('[data-role="source-position"]'))
         ctl('shot', 'diagnostics-overlay')
+        # Editing the line clears its marks at once: sign, band, underline and message go, and the
+        # badge counts only diagnostics whose lines still read as the build saw them.
+        ctl('key', 'End')
+        ctl('type', ' // fixed')
+        check('edited line loses its sign', wait(lambda: gutter().get(5, ('?',))[0] == '', 10), gutter())
+        check('edited line loses its band', not on_row('.sf-editor .sf-t-mark.sf-t-error', 5), tree('.sf-editor .sf-t-mark'))
+        check('edited line loses its underline', not nodes('.sf-editor .sf-t-typo'), tree('.sf-editor .sf-t-typo'))
+        check('edited line loses its message', 'incompatible types' not in tree('.sf-editor'), tree('.sf-editor'))
+        check('badge counts live diagnostics', wait(lambda: 'No diagnostics' in tree('[data-role="source-overlay-state"]')
+                                                     + tree('[data-role="source-badge"]'), 10),
+              tree('[data-role="source-overlay-state"]'))
+        # Undo (typing may be several undo steps) brings the line, and so its marks, back.
+        for _ in range(12):
+            if gutter().get(5, ('',))[0] == '●':
+                break
+            ctl('key', 'Meta+z')
+            time.sleep(.3)
+        check('undo brings the marks back', wait(lambda: gutter().get(5, ('',))[0] == '●', 10), gutter())
 
         # The build lens on plain javac output: grouped by file, counted, linked. Back in the terminal.
         lua('cx.layout:focus(' + str(terminal) + ')')

@@ -101,15 +101,23 @@ tern.lens.define("build", {
   open = function(run)
     local state = buffer()
     state.cwd = run.cwd
+    -- Parsed as lines arrive; `view` (up to every 250 ms) reads only what is new.
+    state.session = parser.session(run.cwd)
     return state
   end,
-  line = collect,
+  line = function(state, l)
+    local before = #state.lines
+    collect(state, l)
+    if #state.lines > before then
+      state.session:add(l.text)
+    end
+  end,
   finish = function() end,
   view = function(state)
     if state.truncated then
       return nil
     end
-    local kept, counts = parser.collect(parser.parse(state.lines, state.cwd))
+    local kept, counts = parser.collect(state.session:result())
     if #kept == 0 then
       return nil
     end
@@ -965,24 +973,49 @@ local function diagnostics_dir(state)
   return state.root .. "/.dev/reports/build/tern"
 end
 
--- Whether a diagnostic's excerpt no longer matches the line it names: the file changed since
--- the build, so its marks are drawn muted.
-local function diagnostic_stale(state, d)
+-- The text of the line a diagnostic names, from its excerpt, or nil when the excerpt lacks it.
+local function excerpt_line(d)
   local excerpt = d.excerpt
   if not excerpt or not d.line then
-    return false
+    return nil
   end
-  local index, wanted = d.line - excerpt.first_line + 1, nil
-  local position = 0
+  local index, position = d.line - excerpt.first_line + 1, 0
   for text in string.gmatch(excerpt.text .. "\n", "([^\n]*)\n") do
     position += 1
     if position == index then
-      wanted = text
-      break
+      return text
     end
   end
-  local line = current_line(state, "diagnostics", d.line)
-  return wanted ~= nil and (not line or state.buf.lines[line] ~= wanted)
+  return nil
+end
+
+-- This file's diagnostics by current line, built once per edit (keyed by the block's revision),
+-- leaving out each one whose line no longer reads as its excerpt: edited since the build, so it
+-- may be fixed. Returns `{ [line] = { d, … } }` and the live count per severity.
+local function live_diagnostics(state)
+  local diag = state.diag
+  local map = state.buf.maps.diagnostics
+  local stamp = state.revision or 0
+  if diag.live and diag.live_map == map and diag.live_items == diag.items and diag.live_stamp == stamp then
+    return diag.live, diag.live_counts
+  end
+  local inverse = {}
+  if map then
+    for line, base in map do
+      inverse[base] = line
+    end
+  end
+  local live, counts = {}, { error = 0, warning = 0, note = 0 }
+  for _, d in diag.items or {} do
+    local line = if map then inverse[d.line] else d.line
+    if line and (d.wanted == nil or state.buf.lines[line] == d.wanted) then
+      live[line] = live[line] or {}
+      table.insert(live[line], d)
+      counts[d.severity] += 1
+    end
+  end
+  diag.live, diag.live_counts, diag.live_map, diag.live_items, diag.live_stamp = live, counts, map, diag.items, stamp
+  return live, counts
 end
 
 -- Reads run `run`'s report and keeps this file's diagnostics, by line.
@@ -1013,16 +1046,49 @@ local function load_report(state, cx, run)
   end)
   -- The build compiled the file on disk; anchor its lines there, through any unsaved edits.
   state.buf.maps.diagnostics = source.line_map(buffer.new(state.disk).lines, state.buf.lines)
-  diag.state, diag.error, diag.run, diag.report, diag.items, diag.counts = "ready", nil, run, report, items, counts
   for _, d in items do
-    d.stale = diagnostic_stale(state, d)
+    d.wanted = excerpt_line(d)
   end
+  diag.state, diag.error, diag.run, diag.report, diag.items, diag.counts = "ready", nil, run, report, items, counts
+  diag.live = nil
   cx:render()
 end
 
--- Finds the newest build report under the project and loads it when the set of runs changed.
--- Run directories are named at random, so with more than one the newest comes from `ls -t`
--- (a run's directory changes when its report lands); the scan never blocks the block.
+-- Calls `done(run)` with the newest of `runs` (run directories under `dir` that hold a report).
+-- Run directories are named at random and the report has no timestamp, so this asks `ls -t`
+-- (a run's directory changes when its report lands), off the block's thread.
+local function newest_run(dir, runs, done)
+  if #runs == 1 then
+    done(runs[1])
+    return
+  end
+  local wanted = {}
+  for _, run in runs do
+    wanted[run] = true
+  end
+  local started = pcall(function()
+    tern.process.run({ "/bin/ls", "-t", dir }, { timeout_ms = 5000 }, function(result)
+      for name in string.gmatch(result.stdout or "", "[^\n]+") do
+        if wanted[name] then
+          done(name)
+          return
+        end
+      end
+      done(runs[#runs])
+    end)
+  end)
+  if not started then
+    done(runs[#runs])
+  end
+end
+
+-- Run directories still waiting for their report are looked at again on each poll, up to this
+-- many (a run killed before writing one would otherwise be polled forever).
+local PENDING_RUNS = 8
+
+-- Finds the newest build report under the project and loads it when the set of reports changed.
+-- One listing per poll; a run directory is checked for `diagnostics.json` when it first appears
+-- and while its report is pending, not on every poll.
 local function scan_diagnostics(state, cx)
   local diag = state.diag
   if not state.root or diag.scanning then
@@ -1030,20 +1096,54 @@ local function scan_diagnostics(state, cx)
   end
   local dir = diagnostics_dir(state)
   local ok, names = pcall(tern.fs.list, dir)
-  local runs = {}
+  diag.known = diag.known or {}
+  local present, changed = {}, false
   for _, name in (ok and names or {}) do
-    if string.sub(name, 1, 4) == "run-" and tern.fs.exists(dir .. "/" .. name .. "/diagnostics.json") then
+    if string.sub(name, 1, 4) == "run-" then
+      present[name] = true
+      local known = diag.known[name]
+      if known == nil then
+        diag.pending = diag.pending or {}
+        table.insert(diag.pending, name)
+        diag.known[name] = false
+      end
+    end
+  end
+  for name in diag.known do
+    if not present[name] then
+      diag.known[name] = nil
+      changed = true
+    end
+  end
+  local pending = {}
+  for _, name in diag.pending or {} do
+    if present[name] and diag.known[name] == false then
+      if tern.fs.exists(dir .. "/" .. name .. "/diagnostics.json") then
+        diag.known[name] = true
+        changed = true
+      else
+        table.insert(pending, name)
+      end
+    end
+  end
+  while #pending > PENDING_RUNS do
+    table.remove(pending, 1)
+  end
+  diag.pending = pending
+  if not changed and diag.scanned then
+    return
+  end
+  diag.scanned = true
+  local runs = {}
+  for name, reported in diag.known do
+    if reported then
       table.insert(runs, name)
     end
   end
-  local signature = table.concat(runs, "\n")
-  if signature == diag.signature then
-    return
-  end
-  diag.signature = signature
+  table.sort(runs)
   if #runs == 0 then
     if diag.report then
-      state.diag = { state = "none", signature = signature }
+      state.diag = { state = "none", known = diag.known, pending = diag.pending, scanned = true }
       if state.mode == "diagnostics" then
         state.mode = "none"
       end
@@ -1051,34 +1151,13 @@ local function scan_diagnostics(state, cx)
     end
     return
   end
-  if #runs == 1 then
-    load_report(state, cx, runs[1])
-    return
-  end
   diag.scanning = true
-  local started = pcall(function()
-    tern.process.run({ "/bin/ls", "-t", dir }, { timeout_ms = 5000 }, function(result)
-      diag.scanning = false
-      if not alive(state) then
-        return
-      end
-      local wanted = {}
-      for _, run in runs do
-        wanted[run] = true
-      end
-      for name in string.gmatch(result.stdout or "", "[^\n]+") do
-        if wanted[name] then
-          load_report(state, cx, name)
-          return
-        end
-      end
-      load_report(state, cx, runs[#runs])
-    end)
-  end)
-  if not started then
+  newest_run(dir, runs, function(run)
     diag.scanning = false
-    load_report(state, cx, runs[#runs])
-  end
+    if alive(state) then
+      load_report(state, cx, run)
+    end
+  end)
 end
 
 -- Moves the caret to the next (`dir` 1) or previous (-1) diagnostic from the caret line, wrapping.
@@ -1089,12 +1168,10 @@ local function step_diagnostic(state, dir)
   end
   local caret = state.buf.cursor.l
   local lines = {}
-  for _, d in items do
-    local line = current_line(state, "diagnostics", d.line)
-    if line then
-      table.insert(lines, line)
-    end
+  for line in live_diagnostics(state) do
+    table.insert(lines, line)
   end
+  table.sort(lines)
   if #lines == 0 then
     return
   end
@@ -1324,6 +1401,8 @@ end
 
 -- After an edit: breakpoints follow their lines, find results follow the text.
 local function edited(state, edit)
+  -- Every edit, undo and redo passes here; cached views of the text key on this.
+  state.revision = (state.revision or 0) + 1
   if edit then
     state.breakpoints = buffer.remap(state.breakpoints, edit)
     refind(state)
@@ -1381,19 +1460,14 @@ local function lines_view(state, starts)
   if state.mode == "diagnostics" and state.diag.state == "ready" then
     problems = {}
     local rank = { error = 1, warning = 2, note = 3 }
-    for _, d in state.diag.items do
-      local line = current_line(state, "diagnostics", d.line)
-      if line and line <= shown then
-        local entry = problems[line]
-        if not entry then
-          problems[line] = { lead = d, count = 1 }
-        else
-          entry.count += 1
-          if rank[d.severity] < rank[entry.lead.severity] then
-            entry.lead = d
-          end
+    for line, list in live_diagnostics(state) do
+      local lead = list[1]
+      for _, d in list do
+        if rank[d.severity] < rank[lead.severity] then
+          lead = d
         end
       end
+      problems[line] = { lead = lead, count = #list }
     end
   end
   local every = count <= HIGHLIGHT_LINES
@@ -1421,7 +1495,7 @@ local function lines_view(state, starts)
       local entry = problems[line]
       if entry then
         local d = entry.lead
-        local mark = d.stale and "muted" or DIAGNOSTIC_TONES[d.severity]
+        local mark = DIAGNOSTIC_TONES[d.severity]
         glyph, tone, number, tint = DIAGNOSTIC_SIGNS[d.severity], mark, mark, mark
         local message = string.gsub(d.message, "%s+", " ")
         if #message > 120 then
@@ -1431,7 +1505,7 @@ local function lines_view(state, starts)
         if entry.count > 1 then
           table.insert(note, ui.span(" +" .. (entry.count - 1), "muted"))
         end
-        if d.col and d.col >= 1 and not d.stale then
+        if d.col and d.col >= 1 then
           underlines[line] = { col = d.col, tone = mark }
         end
       end
@@ -1517,22 +1591,19 @@ local function overlay_state(state)
     elseif diag.state ~= "ready" then
       return "Reading diagnostics…", "accent"
     end
-    local counts = diag.counts
+    local _, counts = live_diagnostics(state)
     local phrase = parser.phrase(counts.error, counts.warning, counts.note)
     local report = diag.report
     local total = parser.phrase(report.errors, report.warnings, report.notes)
     local detail = "Latest build: "
       .. (total or "no diagnostics")
       .. (report.dropped > 0 and (", " .. report.dropped .. " not listed") or "")
+    local changed = #diag.items - (counts.error + counts.warning + counts.note)
+    if changed > 0 then
+      detail = detail .. ". " .. changed .. " on lines edited since the build are hidden until the next build."
+    end
     if not phrase then
       return "No diagnostics", "success", detail
-    end
-    local stale = false
-    for _, d in diag.items do
-      stale = stale or d.stale
-    end
-    if stale then
-      detail = detail .. ". The file changed since the build; changed lines are muted."
     end
     return phrase, counts.error > 0 and "error" or counts.warning > 0 and "warning" or "info", detail
   end

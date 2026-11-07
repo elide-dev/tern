@@ -81,7 +81,8 @@ A file page's `lines` are the measured lines with a `state` (`covered`, `partial
 `uncovered`) merged in line order with `{line, state: "inferred"}` entries: closers,
 blanks and comment-only lines of blocks that ran, from
 `elide_project_session::coverage::line_states`. Inference reads the file's current text
-under the attached root (symlinks resolved, at most 2 MiB); when it cannot be read, or a
+under the attached root (a regular file only, symlinks resolved, at most 2 MiB), once per run
+and file (the broker keeps the last 32 files' entries, so paging does not re-read the source); when it cannot be read, or a
 measured line lies past its end, the page holds the measured lines without `state`.
 `offset`, `next` and `total` count these merged entries. Inferred lines are never
 counted as covered here; `covered_lines` in the file listing stays the measured count.

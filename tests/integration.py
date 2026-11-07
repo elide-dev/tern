@@ -28,8 +28,11 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
         'test("adds", () => { assert.strictEqual(1 + 1, 2); });\n'
         'test("fails", () => { assert.strictEqual(1 + 1, 3); });\n')
     (tapp / 'two.js').write_text('one\ntwo\nthree\n')
+    (tapp / 'wait.mjs').write_text('setTimeout(() => {}, 60000);\n')
     (tapp / 'nested').mkdir()
     outside = base / 'outside.txt'; outside.write_text('outside\n')
+    unvisited = base / 'unvisited'; unvisited.mkdir()
+    (unvisited / 'elide.pkl').write_text('amends "elide:project.pkl"\nname = "unvisited"\n')
     state = base / 'state'; (state / 'config').mkdir(parents=True)
     package = state / 'crates/plugins/fixtures/elide'
     shutil.copytree(ROOT / 'plugin', package, ignore=shutil.ignore_patterns('config.json', 'tern.d.luau'))
@@ -119,6 +122,12 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
         check('tap lens rows', 'adds' in tap and 'fails' in tap and 'strictly equal' in tap, tap)
         check('outcome segment', wait(lambda: 'Tests failed' in tree('.sl-plugin'), 10), tree('.sl-plugin'))
 
+        # An interrupted run (status 128 and up) is neither a pass nor a failure.
+        run('elide run wait.mjs')
+        time.sleep(4)
+        ctl('key', 'Control+c')
+        check('interrupted segment', wait(lambda: 'Run interrupted' in tree('.sl-plugin'), 20), tree('.sl-plugin'))
+
         # Build lens on a Java compile error.
         before = len(ctl('tree', '.sf-block').get('nodes', []))
         run('cd ' + shlex.quote(str(build)))
@@ -161,6 +170,22 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
         tabs = len(ctl('state')['tabs'])
         ctl('open-url', 'elide://tests?root=' + str(tapp))
         check('tests link opens project tests', wait(lambda: len(ctl('state')['tabs']) > tabs, 60), ctl('state')['tabs'])
+
+        # A root this window never detected is not trusted from a link: a picker names it first.
+        tabs = len(ctl('state')['tabs'])
+        ctl('open-url', 'elide://tests?root=' + str(unvisited))
+        check('unknown root asks first', wait(lambda: 'unvisited' in tree('#pick'), 10), tree('#pick'))
+        ctl('key', 'Escape')
+        time.sleep(3)
+        check('cancel launches nothing', len(ctl('state')['tabs']) == tabs and 'unvisited' not in tree('#pick'),
+              ctl('state')['tabs'])
+        ctl('open-url', 'elide://debug?root=' + str(unvisited) + '&path=' + str(unvisited / 'elide.pkl'))
+        check('debug link asks first too', wait(lambda: 'unvisited' in tree('#pick'), 10), tree('#pick'))
+        ctl('key', 'Escape')
+        ctl('open-url', 'elide://tests?root=' + str(unvisited))
+        wait(lambda: 'unvisited' in tree('#pick'), 10)
+        ctl('key', 'Enter')
+        check('confirmed root opens', wait(lambda: len(ctl('state')['tabs']) > tabs, 60), ctl('state')['tabs'])
         # elide://help runs `elide help <url>` in a new pane beside the link's pane, else in a new tab.
         check('bad help topic rejected', toast_after('elide://help?topic=Bad%20Topic', 'malformed'), tree('.toast'))
         before = {pane['pane'] for pane in lua_value('cx.session:panes()') or []}

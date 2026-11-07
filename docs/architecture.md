@@ -121,9 +121,13 @@ Rules, implemented by the pure parser `plugin/lib/links.luau` (unit-tested by
   `col` needs `line`.
 - Paths are compared as written, so emit canonical (symlink-resolved) paths, as the
   project probe reports roots: `/tmp/x` does not match a root at `/private/tmp/x`.
-- `path` must lie strictly inside `root`. A `root` must contain `elide.pkl`. Without
-  `root` (`source` only), `path` must lie inside a project this window already
-  detected. The linked file must exist. Links act on local hosts only.
+- `path` must lie strictly inside `root`. A `root` must contain `elide.pkl`, and it is
+  trusted only when this window detected that project itself (`links.known`): a link's
+  text can be anything, such as an OSC 8 hyperlink in `cat`'s output. For any other root,
+  `debug`, `tests` and a `source` link that would attach the source block show a picker
+  naming the root, and act only when the user chooses to open it. Without `root`
+  (`source` only), `path` must lie inside a project this window already detected. The
+  linked file must exist. Links act on local hosts only.
 - A rejected `elide://` URL is claimed and dropped with an info toast, so it never
   reaches the system's URL handlers; every other scheme returns `nil` to the next route.
 - `help` takes no path or root. `topic` must match `[a-z0-9][a-z0-9-]*` after
@@ -376,16 +380,21 @@ links. Unlike the runtime it does not canonicalize paths (the lens has no file a
 resolve symlinks), so the lens links what the compiler printed, made absolute.
 
 **Source block overlay.** `elide build` writes
-`<root>/.dev/reports/build/tern/run-*/diagnostics.json`. The block lists those runs when it
-opens and on its 2-second disk poll; when there is more than one it orders them with
-`ls -t` (run directories are named at random and the report carries no timestamp; a run's
-directory changes when its report lands), off the block's thread. The **Diagnostics** tab
+`<root>/.dev/reports/build/tern/run-*/diagnostics.json`. The block lists the run directories when it
+opens and on its 2-second disk poll, and checks a directory for its report only when it
+first appears and while the report is pending (at most 8 pending at once), not every
+directory on every poll. With more than one report, `newest_run` picks the newest; today it
+asks `ls -t` (run directories are named at random and the report carries no timestamp; a
+run's directory changes when its report lands), off the block's thread, and it is the one
+place to switch to the runtime's `latest` pointer. The **Diagnostics** tab
 appears only once a report exists. It keeps this file's diagnostics and draws, per line,
 the gutter sign (`●` error, `▲` warning, `•` note), the row band through the same
 first-character `mark` run the other overlays use, Tern's dotted `typo` underline on the
 token at the reported column, and the message as a `virt` inlay (`+N` when a line has
-several). A diagnostic whose excerpt no longer matches its line (the file changed since the
-build) is drawn `muted`. The toolbar badge and status segment show "1 error, 2 warnings";
+several). A diagnostic whose line no longer reads as its excerpt (edited since the build, so
+possibly fixed) draws nothing until the next build, checked on every edit; undo brings it
+back. Lookups go through a line map built once per edit, and reports are read up to 500
+diagnostics, as the runtime writes them. The toolbar badge and status segment show "1 error, 2 warnings";
 F8 and ⇧F8 step to the next and previous diagnostic. The plan named `n`/`p`, but the block
 is an editor where those keys type, so it uses VS Code's keys. Like every overlay, it only
 changes tokens: no text moves (`tests/diagnostics_overlay.py` checks the first keyword's

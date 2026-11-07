@@ -72,7 +72,17 @@ local function host(cx, config, kind, argv, open, opened)
       { runtime, "--ignore-version", "--no-color", "--help-all" },
       { timeout_ms = 15000 },
       function(result, current)
-        supports_tern[runtime] = result.status == 0 and string.find(result.stdout or "", "[\r\n]%s+tern%s+") ~= nil
+        -- Cache only a clean exit; a timeout (status -1) or crash is probed again next time.
+        if result.status == 0 then
+          supports_tern[runtime] = string.find(result.stdout or "", "[\r\n]%s+tern%s+") ~= nil
+        end
+        if current and supports_tern[runtime] == nil then
+          current:toast("error", "Could not probe the runtime; try again.", runtime)
+          if opened then
+            opened(current, nil)
+          end
+          return
+        end
         if current then
           local pane = host(current, config, kind, argv, open)
           if opened then
@@ -159,15 +169,18 @@ local function with_surface(cx, runtime, command, run)
       function(result, current)
         local text = "\n" .. (result.stdout or "") .. "\n" .. (result.stderr or "")
         -- An option line (`  --surface <MODE>  …`), not a mention in prose.
-        surface_support[key] = result.status == 0 and string.find(text, "\n%s+%-%-surface[%s=<%[]") ~= nil
+        local supported = result.status == 0 and string.find(text, "\n%s+%-%-surface[%s=<%[]") ~= nil
+        -- Only a clean exit answers for good; a timeout or crash is asked again next time.
+        if result.status == 0 then
+          surface_support[key] = supported
+        end
         if current then
-          run(current, surface_support[key], true)
+          run(current, supported, true)
         end
       end
     )
   end)
   if not ok then
-    surface_support[key] = false
     return run(cx, false)
   end
   return false
@@ -228,11 +241,9 @@ local function launch_job(cx, kind, subject, cwd, target, opened)
   end
 end
 
-local DEBUGGABLE = { js = true, mjs = true, cjs = true, ts = true, mts = true, cts = true, py = true }
-
--- Launches the debugger for `context.root`; `source` names the file to debug, else the
--- focused file block's file when it is debuggable.
-local function launch_debug(cx, context, target, opened, source)
+-- Launches the debugger for `context.root`; `file` names the source to debug, else the
+-- focused file block's file when it is debuggable (extensions in any case, as the source block).
+local function launch_debug(cx, context, target, opened, file)
   if not local_host(cx) or not context then
     return
   end
@@ -249,12 +260,12 @@ local function launch_debug(cx, context, target, opened, source)
   )
   table.insert(argv, runtime)
   table.insert(argv, context.root)
-  if source then
-    if not DEBUGGABLE[string.match(source, "%.([%w]+)$") or ""] then
-      cx:toast("info", "Debugging takes JavaScript, TypeScript or Python sources.", source)
+  if file then
+    if not source.debuggable(file) then
+      cx:toast("info", "Debugging takes JavaScript, TypeScript or Python sources.", file)
       return
     end
-    table.insert(argv, source)
+    table.insert(argv, file)
     return host(cx, config, "debug", argv, function(current, command)
       return terminal(current, command, context.root, target)
     end, opened)
@@ -262,7 +273,7 @@ local function launch_debug(cx, context, target, opened, source)
   local pane = target or cx.session:focused()
   local read = pane and cx.session:read(pane, { lines = 1, max_chars = 1 })
   if type(read) == "table" and type(read.path) == "string" then
-    if DEBUGGABLE[string.match(read.path, "%.([%w]+)$") or ""] then
+    if source.debuggable(read.path) then
       if read.dirty then
         cx:toast("info", "Save this file before debugging.")
         return
@@ -689,6 +700,26 @@ tern.on("command_finished", function(ev, cx)
   end
 end)
 
+-- Runs `act(cx)` for a link that names project `root`: at once when this window detected that
+-- project, else only after the user confirms it in a picker naming the root. A link's text can be
+-- anything (an OSC 8 hyperlink in `cat`'s output), so a root it names is not trusted on its own.
+local function with_root(cx, root, act)
+  if links.known(root, project.roots()) then
+    return act(cx)
+  end
+  cx:pick({
+    placeholder = "An elide:// link wants to open " .. root,
+    items = {
+      { label = "Open project " .. root, value = "open", icon = "warn" },
+      { label = "Cancel", value = "cancel", icon = "x" },
+    },
+  }):next(function(item, _, current)
+    if current and item and item.value == "open" then
+      act(current)
+    end
+  end)
+end
+
 -- `elide://` links (contract in docs/architecture.md). Every elide:// link is claimed, so a
 -- rejected one is dropped with a toast instead of reaching the system's URL handlers.
 tern.route.link(function(request, cx)
@@ -753,13 +784,24 @@ tern.route.link(function(request, cx)
       if target.line then
         table.insert(args, tostring(target.line))
       end
+      -- The block attaches to the project, so a root the link named must be one this window knows.
+      if target.root and not links.known(target.root, project.roots()) then
+        with_root(cx, target.root, function(current)
+          current:new_block("elide.source", args, "beside")
+        end)
+        return { handled = true }
+      end
       return { block = "elide.source", args = args }
     end
     cx.docs:open(target.path, { line = target.line })
   elseif target.action == "debug" then
-    launch_debug(cx, { root = target.root }, nil, nil, target.path)
+    with_root(cx, target.root, function(current)
+      launch_debug(current, { root = target.root }, nil, nil, target.path)
+    end)
   elseif target.action == "tests" then
-    view_tests({ root = target.root }, cx)
+    with_root(cx, target.root, function(current)
+      view_tests({ root = target.root }, current)
+    end)
   end
   return { handled = true }
 end)

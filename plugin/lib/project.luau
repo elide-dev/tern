@@ -104,9 +104,14 @@ function M.root_of(pane)
 end
 
 local OUTCOMES = {
-  test = { ok = "Tests passed", failed = "Tests failed", command = "plugin.elide.project_tests" },
-  build = { ok = "Built", failed = "Build failed", command = "plugin.elide.project" },
-  run = { ok = "Ran", failed = "Run failed", command = "plugin.elide.project" },
+  test = {
+    ok = "Tests passed",
+    failed = "Tests failed",
+    interrupted = "Tests interrupted",
+    command = "plugin.elide.project_tests",
+  },
+  build = { ok = "Built", failed = "Build failed", interrupted = "Build interrupted", command = "plugin.elide.project" },
+  run = { ok = "Ran", failed = "Run failed", interrupted = "Run interrupted", command = "plugin.elide.project" },
 }
 
 local function outcome(pane)
@@ -114,6 +119,10 @@ local function outcome(pane)
   local labels = result and OUTCOMES[result.command]
   if not labels then
     return nil
+  end
+  -- Statuses from 128 up are signals (an interrupt, a kill): neither a pass nor a failure.
+  if result.status >= 128 then
+    return { text = labels.interrupted, icon = "slash-circle", tone = "muted", command = labels.command }
   end
   local ok = result.status == 0
   local text = if ok then labels.ok else labels.failed

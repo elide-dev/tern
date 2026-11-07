@@ -26,6 +26,10 @@ use std::{
 };
 use studio_embed::{MAX_REQUEST, MAX_RESPONSE, Worker, read_frame, write_frame};
 
+/// Coverage line entries shared across a file's pages (see `coverage::Inferred`).
+static INFERRED: std::sync::LazyLock<Mutex<coverage::Inferred>> =
+  std::sync::LazyLock::new(|| Mutex::new(coverage::Inferred::default()));
+
 const DEADLINE: Duration = Duration::from_secs(10);
 const IDLE: Duration = Duration::from_secs(120);
 const MAX_SESSIONS: usize = 8;
@@ -331,7 +335,8 @@ fn dispatch(request: Request, sessions: &Sessions, serial: &AtomicUsize, project
         (artifact, root)
       };
       return artifact.map_or(Ok(Value::Null), |artifact| {
-        coverage::page(&artifact, *file, *offset, *limit, root.as_deref())
+        let mut cache = INFERRED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        coverage::page(&artifact, *file, *offset, *limit, root.as_deref(), run, &mut cache)
       });
     }
     Request::ProjectDebugLaunch {

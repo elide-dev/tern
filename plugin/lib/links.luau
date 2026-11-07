@@ -47,6 +47,20 @@ function M.absolute(path)
   return path
 end
 
+-- Whether `root` is exactly one of `roots`: a project this window detected itself. A link may
+-- only name a root; that it holds an `elide.pkl` does not make it one the user is working in.
+function M.known(root, roots)
+  if type(root) ~= "string" then
+    return false
+  end
+  for _, candidate in ipairs(roots) do
+    if candidate == root then
+      return true
+    end
+  end
+  return false
+end
+
 -- Whether `path` lies strictly inside `root` (both already through `absolute`).
 function M.within(path, root)
   return string.sub(path, 1, #root + 1) == root .. "/"
