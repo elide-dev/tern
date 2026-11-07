@@ -41,7 +41,7 @@ with tempfile.TemporaryDirectory(prefix='help-') as temporary:
 
         def ctl(command, *values):
             result = subprocess.run([tern, 'ctl', '--control', str(socket), command,
-                *(str(v) if command == 'tree' else json.dumps(str(v)) for v in values)], capture_output=True, text=True, timeout=30)
+                *(str(v) if command in ('tree', 'resize') else json.dumps(str(v)) for v in values)], capture_output=True, text=True, timeout=30)
             reply = json.loads(result.stdout)
             assert reply.get('ok'), reply
             return reply
@@ -67,8 +67,25 @@ with tempfile.TemporaryDirectory(prefix='help-') as temporary:
         def page_has(text):
             return text in tree('.sf-md')
 
+        def rect(selector):
+            found = nodes(selector)
+            return found[0]['rect'] if found else None
+
+        def cols_at(width):
+            # The pane's own count, from a shell in it, so the shots name real widths.
+            ctl('resize', width, 800)
+            marker = state / f'cols-{width}'
+            ctl('run', f'tput cols > {marker}')
+            wait(lambda: marker.exists() and marker.read_text().strip())
+            return int(marker.read_text())
+
+        WIDE, NARROW = 1325, 600
+
         try:
             wait(socket.exists)
+            wide_cols, narrow_cols = cols_at(WIDE), cols_at(NARROW)
+            assert wide_cols >= 120 and narrow_cols < 80, (wide_cols, narrow_cols)
+            ctl('resize', WIDE, 800)
             ctl('run', shlex.join([str(host)]))
             # The landing page is the first page of the nav, drawn by Tern's own md kind.
             wait(lambda: nodes('.sf-md'))
@@ -128,6 +145,43 @@ with tempfile.TemporaryDirectory(prefix='help-') as temporary:
             # spans carrying the help href (⌘-click hands it to the window's routes).
             wait(lambda: nodes('.sf-md [data-href^="elide://help?topic="]'))
             ctl('shot', 'help-links')
+
+            # Bands: a narrow pane stacks everything, a wide one puts the nav beside the
+            # page again, and the page does not move while the search opens and closes.
+            body = rect('[data-role="help-body"]')
+            ctl('key', '/')
+            wait(lambda: nodes('[data-role="help-results"]'))
+            assert rect('[data-role="help-body"]') == body, 'opening the search moved the page'
+            ctl('type', 'zzqxv')
+            wait(lambda: 'No topics match' in tree('[data-role="help-results"]'))
+            assert rect('[data-role="help-body"]') == body, 'an empty search moved the page'
+            ctl('key', 'Escape')
+            wait(lambda: nodes('.sf-md'))
+            assert rect('[data-role="help-body"]') == body, 'closing the search moved the page'
+
+            ctl('resize', NARROW, 800)
+            wait(lambda: not nodes('[data-role="help-body"].sf-split'))
+            title, field = rect('[data-role="help-heading"] .sf-text'), rect('[data-role="help-search"]')
+            assert field[1] >= title[1] + title[3] - 1, ('the search field takes its own line', title, field)
+            # The nav sits under the page, so it is below the fold until End scrolls there.
+            assert rect('[data-role="help-nav"]') is None, 'the nav comes after the page'
+            ctl('key', 'End')
+            wait(lambda: rect('[data-role="help-nav"]'))
+            ctl('key', 'Home')
+            wait(lambda: rect('[data-role="help-nav"]') is None)
+            crumb = rect('[data-role="help-breadcrumb"]')
+            assert crumb[3] < 40, ('the trail takes one line', crumb)
+            ctl('appearance', 'light')
+            ctl('shot', f'help-{narrow_cols}-light')
+            ctl('appearance', 'dark')
+            ctl('shot', f'help-{narrow_cols}-dark')
+            ctl('appearance', 'light')
+            ctl('resize', WIDE, 800)
+            wait(lambda: nodes('[data-role="help-body"].sf-split'))
+            ctl('shot', f'help-{wide_cols}-light')
+            ctl('appearance', 'dark')
+            ctl('shot', f'help-{wide_cols}-dark')
+            ctl('appearance', 'light')
             ctl('key', 'q')
             wait(lambda: not nodes('[data-role="help-heading"]'))
 
@@ -140,7 +194,7 @@ with tempfile.TemporaryDirectory(prefix='help-') as temporary:
             wait(lambda: nodes('.sf-md'))
             ctl('key', 'q')
             wait(lambda: not nodes('[data-role="help-heading"]'))
-            print('PASS: markdown has no TSP bytes, landing page, nav click, search and Enter, back/forward, next page, unknown topic suggestions, light/dark shots')
+            print(f'PASS: markdown has no TSP bytes, landing page, nav click, search and Enter, back/forward, next page, link rows, stable page rect across search states, narrow stack at {narrow_cols} cols and split at {wide_cols} cols, unknown topic suggestions, light/dark shots')
         finally:
             server.terminate()
             try: server.wait(timeout=10)
