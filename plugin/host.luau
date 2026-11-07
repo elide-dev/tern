@@ -1172,10 +1172,12 @@ local function visible(state, cx)
   if state.confirm then
     chrome += 4
   end
-  return math.max(4, (cx.rows or 24) - chrome)
+  -- The stylesheet sets this editor's line height to 1.35em against the kit's 1.192 (15.5px at
+  -- 13px), and maxLines counts lines of that height, so the rows available shrink by the ratio.
+  return math.max(4, math.floor(((cx.rows or 24) - chrome) * 1.192 / 1.35))
 end
 
--- Gutter cells are `[sign][number] │  `: one sign cell left of numbers right-aligned to the widest, so
+-- Gutter cells are `[sign 2][number][2]│[2]`: a two-cell sign column left of numbers right-aligned to the widest, so
 -- every line's cell is the same width and toggling a breakpoint shifts nothing. Breakpoint lines
 -- number in `error`, the paused line in `accent`, the caret line in the normal ink.
 --
@@ -1245,15 +1247,16 @@ local function lines_view(state, starts)
       local first = string.byte(buf.lines[line], 1) >= 0xF0 and 2 or 1
       table.insert(decor, { from = starts[line], to = starts[line] + first, s = "mark " .. tint })
     end
-    -- As VS Code and IDEA lay it out: the sign cell, the number right-aligned to the widest, a space,
-    -- a `dim` hairline (the box-drawing glyph spans the line's height, so it reads continuous) and
-    -- two cells before the code: 1 + digits + 1 + 1 + 2 cells, nothing more.
+    -- As VS Code and IDEA lay it out: a two-cell sign column (the glyph and a cell of air, so a
+    -- breakpoint, the paused arrow or a later marker never touches the pane edge, the digits or
+    -- shifts anything), the number right-aligned to the widest, two cells of air ending in the
+    -- hairline (the stylesheet borders this `muted` run) and two cells before the code: 2 + digits +
+    -- 2 cells, the hairline, 2 cells.
     gutter[line] = {
       tone and ui.span(glyph, tone) or ui.span(glyph),
+      ui.span(" "),
       number and ui.span(source.number(line, width), number) or ui.span(source.number(line, width)),
-      ui.span(" "),
-      -- The hairline's cell: the stylesheet draws one continuous line down the editor here.
-      ui.span(" "),
+      ui.span("  ", "muted"),
       ui.span("  "),
     }
     virt[line] = note
@@ -2183,7 +2186,7 @@ tern.block.define("source", {
         children,
         ui.node("editor", {
           key = "editor",
-          -- `digits-N` tells the stylesheet where the gutter's hairline falls.
+          -- `digits-N`, the digit count of the last line number, lets the harness find this editor.
           role = "source-editor digits-" .. digits,
           aria = state.name,
           grow = 1,

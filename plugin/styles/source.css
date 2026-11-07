@@ -50,35 +50,19 @@
 [data-surface="plugin.elide.source"] .sf-editor[data-role~="source-editor"] {
   --sf-lh: calc(1em * 1.35);
 }
-/* The gutter's hairline: one 1px line down the scroller, in the hairline cell of
-   `[sign][digits] │  `, so it is continuous at any line height and scrolls with the code. The
-   editor's role carries its digit count (`digits-N`), which places it at (N + 2.5)ch. */
-[data-surface="plugin.elide.source"] .sf-editor .sf-ed-scroll {
-  background-image: linear-gradient(var(--l3, var(--l2)), var(--l3, var(--l2)));
-  background-repeat: no-repeat;
-  background-size: 1px 100%;
-  background-attachment: local;
-}
-[data-surface="plugin.elide.source"] .sf-editor[data-role~="digits-1"] .sf-ed-scroll {
-  background-position: calc(3.5ch - 0.5px) 0;
-}
-[data-surface="plugin.elide.source"] .sf-editor[data-role~="digits-2"] .sf-ed-scroll {
-  background-position: calc(4.5ch - 0.5px) 0;
-}
-[data-surface="plugin.elide.source"] .sf-editor[data-role~="digits-3"] .sf-ed-scroll {
-  background-position: calc(5.5ch - 0.5px) 0;
-}
-[data-surface="plugin.elide.source"] .sf-editor[data-role~="digits-4"] .sf-ed-scroll {
-  background-position: calc(6.5ch - 0.5px) 0;
-}
-[data-surface="plugin.elide.source"] .sf-editor[data-role~="digits-5"] .sf-ed-scroll {
-  background-position: calc(7.5ch - 0.5px) 0;
-}
-[data-surface="plugin.elide.source"] .sf-editor[data-role~="digits-6"] .sf-ed-scroll {
-  background-position: calc(8.5ch - 0.5px) 0;
-}
-[data-surface="plugin.elide.source"] .sf-editor[data-role~="digits-7"] .sf-ed-scroll {
-  background-position: calc(9.5ch - 0.5px) 0;
+/* The gutter's hairline: the right border of the two cells of air after the digits (the gutter's
+   `muted` run), made an inline-block exactly one line tall (vertical-align top, no padding, so line
+   boxes do not change) so the border spans the row and rows abut into one continuous line. It sits
+   two cells after the last digit wherever the digits end, and two plain cells follow it before the
+   code; nothing is computed from `ch`. Tried and dropped: a border with a margin (this renderer drops
+   the margin), a background on the gutter run (not painted), a gradient on the scroller placed in
+   `ch` (the scroller's face is the region's sans, so it landed inside the digits). */
+[data-surface="plugin.elide.source"] .sf-editor .sf-ed-gutter .sf-t-muted.sf-t-muted {
+  display: inline-block;
+  height: var(--sf-lh);
+  vertical-align: top;
+  padding: 0;
+  border-right: 1px solid var(--l3);
 }
 
 /* Line tints. Tern's only background span token is `mark`. Every line carries a `mark <tone>` run on
