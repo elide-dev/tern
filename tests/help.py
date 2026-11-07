@@ -59,10 +59,23 @@ with tempfile.TemporaryDirectory(prefix='help-') as temporary:
                 if value:
                     return value
                 time.sleep(.2)
+            ctl('shot', 'help-failure')
             raise AssertionError(tree())
+
+        def host_running():
+            rows = subprocess.check_output(['ps', '-axo', 'command'], text=True)
+            return any(row.startswith(str(host)) for row in rows.splitlines())
 
         def crumbs():
             return tree('[data-role="help-breadcrumb"]')
+
+        def heading():
+            found = nodes('.sf-md h1, .sf-md h2, .sf-md h3')
+            return found[0].get('text', '') if found else ''
+
+        def place():
+            # Where the reader is: the trail to the page's group and the page's heading.
+            return crumbs() + ' | ' + heading()
 
         def page_has(text):
             return text in tree('.sf-md')
@@ -90,9 +103,16 @@ with tempfile.TemporaryDirectory(prefix='help-') as temporary:
             # The landing page is the first page of the nav, drawn by Tern's own md kind.
             wait(lambda: nodes('.sf-md'))
             wait(lambda: page_has('Overview') or page_has('Elide'))
-            landing = crumbs()
-            assert 'Get Started' in landing, landing
+            landing = place()
+            assert 'Get Started' in crumbs(), crumbs()
+            # The page is named once, by its heading; the trail stops at its group.
+            assert heading() and heading() not in crumbs(), (heading(), crumbs())
             assert nodes('[data-role="help-nav"]'), tree()
+            # The nav groups pages by their part of the docs; only the reader's is open.
+            def open_sections():
+                return [n.get('text', '') for n in nodes('[data-role="help-nav-section"]:not(.collapsed)')]
+            assert len(nodes('[data-role="help-nav-section"]')) > 5, tree('[data-role="help-nav"]')
+            assert len(open_sections()) == 1 and open_sections()[0].startswith('Get Started'), open_sections()
             assert nodes('[data-role="help-search"]'), tree()
             assert 'search' in tree('[data-role="help-keys"]')
             ctl('appearance', 'light')
@@ -103,9 +123,19 @@ with tempfile.TemporaryDirectory(prefix='help-') as temporary:
 
             # A nav row opens its page; the trail follows.
             ctl('click', '[data-role="help-nav"] [data-id$=".p2"]')
-            wait(lambda: crumbs() != landing)
-            clicked = crumbs()
+            wait(lambda: place() != landing)
+            clicked = place()
             assert 'Getting started' in clicked or 'Installation' in clicked, clicked
+            assert heading() not in crumbs(), (heading(), crumbs())
+
+            # A broad query lists 50 topics and counts the rest.
+            ctl('key', '/')
+            ctl('type', 'api')
+            wait(lambda: '… ' in tree('[data-role="help-results-count"]'))
+            count = tree('[data-role="help-results-count"]')
+            assert '50 of ' in count and ' more' in count, count
+            ctl('key', 'Escape')
+            wait(lambda: nodes('.sf-md'))
 
             # `/`, a topic and Enter open it from the search.
             ctl('key', '/')
@@ -114,19 +144,20 @@ with tempfile.TemporaryDirectory(prefix='help-') as temporary:
             wait(lambda: 'Sandbox' in tree('[data-role="help-results"]'))
             ctl('shot', 'help-search')
             ctl('key', 'Enter')
-            wait(lambda: nodes('.sf-md') and 'Sandbox' in crumbs())
+            wait(lambda: nodes('.sf-md') and 'Sandbox' in heading())
             assert page_has('--allow-net') or page_has('sandbox'), tree('.sf-md')
+            wait(lambda: len(open_sections()) == 1 and open_sections()[0].startswith('Guides'))
             assert not nodes('[data-role="help-results"]'), tree()
 
             # `b` goes back to the page the search left.
             ctl('key', 'b')
-            wait(lambda: crumbs() == clicked)
+            wait(lambda: place() == clicked)
             ctl('key', 'f')
-            wait(lambda: 'Sandbox' in crumbs())
+            wait(lambda: 'Sandbox' in heading())
 
             # `]` steps to the next page in nav order.
             ctl('key', ']')
-            wait(lambda: 'Sandbox' not in crumbs())
+            wait(lambda: 'Sandbox' not in heading())
 
             # A page's links are rows that navigate in place (the md link itself goes
             # to the window's routes, which never reach the program).
@@ -134,13 +165,13 @@ with tempfile.TemporaryDirectory(prefix='help-') as temporary:
             ctl('type', 'getting-started')
             wait(lambda: 'Getting started' in tree('[data-role="help-results"]'))
             ctl('key', 'Enter')
-            wait(lambda: 'Getting started' in crumbs())
-            linking = crumbs()
+            wait(lambda: 'Getting started' in heading())
+            linking = place()
             wait(lambda: nodes('[data-role="help-links"] .sf-item'))
             ctl('click', '[data-role="help-links"] .sf-item')
-            wait(lambda: crumbs() != linking)
+            wait(lambda: place() != linking)
             ctl('key', 'b')
-            wait(lambda: crumbs() == linking)
+            wait(lambda: place() == linking)
             # Tern's md draws no custom-scheme links, so the page marks link text with
             # spans carrying the help href (⌘-click hands it to the window's routes).
             wait(lambda: nodes('.sf-md [data-href^="elide://help?topic="]'))
@@ -148,27 +179,35 @@ with tempfile.TemporaryDirectory(prefix='help-') as temporary:
 
             # Bands: a narrow pane stacks everything, a wide one puts the nav beside the
             # page again, and the page does not move while the search opens and closes.
-            body = rect('[data-role="help-body"]')
+            # The head and the page's frame hold still while the search opens, finds
+            # nothing and closes: the results take the page's place, never push it. The
+            # frame's height follows its content (Tern sizes split panes to it).
+            def frame():
+                body = rect('[data-role="help-body"]')
+                return rect('[data-role="help-heading"]'), body[:3]
+            before = frame()
             ctl('key', '/')
             wait(lambda: nodes('[data-role="help-results"]'))
-            assert rect('[data-role="help-body"]') == body, 'opening the search moved the page'
+            assert frame() == before, ('opening the search moved the page', before, frame())
             ctl('type', 'zzqxv')
             wait(lambda: 'No topics match' in tree('[data-role="help-results"]'))
-            assert rect('[data-role="help-body"]') == body, 'an empty search moved the page'
+            assert frame() == before, ('an empty search moved the page', before, frame())
             ctl('key', 'Escape')
             wait(lambda: nodes('.sf-md'))
-            assert rect('[data-role="help-body"]') == body, 'closing the search moved the page'
+            assert frame() == before, ('closing the search moved the page', before, frame())
 
             ctl('resize', NARROW, 800)
             wait(lambda: not nodes('[data-role="help-body"].sf-split'))
             title, field = rect('[data-role="help-heading"] .sf-text'), rect('[data-role="help-search"]')
             assert field[1] >= title[1] + title[3] - 1, ('the search field takes its own line', title, field)
             # The nav sits under the page, so it is below the fold until End scrolls there.
-            assert rect('[data-role="help-nav"]') is None, 'the nav comes after the page'
+            page, nav = rect('[data-role="help-doc"]'), rect('[data-role="help-nav"]')
+            assert nav is None or nav[1] >= page[1] + page[3] - 1, ('the nav comes after the page', page, nav)
+            # End reaches it: the scroll keys work in the stacked page too.
             ctl('key', 'End')
-            wait(lambda: rect('[data-role="help-nav"]'))
+            wait(lambda: nodes('[data-role="help-nav-section"]'))
             ctl('key', 'Home')
-            wait(lambda: rect('[data-role="help-nav"]') is None)
+            wait(lambda: not nodes('[data-role="help-nav-section"]'))
             crumb = rect('[data-role="help-breadcrumb"]')
             assert crumb[3] < 40, ('the trail takes one line', crumb)
             ctl('appearance', 'light')
@@ -184,6 +223,9 @@ with tempfile.TemporaryDirectory(prefix='help-') as temporary:
             ctl('appearance', 'light')
             ctl('key', 'q')
             wait(lambda: not nodes('[data-role="help-heading"]'))
+            # The surface closes before the process exits; a command typed into the pane
+            # in between would be read by the exiting program.
+            wait(lambda: not host_running())
 
             # An unknown topic shows the closest ones instead of a dead end.
             ctl('run', shlex.join([str(host), 'sandboks']))
@@ -194,7 +236,7 @@ with tempfile.TemporaryDirectory(prefix='help-') as temporary:
             wait(lambda: nodes('.sf-md'))
             ctl('key', 'q')
             wait(lambda: not nodes('[data-role="help-heading"]'))
-            print(f'PASS: markdown has no TSP bytes, landing page, nav click, search and Enter, back/forward, next page, link rows, stable page rect across search states, narrow stack at {narrow_cols} cols and split at {wide_cols} cols, unknown topic suggestions, light/dark shots')
+            print(f'PASS: markdown has no TSP bytes, landing page named once, nav sections with one open, nav click, search cap with more line, search and Enter, back/forward, next page, link rows, stable page rect across search states, narrow stack at {narrow_cols} cols and split at {wide_cols} cols, unknown topic suggestions, light/dark shots')
         finally:
             server.terminate()
             try: server.wait(timeout=10)
