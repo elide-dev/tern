@@ -54,3 +54,24 @@ Worker rulings to confirm with Sam: Tern is top-level nav (out of IDE Editors); 
 - 2026-11-08 13:02 PST: tern-recorder hit the 5-hour limit after publishing all 140 tern assets (uncommitted, 159 changes in its worktree). Resumed it to finish the contract test, Playwright theme swap, spot-checks and commit.
 - 2026-11-08 13:40 PST: recorder d6d44f7fa: 140 assets published; text-compact preset (CRF AV1 44/HEVC 28/VP9 40/H.264 25) on 5 long workspace clips to fit budget; per-theme totals dark AV1 4158 / HEVC 8031 / VP9 7062 / H.264 9979 KiB (HEVC, VP9 within ~1.5% of limits); Playwright theme swap passes in Chromium + WebKit; 28 frames spot-checked. docs/tern-guide merged and rebased onto origin/main de570de0c: 9 linear commits (399a01425..96c1dcaca), no trailers. Unit: 1407 pass / 1 fail (worker.test.ts needs dist; first run after build:ui flakes 11 search/chrome tests again). Final site build, Playwright and cargo test -p help running.
 - 2026-11-08 13:20 PST: rebased docs/tern-guide: site build + check:dist OK, Playwright 245/22/0, cargo test -p help 196 pass, unit 1492/1 — the 1 is the real-corpus search eval (anchors 0.79 < 0.8). Sent to tern-section to fix on docs/tern-guide directly.
+- 2026-11-08 13:45 PST: tern-section 99a1ce02b fixed search ranking regressions our pages caused (Tern headings now "`elide test` in Tern" etc.; tern-telemetry nav title "Traces"; troubleshooting heading "A view does not open"; debugging.md "Connect another debugger" folded into "Attach a debugger"). Main itself fails the anchor threshold (0.791); tern-guide now 0.814. No eval expectations changed.
+
+## Closing summary (2026-11-08 13:50 PST)
+Branch `docs/tern-guide` (worktree `/Users/sam/workspace/elide/.dev/scratch/tern-docs`), 10 linear commits on origin/main de570de0c (399a01425..99a1ce02b), no attribution trailers, NOT pushed (waiting on Sam).
+Checks on the final head: site build + check:docs/check:dist (557 pages)/check:worker exit 0; docs test:unit 1493 pass / 0 fail; Playwright 245 pass / 22 skip / 0 fail (incl. live theme swap in Chromium + WebKit); cargo test -p help 196 pass. Search eval: anchors 0.814 (main 0.791, threshold 0.8), MRR@5 0.931, recall@3 0.970.
+Delivered:
+- Tern docs section: 8 pages under content/en/tern (install first on `tern`), top-level nav in all locales; existing pages point in.
+- 14 Tern demo clips x dark/light, 60 fps, 4:4:4 VP9/HEVC/AV1 + 4:2:0 H.264 fallback + per-theme posters (140 assets); player follows the site theme and swaps live.
+- JSON clip specs for every editor clip (Tern, VS Code, IntelliJ) with a schema, generated docs data, golden-trace equivalence tests for VS Code/IntelliJ; headless macOS Tern recorder (`bun run demos:ide <id> --ide tern`), lossless masters + `--reencode`.
+Rulings (cost if wrong):
+- Headless `tern serve --control` capture instead of ScreenCaptureKit — clips needing a real OS window need an SCK helper.
+- Presets: text-light (Sam) for 9 clips, text-compact for the 5 long workspace clips to fit budget — one `quality` field + `--reencode` to raise.
+- Budgets per theme AV1 5 / HEVC 8 / VP9 7 / H.264 10 MiB (Sam); HEVC and VP9 within ~2% — the next clip needs a raise.
+- Codec-size rule compares same-chroma encodes only.
+- Source order VP9, HEVC, AV1, H.264 because WebKit stalls on AV1 4:4:4.
+- Tern top-level nav (out of IDE Editors); "Elide 1.6.3+ on PATH"; repo-access requirement row; install archive pinned 0.1.0-preview.1; demo home /Users/Shared/elide-demo — all pending Sam's confirmation.
+Open follow-ups:
+- VS Code/IntelliJ JSON steps proven only by traces; first Linux re-record is the real proof.
+- elide-dev/tern #2 (TAP/javac lenses), #3 (piped build shows Built), #4 ("Paused elsewhere") — headless-only so far.
+- Search eval: "code coverage" now rank 5 (was 3); "workspace" and the other 8 anchor misses predate this work.
+- Delete worktrees tern-docs-recorder and tern-docs-section once pushed.
