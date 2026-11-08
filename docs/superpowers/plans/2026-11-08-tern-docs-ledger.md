@@ -23,3 +23,4 @@ Approved by Sam 2026-11-08 09:11 PST. Read this first after any context loss.
 ## Events
 - 2026-11-08 09:12 PST: PR #2757 merged as c47257746; worktrees cut; workers briefed.
 - 2026-11-08 09:20 PST: tern-recorder and tern-section (Opus) dispatched; base worktree tern-base removed. Clip ids fixed in both briefs: tern-install, tern-test-{plain,inline,workspace}, tern-build-{plain,inline,workspace}, tern-help-{plain,page}, tern-serve, tern-repl, tern-debug, tern-coverage, tern-otlp.
+- 2026-11-08 09:30 PST: Ruling: recorder films headless `tern serve --control` via paced `shot` frames on the app clock (2x, ~30 fps), not ScreenCaptureKit and not Tern's lossy `record start` — no Screen Recording permission, no visible window — cost if wrong: clips needing a real OS window fall back to an SCK helper for that clip only.
