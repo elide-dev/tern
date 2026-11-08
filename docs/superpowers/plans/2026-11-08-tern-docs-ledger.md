@@ -34,3 +34,19 @@ Approved by Sam 2026-11-08 09:11 PST. Read this first after any context loss.
 - 2026-11-08 10:55 PST: tern-section verified site build (check:docs, astro, check:dist 556 pages, check:worker, wrangler dry run) and Playwright 242 pass / 22 skip / 0 fail on f7b993574. Section work complete pending clip publish.
 - 2026-11-08 11:20 PST: recorder 41257a294: 60 fps both themes on tern-test-inline (365/366 slots, worst gap 29 ms); masters x264 RGB qp0 kept; 4:4:4 VP9/HEVC/AV1 + 4:2:0 H.264 fallback; source order VP9, HEVC, AV1, H.264 (WebKit stalls on AV1 4:4:4). Sam chose preset text-light; budget raised to AV1 5 / HEVC 8 / VP9 7 / H.264 10 MiB per theme; size rule only between same-chroma encodes. Recorder told to record all 14 x 2 themes, publish, browser-test the live theme swap, then step 5.
 - 2026-11-08 11:35 PST: step 5 done 7d62c606e: VS Code/IntelliJ clips run from JSON steps; 14 golden traces (scripts/ide-demos/traces) replay identically; TS clip bodies removed; budget per theme. Resent Sam's decisions; recorder told to record/publish all 14 x 2 and browser-test the theme swap. Sam: finish out, then write a closing ledger.
+
+## State at 2026-11-08 11:00 PST (snapshot in case the session ends)
+Done:
+- PR #2757 squash-merged to Elide main as c47257746 (CI green; Co-Authored-By trailers stripped from PR and tern main by history rewrite + force-push; clippy collapsible_if and Socket tslib findings fixed). Tern `main` force-pushed fcf327b (trailers removed).
+- Binary footprint (local release, macOS arm64, base decc1d0f7 vs PR): bin/elide +2.53 MB (+5.9%, almost all __text), libelideengine +0.19 MB, libelideruntime +0.05 MB; CI dev-build report +12.1 MB macOS / +7.2 MB linux. No new external crates.
+- Docs section (docs/tern-section 32784510f, ebe6f7dea): 8 pages under content/en/tern (tern, tern-terminal, tern-workspace, tern-debugging, tern-coverage, tern-build, tern-telemetry, tern-troubleshooting), top-level nav `tern` in all locales. Site build, check:dist, Playwright 242/22/0, cargo test -p help 196 pass.
+- Recorder (docs/tern-recorder): b20b212e1 specs, c0befbcde headless macOS recorder, 9b323813a steps/fixtures, 4193286f4 biome skip, 41257a294 per-theme 60 fps 4:4:4, 7d62c606e VS Code/IntelliJ JSON steps + golden traces + per-theme budget.
+In flight (tern-recorder): record all 14 Tern clips x dark/light at 60 fps with preset text-light, tune tern-install HEVC < H.264, publish to public/assets/demos/ide, write seconds, regenerate ide-demos.json, update contract (AV1 5 / HEVC 8 / VP9 7 / H.264 10 MiB per theme; size rule same-chroma only), Playwright test of live theme swap in Chromium + WebKit, spot-check frames.
+To finish (resume here):
+1. When tern-recorder reports: merge docs/tern-recorder (and docs/tern-section if it moved) into docs/tern-guide at `/Users/sam/workspace/elide/.dev/scratch/tern-docs`.
+2. `git rebase origin/main` (branch was cut from c47257746, no merge commits yet besides f7b993574 — use `git rebase --onto origin/main c47257746` if needed).
+3. Rerun: project/docs `bun run test:unit` (main has 1 known fail: worker.test.ts needs a site build), site build, Playwright, `cargo test -p help` (own CARGO_TARGET_DIR).
+4. Do not push until Sam says. Commits never carry Co-Authored-By.
+5. Write the closing summary in this ledger.
+Plugin findings to raise with Sam (seen headless only): TAP/javac output lenses don't render; status segment trusts a pipeline's exit (`elide build | cat` shows Built); debugger shows "Paused elsewhere" after stepping into another file.
+Worker rulings to confirm with Sam: Tern is top-level nav (out of IDE Editors); "Elide 1.6.3+ on PATH"; repo-access requirement row (repo internal); install archive pinned 0.1.0-preview.1; demo home /Users/Shared/elide-demo.
