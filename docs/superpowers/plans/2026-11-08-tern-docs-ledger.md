@@ -22,3 +22,4 @@ Approved by Sam 2026-11-08 09:11 PST. Read this first after any context loss.
 
 ## Events
 - 2026-11-08 09:12 PST: PR #2757 merged as c47257746; worktrees cut; workers briefed.
+- 2026-11-08 09:20 PST: tern-recorder and tern-section (Opus) dispatched; base worktree tern-base removed. Clip ids fixed in both briefs: tern-install, tern-test-{plain,inline,workspace}, tern-build-{plain,inline,workspace}, tern-help-{plain,page}, tern-serve, tern-repl, tern-debug, tern-coverage, tern-otlp.
