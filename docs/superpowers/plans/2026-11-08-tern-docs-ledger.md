@@ -75,3 +75,4 @@ Open follow-ups:
 - elide-dev/tern #2 (TAP/javac lenses), #3 (piped build shows Built), #4 ("Paused elsewhere") — headless-only so far.
 - Search eval: "code coverage" now rank 5 (was 3); "workspace" and the other 8 anchor misses predate this work.
 - Delete worktrees tern-docs-recorder and tern-docs-section once pushed.
+- 2026-11-08 13:40 PST: Sam confirmed rulings 1, 2, 5-raise; (3) elide-dev/tern made PUBLIC (history secret scan clean, 576 commits) and the access row dropped (f3098c6b4 on docs/tern-guide); (4) archive pin stays, a release lands before final 1.6.3. Recorder: restore text-light on the 5 workspace clips via --reencode and raise per-theme limits (+25% headroom). Then push docs/tern-guide and open the PR.
