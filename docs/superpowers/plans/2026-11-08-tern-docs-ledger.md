@@ -51,3 +51,4 @@ To finish (resume here):
 Plugin findings to raise with Sam (seen headless only): TAP/javac output lenses don't render; status segment trusts a pipeline's exit (`elide build | cat` shows Built); debugger shows "Paused elsewhere" after stepping into another file.
 Worker rulings to confirm with Sam: Tern is top-level nav (out of IDE Editors); "Elide 1.6.3+ on PATH"; repo-access requirement row (repo internal); install archive pinned 0.1.0-preview.1; demo home /Users/Shared/elide-demo.
 - 2026-11-08 11:02 PST: filed the three possible plugin bugs on elide-dev/tern: #2 TAP/javac lenses don't render, #3 status reports a piped failing build as Built, #4 debugger 'Paused elsewhere' after step-into another file.
+- 2026-11-08 13:02 PST: tern-recorder hit the 5-hour limit after publishing all 140 tern assets (uncommitted, 159 changes in its worktree). Resumed it to finish the contract test, Playwright theme swap, spot-checks and commit.
