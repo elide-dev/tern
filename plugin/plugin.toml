@@ -5,7 +5,7 @@ version = "0.1.0-preview.1"
 description = "Embedded polyglot runtime sessions for Tern."
 window = "window.luau"
 host = "host.luau"
-styles = ["styles/source.css"]
+styles = ["styles/source.css", "styles/compose.css"]
 
 [[lenses]]
 id = "json"
@@ -24,4 +24,10 @@ id = "source"
 title = "Elide source"
 files = ["*.js", "*.mjs", "*.cjs", "*.ts", "*.mts", "*.cts", "*.py", "*.kt", "*.kts", "*.java"]
 # Opens on a file ("Open with Elide source", elide://source, the workspace toolbar); never empty.
+palette = false
+
+[[blocks]]
+id = "compose"
+title = "Compose saved-file snapshots"
+# Explicit project/palette/workspace launch supplies the saved .kt and its project root.
 palette = false

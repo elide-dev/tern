@@ -340,8 +340,84 @@ local function source_in(cx, pane, root)
   return nil
 end
 
+-- Explicit saved-file snapshots only: never compile the native editor's unsaved buffer.
+local function open_compose(cx, file, root, target)
+  if not local_host(cx) then
+    return nil
+  end
+  file, root = links.absolute(file), links.absolute(root)
+  if
+    not file
+    or not root
+    or not links.within(file, root)
+    or source.extension(file) ~= "kt"
+    or not tern.fs.exists(file)
+  then
+    cx:toast("info", "Choose a saved Kotlin (.kt) file inside this project.")
+    return nil
+  end
+  -- Also covers a path chosen through the prompt while its editor is not focused.
+  for _, pane in cx.session:panes() do
+    if pane.kind == "file" then
+      local current = cx.session:read(pane.pane, { lines = 1, max_chars = 1 })
+      if type(current) == "table" and current.path == file and current.dirty then
+        cx:toast("info", "Save this file before opening Compose previews.", file)
+        return nil
+      end
+    end
+  end
+  if not configuration(cx) then
+    return nil
+  end
+  local pane = cx:new_block("elide.compose", { file, root }, "beside", target and { target = target } or nil)
+  if not pane then
+    cx:toast("error", "Could not open Compose preview.")
+  end
+  return pane
+end
+
+local function prompt_compose(cx, context)
+  if not local_host(cx) then
+    return
+  end
+  if not context then
+    cx:toast("info", "Open a local project directory first.")
+    return
+  end
+  local focused = cx.session:focused()
+  local file = source_in(cx, focused, context.root)
+  if file and source.extension(file) == "kt" then
+    open_compose(cx, file, context.root, focused)
+    return
+  end
+  cx:prompt({
+    placeholder = "Saved Kotlin (.kt) path relative to project",
+    value = "",
+    icon = "file",
+    action = "preview",
+  }):next(function(subject, problem, fresh)
+    if problem and fresh then
+      fresh:toast("error", problem)
+    elseif fresh and subject and subject ~= "" then
+      local file = string.sub(subject, 1, 1) == "/" and subject or (context.root .. "/" .. subject)
+      open_compose(fresh, file, context.root)
+    end
+  end)
+end
+
 workspace.install({
   debug = launch_debug,
+  -- Like Source, Preview is deliberately not cached by action: a second Kotlin file
+  -- must open its own snapshot rather than focusing the first file's result.
+  preview = function(cx, context, target)
+    local file = source_in(cx, target, context.root)
+    if file then
+      open_compose(cx, file, context.root, target)
+    else
+      cx:toast("info", "Open a saved Kotlin file in the editor first.")
+    end
+    return nil
+  end,
   build = function(cx, context, target, opened)
     return runtime_action(cx, context, "build", target, opened)
   end,
@@ -444,6 +520,7 @@ local function project_menu(context, cx)
     { label = "Run tests", value = "test", icon = "play" },
     { label = "Open debugger", value = "debug", icon = "bug" },
     { label = "Open Elide source…", value = "source", icon = "file" },
+    { label = "Open Compose preview", value = "compose", icon = "file" },
     { label = "Open REPL", value = "repl", icon = "terminal" },
     { label = "Serve static files", value = "static", icon = "server" },
     { label = "Serve a script…", value = "script", icon = "server" },
@@ -467,6 +544,8 @@ local function project_menu(context, cx)
         launch_debug(current, context)
       elseif item.value == "source" then
         prompt_source(current, context)
+      elseif item.value == "compose" then
+        prompt_compose(current, context)
       elseif item.value == "repl" then
         launch(current, "js", context)
       elseif item.value == "static" then
@@ -578,6 +657,18 @@ tern.command({
         current:toast("info", "Open a file inside an Elide project first.")
       end
     end)
+  end,
+})
+tern.command({
+  id = "compose",
+  title = "Open Compose preview",
+  icon = "file",
+  run = function(cx)
+    if local_host(cx) then
+      detect(cx, function(context, current)
+        prompt_compose(current, context)
+      end)
+    end
   end,
 })
 tern.command({

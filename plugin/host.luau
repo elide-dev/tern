@@ -248,6 +248,7 @@ local broker = require("./lib/broker")
 local buffer = require("./lib/buffer")
 local links = require("./lib/links")
 local source = require("./lib/source")
+require("./lib/compose")
 
 local RENEW_MS = 30000
 local DEBUG_POLL_MS = 500

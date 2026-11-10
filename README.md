@@ -5,7 +5,7 @@ Notebook workers load the same C ABI and Cap'n Proto SDK used by Elide Studio.
 Test and server hosts supervise the canonical runtime independently; GraalVM is
 never loaded into Tern's UI process.
 
-Native surfaces cover REPL, Tests, Debug, serving and trace inspection. Project
+Native surfaces cover REPL, Tests, Debug, Compose snapshots, serving and trace inspection. Project
 sessions share runs and debugger state between views and the built-in agent. SDK LSP/MCP channels
 have broker plumbing; standard client transports and live WebSocket MCP attachment
 remain follow-up work.
@@ -18,12 +18,18 @@ runtime and SDK. See [installation instructions](docs/manual-install.md).
 
 ## Development
 
-Requires Rust with edition 2024 support, Cap'n Proto (capnp compiler), Python 3, Tern, and StyLua 2.5.2
-(`mise install`). Native SDK execution supports macOS arm64 and Linux amd64,
-subject to the selected SDK's deployment requirements. The configured runtime must support
-`elide tern`; `make link` builds the broker and worker, then links the plugin. The broker links
+Requires Rust with edition 2024 support (use the toolchain pinned by `../elide`), Cap'n Proto
+(capnp compiler), Python 3, Tern, Bun, and StyLua 2.5.2 (`mise install`). Native SDK execution
+supports macOS arm64 and Linux amd64, subject to the selected SDK's deployment requirements.
+The configured runtime must support `elide tern`; `make link` builds the helpers and links the plugin. The broker links
 the runtime crates `elide-embed-host` and `elide-project-session` from a sibling `../elide`
 checkout of `elide-dev/runtime`, so building needs access to that repository.
+
+Compose builds also consume `../elide-vscode` (`ELIDE_VSCODE_SOURCE` overrides it).
+Install that checkout's dependencies with its pinned pnpm first. `make compose` bundles its
+shared project model, layoutlib renderer/runtime installer and Java sources into
+`dist/elide-tern-compose`; Bun and the sibling checkout are not needed at runtime.
+Release bundles must include this executable and `dist/elide-tern-compose.LICENSE`.
 
 ```sh
 make build
@@ -100,6 +106,38 @@ parse Luau; a successful build does not establish visual acceptance in Tern.
 
 See [architecture](docs/architecture.md), [broker protocol](docs/protocol.md),
 and [upstream provenance](third_party/README.md).
+
+### Compose previews
+
+Open a saved Kotlin `.kt` file and choose **Open Compose preview**, or click **Preview**
+in the project workspace toolbar. The native gallery renders `@Preview`, multipreview,
+member-function and `@PreviewParameter` cards beside the source. Click an image for Tern's
+zoom viewer; **Open source** returns to the file.
+
+**Rebuild** reads saved files, resolves the enclosing Elide workspace and selects the nearest
+Android APK consuming that source set. It builds the required JVM classes and Android resources,
+not an APK or an emulator. Preview code executes locally with your permissions: open only
+projects you trust. The selected application appears in the status line.
+
+Requires an Android-capable Elide runtime, the project's Android SDK/dependencies, and a JDK 17+.
+On first render, the shared installer downloads the pinned, SHA-256-verified layoutlib runtime
+from Google Maven. Supported plugin hosts are macOS arm64/x64 and Linux x64.
+Optional `plugin/config.json` settings:
+
+- `compose`: helper executable; defaults to `../dist/elide-tern-compose`.
+- `compose_java`: JDK's `java` executable; otherwise uses the resolved project JDK.
+- `compose_cache`: renderer cache directory; defaults to the plugin's data directory.
+
+Build failures clear stale images; rendering failures appear on individual cards.
+**Cancel** and closing the pane stop active work. Plugin reload cancels work and restores
+an idle panel; it never automatically executes previews. One Compose build owns a workspace
+at a time. After a forced helper kill, its error names a lock to remove **only after confirming
+its Elide/JVM build processes have stopped**.
+
+This is the saved-file snapshot subset of the VSCode extension: no unsaved/live refresh,
+Komodo input, layout inspection, arbitrary-composable agent rendering, MCP or prewarming.
+Save edits and explicitly rebuild. Galleries allow 32 cards, 8 MiB per PNG, 32 MiB in total
+and 4096 pixels per side. No embedded SDK is required for Compose itself.
 
 ### Debugging
 

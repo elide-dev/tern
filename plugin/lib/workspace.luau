@@ -56,6 +56,9 @@ local function controls(context, file)
   if file and source.lang(file) then
     table.insert(tools, 1, button("Source", "source", "file"))
   end
+  if file and source.extension(file) == "kt" then
+    table.insert(tools, 1, button("Preview saved Compose file", "preview", "file"))
+  end
   return ui.node("row", { role = "project-actions", gap = "md", aria = "Project toolbar" }, {
     ui.el("span", { role = "project-name", text = context.name or "Project", title = context.root }),
     separator(),

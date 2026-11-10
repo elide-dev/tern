@@ -64,6 +64,39 @@ exits after two minutes without clients. The native host closes sessions on exit
 crash. Runtime handles are not persisted; a new process starts new kernels.
 History is stored by the shared REPL in SQLite; drafts live in the frontend.
 
+## Compose snapshot block
+
+`plugin/lib/compose.luau` defines `elide.compose`, a host block rather than a window
+canvas: canvases reject image nodes. Explicit palette/menu/workspace actions pass a
+saved `.kt` path and project root. The block starts `dist/elide-tern-compose` through
+`tern.process.run`; `compose/main.ts` resolves the enclosing workspace, selects the
+source's consuming APK, builds JVM/resource targets, then renders through layoutlib.
+The project model, classpath/version selection, runtime installer and renderer are
+bundled unchanged from the sibling VSCode extension by `scripts/build-compose.ts`.
+The three Java helper sources are embedded too; VSCode APIs are not loaded.
+
+Each invocation has a unique `compose-jobs/<uuid>` directory. Atomic `status.json`
+reports progress. Completion stdout contains bounded metadata and PNG basenames;
+the block reads those files once, sends native `cx:blob` images and removes the job.
+Snapshots never write source buffers. The helper rejects a changed preview source
+between build and publication; this is not an atomic snapshot of concurrent edits
+to the entire workspace. Rebuilds clear old cards before starting.
+
+The block renews a lease every second. Cancel/close writes `cancel`; the helper checks
+it and the 15-second lease every 500 ms, aborts CLI work and disposes renderer JVMs.
+There is no warm process after completion. Reload restores no images and starts no
+build: it cancels a recorded job and waits for its post-cleanup `done` marker.
+A bounded restore wait permits another explicit attempt; the helper's exclusive
+`.dev/elide-tern-compose.lock` rejects overlapping Compose runs. A forced kill may
+leave detached Elide children, so abandoned locks are not automatically reclaimed.
+This lock coordinates these preview helpers, not builds started by other tools.
+
+The helper exports at most 32 cards / 32 MiB, at most 8 MiB per PNG and 4096 pixels
+per side. Upstream rendering materializes the gallery before these export limits.
+Individual render errors remain cards; build failures publish no images. As with
+the other project actions, previews execute trusted project code, not sandboxed code.
+No live editing, Komodo, inspector or agent protocol is provided by this block.
+
 ## Window integration points
 
 The window half also plugs into Tern's chrome, events and routes. None of these
