@@ -545,21 +545,23 @@ tern.block.define("compose", {
         ui.button("Close", { key = "close", role = "compose-close", actions = { click = "close" } }),
       }),
       ui.node("col", { key = "status", role = "compose-status", gap = "sm" }, {
-        progress and ui.progress(nil, progress)
-          or ui.el("div", {
-            role = state.phase == "error" and "compose-card-error" or "compose-summary",
-            text = state.message,
-          }),
+        progress and ui.progress(nil, progress) or ui.el("div", {
+          role = state.phase == "error" and "compose-card-error" or "compose-summary",
+          text = state.message,
+        }),
       }),
       ui.el("div", { key = "path", role = "compose-path", text = state.path }),
       ui.node("col", { key = "gallery", role = "compose-gallery", gap = "md" }, cards),
     }
     if (progress and state.message ~= "") or state.log ~= "" then
-      table.insert(children, ui.button(state.details and "Hide details" or "Show details", {
-        key = "details",
-        role = "compose-details",
-        actions = { click = "details" },
-      }))
+      table.insert(
+        children,
+        ui.button(state.details and "Hide details" or "Show details", {
+          key = "details",
+          role = "compose-details",
+          actions = { click = "details" },
+        })
+      )
       if state.details then
         local detail = progress and state.message or ""
         if state.log ~= "" then

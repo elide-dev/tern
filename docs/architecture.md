@@ -166,24 +166,26 @@ Stop targets one serial; a provided name must match. Delete rejects running, uni
 or locked AVDs. Emulator launch detaches with an owned diagnostic log, detects startup
 failure and leaves successful instances running independently of the UI.
 
-`android/view.ts` serves the embedded mirror over an ephemeral IPv4-loopback port.
-The random 256-bit path token, exact Host and WebSocket Origin checks, restrictive CSP
-and single controller follow the Compose bridge's trust boundary. The page has no shell,
-file or arbitrary ADB endpoint. Screenshots use `adb exec-out screencap -p`, bounded to
-8 MiB and 8192 pixels per side, with one capture and one unacknowledged frame at a time.
-Capture runs at most every 400 ms and pauses while hidden after an initial frame,
-except for two seconds after input (driven native browser panes may report hidden).
-Gestures map displayed pixels back to screenshot coordinates and are sent on release;
-navigation keys are allowlisted, printable ASCII text is shell-quoted, and literal `%s`
-is preserved. The queue holds at most eight commands. No held input survives a browser
-blur; disconnect invalidates queued input. No audio/multitouch/video transport is exposed.
+`android/display.ts` runs in a terminal pane. `android/grpc.ts` finds the emulator by its
+own `pid_<PID>.ini` advertisement, whose gRPC port and console token exist because `start`
+passes `-grpc-use-token` (with `-no-window`), and speaks plaintext loopback HTTP/2 gRPC
+with the token as bearer. The display queries the terminal for kitty graphics, SGR pixel
+mouse (1016), the kitty keyboard and cell/window pixel sizes; without graphics or pixel
+sizes it exits with a message and the pane stays open. `streamScreenshot` sends RGB888
+frames scaled to the pane; each is one kitty `t=f` temp-file transmission (inline base64
+when the terminal cannot read the file), with one frame in flight until acknowledged.
+Touches map pane pixels to the native portrait display through the frame's rotation.
+Tern gets cell reports: it reports a rounded cell size but lays images out in its real
+cells. Keys go through `streamInputEvent` as whole presses with their modifiers, so no
+terminal release report is needed and no key stays down. Paste sets the device clipboard,
+then sends Ctrl+V. Toolbar buttons send hardware keys and `setPhysicalModel` rotations.
+Close, SIGHUP or the emulator's exit restore the terminal; an emulator exit ends with status 0.
+An AVD without `hw.keyboard` has no guest keyboard device, so the display drops keys and
+says why; `create` enables the setting.
 
-The native canvas opens the mirror with `cx.browser:call({op="open", how="beside"})`.
-Its private `android-views/<uuid>` job directory carries an atomic `view.json`, a
-one-second lease heartbeat and a cancellation marker. A 15-second expired lease,
-manager close or five-second browser disconnect grace closes the helper, never the
-emulator. Standalone `view` prints its URL and exits after disconnect; an unopened
-URL expires after one minute. Plugin reload restores the manager without relaunching devices.
+The manager opens one display pane per serial with `cx.layout:split` (`exec` of the
+helper) and, after a plugin reload, finds it again by its `NAME · SERIAL` title. No plugin
+code closes display panes.
 
 ## Window integration points
 

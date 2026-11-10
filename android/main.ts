@@ -1,8 +1,8 @@
-import path from "node:path";
+import { runDisplay } from "./display";
+import { emulatorEndpoint } from "./grpc";
 import { errorMessage } from "./process";
 import { createConfigured, projectInfo, ProjectChoiceError, resolveProject, resolveSdk } from "./project";
 import { AndroidSdk, validateName } from "./sdk";
-import { runView } from "./view";
 
 const USAGE = `Usage: elide-tern-android COMMAND [OPTIONS]
 
@@ -11,10 +11,10 @@ Commands:
   images     List installed system-image package IDs (no downloads)
   profiles   List hardware profile IDs and names
   create     Create a new AVD; never overwrite an existing AVD
-  start      Start an existing AVD in a visible, detached emulator
+  start      Start an existing AVD without an emulator window
   stop       Stop only the selected emulator
   delete     Delete a stopped AVD (requires --yes)
-  view       Open a live emulator view; runs until closed or disconnected
+  display    Show and control a running emulator in this terminal until closed
 
 Options:
   --json              Print one JSON result object (errors also on stderr)
@@ -24,39 +24,38 @@ Options:
   --name NAME         AVD name (defaults to the project's configured AVD)
   --image PACKAGE     Installed system-images;android-API;VARIANT;ABI (create)
   --device PROFILE    Hardware profile ID (create; list with profiles)
-  --serial SERIAL     Exact emulator-PORT to stop or view
-  --headless          Start without an emulator window
+  --serial SERIAL     Exact emulator-PORT to stop or display
   --yes               Confirm deletion; never accepts SDK licenses
-  --job PATH          Absolute private job directory for managed view sessions
   --help              Show this help
 
 Standalone create requires --name, --image and --device. In project mode,
 create without those options uses Elide's configured android-avd build target.
 Pass an Android member directory with --root if a workspace is ambiguous.
-Start does not create an AVD or install SDK components. Stop/view --serial
-never targets a physical device. View prints {url,serial} once unless --job
-is supplied (then writes job/view.json). No Elide runtime is needed without --root.
+Start does not create an AVD or install SDK components. Stop/display --serial
+never targets a physical device. Display needs a terminal with kitty graphics
+(a Tern pane, kitty, Ghostty, WezTerm) and an emulator started by this helper.
+No Elide runtime is needed without --root.
 `;
 
-type Command = "list" | "images" | "profiles" | "create" | "start" | "stop" | "delete" | "view";
+type Command = "list" | "images" | "profiles" | "create" | "start" | "stop" | "delete" | "display";
 type Args = {
-  command: Command; json: boolean; yes: boolean; headless: boolean;
-  sdk?: string; root?: string; runtime?: string; name?: string; image?: string; device?: string; serial?: string; job?: string;
+  command: Command; json: boolean; yes: boolean;
+  sdk?: string; root?: string; runtime?: string; name?: string; image?: string; device?: string; serial?: string;
 };
 
 function parseArgs(argv: string[]): Args {
-  const commands: Record<string, true> = { list: true, images: true, profiles: true, create: true, start: true, stop: true, delete: true, view: true };
+  const commands: Record<string, true> = { list: true, images: true, profiles: true, create: true, start: true, stop: true, delete: true, display: true };
   const command = argv[0];
   if (!command || !Object.hasOwn(commands, command)) throw new Error(`Expected a command.\n${USAGE}`);
-  const args: Args = { command: command as Command, json: false, yes: false, headless: false };
+  const args: Args = { command: command as Command, json: false, yes: false };
   const seen = new Set<string>();
-  const strings: Record<string, true> = { sdk: true, root: true, runtime: true, name: true, image: true, device: true, serial: true, job: true };
+  const strings: Record<string, true> = { sdk: true, root: true, runtime: true, name: true, image: true, device: true, serial: true };
   for (let i = 1; i < argv.length; i++) {
     const flag = argv[i]!;
     const key = flag.slice(2);
     if (!flag.startsWith("--") || seen.has(key)) throw new Error(`Invalid or repeated argument ${flag}. Use --help.`);
     seen.add(key);
-    if (key === "json" || key === "yes" || key === "headless") args[key] = true;
+    if (key === "json" || key === "yes") args[key] = true;
     else if (Object.hasOwn(strings, key)) {
       const value = argv[++i];
       if (!value || value.startsWith("--")) throw new Error(`Missing value for ${flag}.`);
@@ -66,15 +65,15 @@ function parseArgs(argv: string[]): Args {
   const only = (key: string, allowed: string[]) => {
     if (seen.has(key) && !allowed.includes(command)) throw new Error(`--${key} is only valid for ${allowed.join(" or ")}.`);
   };
-  only("name", ["create", "start", "stop", "delete", "view"]);
+  only("name", ["create", "start", "stop", "delete", "display"]);
   only("image", ["create"]);
   only("device", ["create"]);
-  only("serial", ["stop", "view"]);
-  only("headless", ["start"]);
+  only("serial", ["stop", "display"]);
   only("yes", ["delete"]);
-  only("job", ["view"]);
+  only("json", ["list", "images", "profiles", "create", "start", "stop", "delete"]);
   if (args.runtime && !args.root) throw new Error("--runtime is only needed with --root; omit it for standalone commands.");
-  if (args.job && !path.isAbsolute(args.job)) throw new Error("--job must be an absolute path to a private job directory.");
+  if (args.command === "display" && (args.root || args.sdk)) throw new Error("display finds the emulator by --serial or --name; --root and --sdk do not apply.");
+  if (args.command === "display" && !args.serial && !args.name) throw new Error("display requires --serial or --name.");
   if (args.name) validateName(args.name);
   if (args.serial && !/^emulator-\d+$/.test(args.serial)) throw new Error("--serial must be emulator-PORT, never a physical device serial.");
   if (command === "delete" && !args.yes) throw new Error("Deletion requires --yes. This permanently deletes the selected AVD and its data.");
@@ -82,6 +81,7 @@ function parseArgs(argv: string[]): Args {
 }
 
 async function main(args: Args): Promise<void> {
+  if (args.command === "display") { await runDisplay(await emulatorEndpoint(args.serial, args.name)); return; }
   const project = args.root ? await resolveProject(args.root, args.runtime) : undefined;
   const root = resolveSdk(args.sdk, project);
   const sdk = new AndroidSdk(root);
@@ -90,7 +90,7 @@ async function main(args: Args): Promise<void> {
     if (!name) throw new Error(`Specify --name for ${args.command}, or --root for the project's configured AVD.`);
     return validateName(name);
   };
-  let result: Record<string, unknown>;
+  let result: Record<string, unknown> = {};
   switch (args.command) {
     case "list": {
       const snapshot = await sdk.snapshot();
@@ -115,7 +115,7 @@ async function main(args: Args): Promise<void> {
     }
     case "start": {
       const avd = selectedName();
-      result = { message: `Emulator ${avd} is active.`, name: avd, ...await sdk.start(avd, args.headless) };
+      result = { message: `Emulator ${avd} is active.`, name: avd, ...await sdk.start(avd) };
       break;
     }
     case "stop": {
@@ -128,19 +128,6 @@ async function main(args: Args): Promise<void> {
       await sdk.delete(avd);
       result = { message: `Deleted ${avd}.`, name: avd };
       break;
-    }
-    case "view": {
-      const wantedName = args.name ?? (args.serial ? undefined : selectedName());
-      const running = await sdk.running();
-      const matches = running.filter(device => args.serial ? device.serial === args.serial : device.name === wantedName);
-      if (matches.length !== 1) throw new Error(matches.length
-        ? `Multiple emulators run ${wantedName}. Select one with --serial: ${matches.map(device => device.serial).join(", ")}`
-        : `No running emulator matches ${args.serial ?? wantedName}. Start the AVD first.`);
-      const selected = matches[0]!;
-      if (wantedName && selected.name !== wantedName) throw new Error(`Cannot confirm ${selected.serial} runs ${wantedName}; its AVD is ${selected.name ?? "unidentified"}.`);
-      if (selected.state !== "running") throw new Error(`${selected.serial} is ${selected.state}; wait until it is connected before opening a view.`);
-      await runView({ adb: await sdk.tool("adb"), serial: selected.serial, job: args.job });
-      return;
     }
   }
   if (args.json) console.log(JSON.stringify(result));

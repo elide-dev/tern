@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
-import { mkdtemp, open, readFile, readdir, stat } from "node:fs/promises";
+import { mkdtemp, open, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -123,6 +123,12 @@ export class AndroidSdk {
     if (!(await this.profiles()).some(profile => profile.id === device)) throw new Error(`Unknown hardware profile ${device}. Run profiles to list available IDs.`);
     await run(await this.manager(), ["create", "avd", "--name", name, "--package", image, "--device", device], { env: this.env, input: "no\n", timeout: 120_000 });
     if (!(await this.names()).includes(name)) throw new Error(`avdmanager did not register ${name}. Check ANDROID_AVD_HOME and the command-line tools installation.`);
+    // avdmanager copies the profile's keyboard (none on phones). Without a keyboard device the emulator
+    // drops every key event, Back and Home included; Android Studio enables it by default too.
+    const config = path.join(await this.directory(name), "config.ini");
+    const text = await readFile(config, "utf8");
+    const setting = /^hw\.keyboard\s*=.*$/m;
+    await writeFile(config, setting.test(text) ? text.replace(setting, "hw.keyboard = yes") : `${text}${text.endsWith("\n") ? "" : "\n"}hw.keyboard = yes\n`);
   }
 
   async stop(name?: string, serial?: string): Promise<{ serial: string; name?: string }> {
@@ -145,14 +151,19 @@ export class AndroidSdk {
     throw new Error(`Stop was requested for ${selected.serial}, but it is still attached. Wait for it to exit before deleting its AVD.`);
   }
 
-  private async assertUnlocked(name: string): Promise<void> {
+  /** The AVD's content directory, as registered in its NAME.ini. */
+  private async directory(name: string): Promise<string> {
     const userHome = process.env.ANDROID_USER_HOME ?? path.join(os.homedir(), ".android");
     const avdHome = process.env.ANDROID_AVD_HOME ?? path.join(process.env.ANDROID_EMULATOR_HOME ?? userHome, "avd");
     const ini = await readFile(path.join(avdHome, `${name}.ini`), "utf8").catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return "";
       throw error;
     });
-    const directory = /^path=(.+)$/m.exec(ini)?.[1]?.trim() ?? path.join(avdHome, `${name}.avd`);
+    return /^path=(.+)$/m.exec(ini)?.[1]?.trim() ?? path.join(avdHome, `${name}.avd`);
+  }
+
+  private async assertUnlocked(name: string): Promise<void> {
+    const directory = await this.directory(name);
     const entries = await readdir(directory).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return [];
       throw error;
@@ -175,7 +186,7 @@ export class AndroidSdk {
     if ((await this.names()).includes(name)) throw new Error(`avdmanager completed but ${name} is still registered. Check its output and Android AVD home.`);
   }
 
-  async start(name: string, headless: boolean): Promise<{ serial: string; state: string; log?: string }> {
+  async start(name: string): Promise<{ serial: string; state: string; log?: string }> {
     validateName(name);
     const snapshot = await this.snapshot();
     const existing = snapshot.running.filter(device => device.name === name);
@@ -190,7 +201,7 @@ export class AndroidSdk {
     const fd = openSync(log, "wx", 0o600);
     let child: ChildProcess;
     try {
-      child = spawn(emulator, ["-avd", name, ...(headless ? ["-no-window", "-no-audio"] : [])], {
+      child = spawn(emulator, ["-avd", name, "-no-window", "-grpc-use-token", ...(process.platform === "darwin" ? ["-gpu", "host"] : [])], {
         env: { ...process.env, ...this.env }, detached: true, stdio: ["ignore", fd, fd],
       });
     } finally { closeSync(fd); }

@@ -1,7 +1,7 @@
 local ui = tern.ui
-local source = require("./source")
 local M = {}
 local entries = {}
+local displays = {}
 local configuration, plugin_path, runtime_path
 local refresh
 
@@ -25,20 +25,22 @@ local function render(cx, state)
   local rows = {}
   for index, avd in state.avds or {} do
     local running = avd.serial ~= nil
-    local actions = { button(running and "Stop" or "Start", (running and "stop-" or "start-") .. index, disabled) }
-    if running then
-      table.insert(actions, button("Browser mirror", "view-" .. index, disabled or state.mirror ~= nil))
-    else
-      table.insert(actions, button("Delete…", "delete-" .. index, disabled))
-    end
-    table.insert(rows, ui.node("row", { role = "android-device", gap = "md" }, {
-      ui.node("col", { role = "android-device-info", gap = "sm", grow = 1 }, {
-        ui.el("strong", { text = avd.name, role = "android-device-name" }),
-        ui.el("div", { role = running and "android-running" or "android-stopped",
-          text = avd.state .. (avd.serial and (" · " .. avd.serial) or "") }),
-      }),
-      ui.node("row", { role = "android-device-actions", gap = "sm" }, actions),
-    }))
+    local actions = running
+        and { button("Show", "show-" .. index, disabled), button("Stop", "stop-" .. index, disabled) }
+      or { button("Start", "start-" .. index, disabled), button("Delete…", "delete-" .. index, disabled) }
+    table.insert(
+      rows,
+      ui.node("row", { role = "android-device", gap = "md" }, {
+        ui.node("col", { role = "android-device-info", gap = "sm", grow = 1 }, {
+          ui.el("strong", { text = avd.name, role = "android-device-name" }),
+          ui.el("div", {
+            role = running and "android-running" or "android-stopped",
+            text = avd.state .. (avd.serial and (" · " .. avd.serial) or ""),
+          }),
+        }),
+        ui.node("row", { role = "android-device-actions", gap = "sm" }, actions),
+      })
+    )
   end
   if #rows == 0 and not state.busy and not state.failed then
     table.insert(rows, ui.el("div", { text = "No virtual devices. Create one from an installed system image." }))
@@ -54,15 +56,20 @@ local function render(cx, state)
   if state.project and state.project.avd and not configured_exists then
     table.insert(controls, button("Create " .. state.project.avd, "configured", disabled))
   end
-  cx.canvas:set(state.pane, { view = ui.node("col", { role = "android-manager", gap = "md" }, {
-    ui.el("strong", { role = "android-heading", text = "Android devices" }),
-    ui.el("div", { role = "android-context", text = state.context and state.context.root or "Local Android SDK" }),
-    ui.node("row", { role = "android-toolbar", gap = "sm" }, controls),
-    ui.el("div", { role = "android-status", text = state.message or "Loading devices…" }),
-    ui.node("col", { gap = "sm" }, rows),
-    ui.el("div", { role = "android-note", text = "Start opens the emulator in its own window. Native embedding is unavailable; Browser mirror is an optional low-frame-rate ADB view." }),
-    ui.el("div", { role = "android-sdk", text = state.sdk and ("SDK · " .. state.sdk) or "" }),
-  }) })
+  cx.canvas:set(state.pane, {
+    view = ui.node("col", { role = "android-manager", gap = "md" }, {
+      ui.el("strong", { role = "android-heading", text = "Android devices" }),
+      ui.el("div", { role = "android-context", text = state.context and state.context.root or "Local Android SDK" }),
+      ui.node("row", { role = "android-toolbar", gap = "sm" }, controls),
+      ui.el("div", { role = "android-status", text = state.message or "Loading devices…" }),
+      ui.node("col", { gap = "sm" }, rows),
+      ui.el(
+        "div",
+        { role = "android-note", text = "Closing a device pane leaves the emulator running. Stop shuts it down." }
+      ),
+      ui.el("div", { role = "android-sdk", text = state.sdk and ("SDK · " .. state.sdk) or "" }),
+    }),
+  })
 end
 
 local function command_args(state, command, arguments)
@@ -163,98 +170,72 @@ local function mutate(cx, state, command, arguments)
   end)
 end
 
-local function mirror(cx, state, avd)
-  if state.mirror or not avd.serial then
-    return
+-- The device's pane: a terminal running the helper's display. Returns the pane id.
+local function show(cx, state, avd)
+  if not avd.serial then
+    return nil
   end
-  local job = tern.plugin.data .. "/android-views/" .. source.uuid(math.random)
-  local session = { job = job }
-  local function cancel()
-    pcall(tern.fs.write, job .. "/cancel", "cancel\n")
-    if session.timer then
-      session.timer:cancel()
-      session.timer = nil
+  local title = avd.name .. " · " .. avd.serial
+  local pane = displays[avd.serial]
+  local info = pane and cx.session:pane(pane)
+  if not info or info.exited ~= nil then
+    pane = nil
+    -- A plugin reload forgets `displays`; the display titles its pane after the device.
+    for _, candidate in cx.session:panes() do
+      if candidate.title == title and candidate.exited == nil then
+        pane = candidate.pane
+        break
+      end
     end
   end
-  session.cancel = cancel
-  local ok, problem = pcall(function()
-    tern.fs.mkdir(job)
-    tern.fs.write(job .. "/lease", "alive\n")
-    state.mirror = session
-    state.message = "Opening " .. avd.name .. " mirror…"
-    render(cx, state)
-    local argv = command_args(state, "view", { "--serial", avd.serial, "--name", avd.name, "--job", job })
-    tern.process.run(argv, {}, function(result, current)
-      cancel()
-      pcall(tern.fs.remove, job)
-      if state.mirror == session then
-        state.mirror = nil
-      end
-      if current and alive(current, state) then
-        state.message = result.status == 0 and "Mirror disconnected; emulator left running."
-          or string.sub(result.stderr or "Android mirror failed.", -4096)
-        render(current, state)
-      end
-    end)
-    local started = tern.now()
-    local function watch(current)
-      session.timer = nil
-      if not current or not alive(current, state) or state.mirror ~= session then
-        cancel()
-        return
-      end
-      local renewed = pcall(tern.fs.write, job .. "/lease", "alive\n")
-      if not renewed then
-        cancel()
-        return
-      end
-      if not session.opened then
-        local decoded, value = pcall(function()
-          return tern.json.decode(tern.fs.read(job .. "/view.json", 8192))
-        end)
-        local port, token
-        if decoded and type(value) == "table" and type(value.url) == "string" then
-          port, token = string.match(value.url, "^http://127%.0%.0%.1:(%d+)/(%x+)/$")
-        end
-        if port and #token == 64 and tonumber(port) >= 1 and tonumber(port) <= 65535 then
-          session.opened = true
-          current.browser:call({ op = "open", owner = state.pane, how = "beside", url = value.url })
-            :next(function(result, err, fresh)
-              if err or (result and result.error) then
-                cancel()
-                if fresh then
-                  fresh:toast("error", "Could not open Android mirror.", tostring(err or result.error.message))
-                end
-              end
-            end)
-          state.message = "Mirroring " .. avd.name .. ". Disconnect in the browser to close the mirror."
-          render(current, state)
-        elseif tern.now() - started > 45000 then
-          cancel()
-          state.message = "Android mirror did not become ready."
-          render(current, state)
-          return
-        end
-      end
-      session.timer = tern.timer(1000, watch)
-    end
-    session.timer = tern.timer(100, watch)
-  end)
-  if not ok then
-    cancel()
-    state.mirror = nil
-    state.message = tostring(problem)
-    cx:toast("error", state.message)
-    render(cx, state)
+  if pane then
+    displays[avd.serial] = pane
+    cx.layout:focus(pane)
+    return pane
   end
+  local argv = {
+    plugin_path((configuration() or {}).android or "../dist/elide-tern-android"),
+    "display",
+    "--serial",
+    avd.serial,
+    "--name",
+    avd.name,
+  }
+  local command = {}
+  for _, value in argv do
+    table.insert(command, "'" .. string.gsub(value, "'", "'\"'\"'") .. "'")
+  end
+  local spec = { command = "exec " .. table.concat(command, " ") }
+  local target = if state.pane and cx.session:pane(state.pane) then state.pane else cx.session:focused()
+  if target then
+    pane = cx.layout:split(target, "right", spec, { focus = true })
+  else
+    pane = cx.layout:new_tab(spec)
+  end
+  if not pane then
+    cx:toast("error", "Could not open " .. avd.name .. ".")
+    return nil
+  end
+  displays[avd.serial] = pane
+  return pane
 end
 
 local function selected(cx, state, command, avd)
-  if command == "view" then
-    mirror(cx, state, avd)
+  if command == "show" then
+    show(cx, state, avd)
     return
   end
   local arguments = { "--name", avd.name }
+  if command == "start" then
+    request(cx, state, "start", arguments, function(current, value)
+      current:toast("info", value.message or "Android operation completed.")
+      show(current, state, { name = value.name or avd.name, serial = value.serial })
+      if state.pane then
+        refresh(current, state, value.message)
+      end
+    end)
+    return
+  end
   if command == "stop" and avd.serial then
     table.insert(arguments, "--serial")
     table.insert(arguments, avd.serial)
@@ -263,10 +244,13 @@ local function selected(cx, state, command, avd)
     mutate(cx, state, command, arguments)
     return
   end
-  cx:pick({ placeholder = "Delete " .. avd.name .. " and all its data?", items = {
-    { label = "Cancel", value = "cancel" },
-    { label = "Delete " .. avd.name, value = "delete" },
-  } }):next(function(item, err, current)
+  cx:pick({
+    placeholder = "Delete " .. avd.name .. " and all its data?",
+    items = {
+      { label = "Cancel", value = "cancel" },
+      { label = "Delete " .. avd.name, value = "delete" },
+    },
+  }):next(function(item, err, current)
     if current and item and item.value == "delete" and alive(current, state) then
       table.insert(arguments, "--yes")
       mutate(current, state, "delete", arguments)
@@ -297,25 +281,32 @@ local function create(cx, state)
           for _, profile in profiles.profiles or {} do
             table.insert(devices, { label = profile.name or profile.id, value = profile.id })
           end
-          profiles_cx:pick({ placeholder = "AVD hardware profile", items = devices }):next(function(device, device_err, next_cx)
-            if device_err and next_cx then
-              next_cx:toast("error", device_err)
-            elseif device and next_cx and alive(next_cx, state) then
-              next_cx:prompt({ placeholder = "AVD name (letters, digits, dot, dash, underscore)", value = "", action = "create" })
-                :next(function(name, name_err, final)
-                  if name_err and final then
-                    final:toast("error", name_err)
-                  elseif final and name and name ~= "" and alive(final, state) then
-                    local arguments = { "--name", name, "--image", image.value }
-                    if device.value ~= "" then
-                      table.insert(arguments, "--device")
-                      table.insert(arguments, device.value)
+          profiles_cx
+            :pick({ placeholder = "AVD hardware profile", items = devices })
+            :next(function(device, device_err, next_cx)
+              if device_err and next_cx then
+                next_cx:toast("error", device_err)
+              elseif device and next_cx and alive(next_cx, state) then
+                next_cx
+                  :prompt({
+                    placeholder = "AVD name (letters, digits, dot, dash, underscore)",
+                    value = "",
+                    action = "create",
+                  })
+                  :next(function(name, name_err, final)
+                    if name_err and final then
+                      final:toast("error", name_err)
+                    elseif final and name and name ~= "" and alive(final, state) then
+                      local arguments = { "--name", name, "--image", image.value }
+                      if device.value ~= "" then
+                        table.insert(arguments, "--device")
+                        table.insert(arguments, device.value)
+                      end
+                      mutate(final, state, "create", arguments)
                     end
-                    mutate(final, state, "create", arguments)
-                  end
-                end)
-            end
-          end)
+                  end)
+              end
+            end)
         end)
       end
     end)
@@ -365,7 +356,9 @@ end
 
 function M.install(config, path, runtime)
   configuration, plugin_path, runtime_path = config, path, runtime
-  tern.css("android-manager", [[
+  tern.css(
+    "android-manager",
+    [[
     [data-role="android-manager"] { padding: 20px; overflow: auto; font-family: system-ui, sans-serif; max-width: 960px; }
     [data-role="android-heading"] { font-size: 18px; font-weight: 600; }
     [data-role="android-context"], [data-role="android-sdk"], [data-role="android-note"] { overflow-wrap: anywhere; color: var(--t2); font-size: 12px; }
@@ -377,49 +370,66 @@ function M.install(config, path, runtime)
     [data-role="android-running"] { color: var(--ok); font-size: 12px; }
     [data-role="android-stopped"] { color: var(--t2); font-size: 12px; }
     [data-role="android-status"] { font-size: 12px; overflow-wrap: anywhere; }
-  ]])
-  tern.command({ id = "android", title = "Manage Android Virtual Devices", icon = "list", run = function(cx)
-    M.open(cx)
-  end })
-  for _, spec in {
-    { id = "create", title = "Create Android Virtual Device" },
-    { id = "start", title = "Start Android Virtual Device" },
-    { id = "stop", title = "Stop Android Virtual Device" },
-    { id = "delete", title = "Delete Android Virtual Device" },
-  } do
-    tern.command({ id = "android_" .. spec.id, title = spec.title, run = function(cx)
-      if not local_host(cx) then
-        return
-      end
-      local state = {}
-      if spec.id == "create" then
-        create(cx, state)
-        return
-      end
-      request(cx, state, "list", {}, function(current, value)
-        local items = {}
-        local devices = {}
-        for _, avd in value.avds or {} do
-          local running = avd.serial ~= nil
-          if (spec.id == "stop" and running) or (spec.id ~= "stop" and not running) then
-            local id = avd.serial or avd.name
-            devices[id] = avd
-            table.insert(items, { label = avd.name .. (avd.serial and (" · " .. avd.serial) or ""), value = id })
-          end
-        end
-        if #items == 0 then
-          current:toast("info", "No matching virtual devices. Open Manage Android Virtual Devices to refresh or create one.")
+  ]]
+  )
+  tern.command({
+    id = "android",
+    title = "Manage Android Virtual Devices",
+    icon = "list",
+    run = function(cx)
+      M.open(cx)
+    end,
+  })
+  for _, spec in
+    {
+      { id = "create", title = "Create Android Virtual Device" },
+      { id = "start", title = "Start Android Virtual Device" },
+      { id = "show", title = "Show Android Virtual Device" },
+      { id = "stop", title = "Stop Android Virtual Device" },
+      { id = "delete", title = "Delete Android Virtual Device" },
+    }
+  do
+    tern.command({
+      id = "android_" .. spec.id,
+      title = spec.title,
+      run = function(cx)
+        if not local_host(cx) then
           return
         end
-        current:pick({ placeholder = spec.title, items = items }):next(function(item, err, fresh)
-          if err and fresh then
-            fresh:toast("error", err)
-          elseif item and fresh and devices[item.value] then
-            selected(fresh, state, spec.id, devices[item.value])
+        local state = {}
+        if spec.id == "create" then
+          create(cx, state)
+          return
+        end
+        request(cx, state, "list", {}, function(current, value)
+          local items = {}
+          local devices = {}
+          for _, avd in value.avds or {} do
+            local running = avd.serial ~= nil
+            local wants_running = spec.id == "stop" or spec.id == "show"
+            if wants_running == running then
+              local id = avd.serial or avd.name
+              devices[id] = avd
+              table.insert(items, { label = avd.name .. (avd.serial and (" · " .. avd.serial) or ""), value = id })
+            end
           end
+          if #items == 0 then
+            current:toast(
+              "info",
+              "No matching virtual devices. Open Manage Android Virtual Devices to refresh or create one."
+            )
+            return
+          end
+          current:pick({ placeholder = spec.title, items = items }):next(function(item, err, fresh)
+            if err and fresh then
+              fresh:toast("error", err)
+            elseif item and fresh and devices[item.value] then
+              selected(fresh, state, spec.id, devices[item.value])
+            end
+          end)
         end)
-      end)
-    end })
+      end,
+    })
   end
   tern.on("canvas_action", function(event, cx)
     local state = entries[event.pane]
@@ -439,7 +449,7 @@ function M.install(config, path, runtime)
       else
         local command, index = string.match(event.act, "^(%a+)%-(%d+)$")
         local avd = index and state.avds and state.avds[tonumber(index)]
-        if avd and (command == "start" or command == "stop" or command == "delete" or command == "view") then
+        if avd and (command == "start" or command == "stop" or command == "delete" or command == "show") then
           selected(cx, state, command, avd)
         end
       end
@@ -448,11 +458,13 @@ function M.install(config, path, runtime)
   end)
   tern.on("pane_closed", function(event, cx)
     if entries[event.pane] then
-      if entries[event.pane].mirror then
-        entries[event.pane].mirror.cancel()
-      end
       entries[event.pane].closed = true
       entries[event.pane] = nil
+    end
+    for serial, pane in displays do
+      if pane == event.pane then
+        displays[serial] = nil
+      end
     end
     tern.kv.set(key(cx, event.pane), nil)
   end)

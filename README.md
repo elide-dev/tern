@@ -31,8 +31,8 @@ shared project model, layoutlib renderer/runtime installer and Java sources into
 `dist/elide-tern-compose`; Bun and the sibling checkout are not needed at runtime.
 Release bundles must include this executable and `dist/elide-tern-compose.LICENSE`.
 `make android` bundles the same checkout's SDK/manifest utilities into
-`dist/elide-tern-android`, including its browser mirror. Releases also require this
-executable and `dist/elide-tern-android.LICENSE`.
+`dist/elide-tern-android`, including its embedded emulator display. Releases also require
+this executable and `dist/elide-tern-android.LICENSE`.
 
 ```sh
 make build
@@ -176,10 +176,10 @@ No embedded SDK is required for Compose itself.
 
 Choose **Manage Android Virtual Devices** from the palette, even outside an Elide
 project. The native manager lists AVDs and running emulator serials, with **Create**,
-**Start**, **Stop**, **Delete** and **Browser mirror** actions, shown only when applicable. Separate create/start/stop/delete
-palette commands work without a project too. **Refresh** reads changes made by Android
-Studio or other terminals. Deletion asks for confirmation and refuses running or locked
-devices; creation never overwrites an existing AVD.
+**Start**, **Show**, **Stop** and **Delete** actions, shown only when applicable. Separate
+create/start/show/stop/delete palette commands work without a project too. **Refresh**
+reads changes made by Android Studio or other terminals. Deletion asks for confirmation and
+refuses running or locked devices; creation never overwrites an existing AVD.
 
 The project menu and workspace toolbar offer **Manage project Android devices**.
 This evaluates the project's Android configuration using the configured Elide runtime;
@@ -198,17 +198,23 @@ Optional `plugin/config.json` settings:
 - `android`: helper executable; defaults to `../dist/elide-tern-android`.
 - `android_sdk`: SDK directory override, distinct from the embedded Elide `sdk` setting.
 
-**Start** opens the emulator's own window and returns once ADB registers it; Android may
-still be booting. **Browser mirror** mirrors a running device in an adjacent Tern browser pane.
-It supports taps, drag-and-release swipes, long presses, scroll swipes, navigation keys
-and printable ASCII text. Escape releases keyboard focus. This is an ADB screenshot
-mirror (up to 2.5 frames/second), not native-window embedding or a video stream; no audio,
-multitouch or IME injection. Use the emulator window for those capabilities.
+**Start** launches the emulator without an OS window and opens the device in a Tern pane
+beside the manager; **Show** focuses that pane, or opens it again after it was closed. The
+pane draws the screen with the kitty graphics protocol from the emulator's gRPC screenshot
+stream and updates whenever the screen changes. Clicks and drags are touches, Alt+drag is a
+two-finger pinch or rotate, and the wheel scrolls. Keys and pasted text go to the device.
+The bottom row holds Back, Home, Recents, Power, volume, rotation and Close.
 
-Closing the manager or disconnecting/closing its browser stops the mirror, **not the
-emulator**. Plugin reload expires the old mirror's lease; choose **Browser mirror** again.
-Only **Stop** terminates a device, and only the selected emulator. Each mirror has an
-unpredictable loopback access URL; do not share it.
+Typing and the hardware buttons need the AVD's keyboard input (`hw.keyboard = yes` in its
+`config.ini`). **Create** enables it, as Android Studio does; for other AVDs the pane names
+the setting when it drops a key. Touches land on the center of the terminal cell under the
+pointer, because Tern rounds the cell size it reports.
+
+Closing a device pane leaves the emulator running. Only **Stop** terminates a device, and
+only the selected emulator; its pane then closes. Emulators started elsewhere (for example
+by Android Studio) expose no token-authenticated gRPC endpoint and cannot be shown: stop
+them, then start them from Tern. Audio plays on the host. On macOS, start uses host GPU
+rendering (`-gpu host`).
 
 The compiled helper also works directly from any terminal, with no Tern, Bun, sibling
 checkout or Elide runtime required unless `--root` is supplied:
@@ -219,8 +225,8 @@ dist/elide-tern-android images
 dist/elide-tern-android profiles
 dist/elide-tern-android create --name demo \
   --image 'system-images;android-36;default;arm64-v8a' --device pixel_6
-dist/elide-tern-android start --name demo              # --headless omits the OS window
-dist/elide-tern-android view --name demo               # open the printed URL in a browser
+dist/elide-tern-android start --name demo              # no OS window
+dist/elide-tern-android display --name demo            # in a kitty-graphics terminal
 dist/elide-tern-android stop --name demo               # or --serial emulator-5554
 dist/elide-tern-android delete --name demo --yes
 dist/elide-tern-android create --root /path/to/android-project --runtime elide
@@ -234,9 +240,10 @@ custom AVD. Helpers support macOS/Linux SDK tools; Windows `.bat` launchers are 
 
 With an installed, host-compatible image, run
 `make test-android ANDROID_IMAGE='system-images;android-34;default;arm64-v8a'`
-(optionally `ANDROID_SDK=/path/to/sdk`). This creates an isolated AVD, checks overwrite
-and deletion protection, starts/stops/restarts it, then deletes it. It also covers the
-persistent advisory lock Android leaves behind after a clean emulator exit.
+(optionally `ANDROID_SDK=/path/to/sdk`). This creates an isolated AVD, checks its keyboard
+setting, overwrite and deletion protection, starts/stops/restarts it, draws one display frame
+over a pseudo-terminal, then deletes it. It also covers the persistent advisory lock
+Android leaves behind after a clean emulator exit.
 
 ### Debugging
 
