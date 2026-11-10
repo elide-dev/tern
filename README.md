@@ -18,7 +18,7 @@ runtime and SDK. See [installation instructions](docs/manual-install.md).
 
 ## Development
 
-Requires Rust with edition 2024 support (use the toolchain pinned by `../elide`), Cap'n Proto
+Requires Rust via rustup (this checkout pins the nightly required by `../elide`), Cap'n Proto
 (capnp compiler), Python 3, Tern, Bun, and StyLua 2.5.2 (`mise install`). Native SDK execution
 supports macOS arm64 and Linux amd64, subject to the selected SDK's deployment requirements.
 The configured runtime must support `elide tern`; `make link` builds the helpers and links the plugin. The broker links
