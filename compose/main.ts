@@ -12,6 +12,8 @@ import { ComposeRenderer, type PreviewImage } from "@elide/compose-render";
 import { ensureComposeRuntime } from "@elide/compose-runtime";
 import helperSources from "@elide/compose-helpers";
 import licenses from "@elide/compose-licenses";
+import { startLive, type LivePreview } from "./live";
+import { createLiveServer, type LiveServer } from "./server";
 
 const run = promisify(execFile);
 const MAX_SOURCE = 8 * 1024 * 1024;
@@ -20,15 +22,15 @@ const MAX_GALLERY = 32;
 const MAX_GALLERY_BYTES = 32 * 1024 * 1024;
 const MAX_LOG = 24 * 1024;
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-const USAGE = "Usage: elide-tern-compose --runtime <elide> --root <project/workspace> --file <saved.kt> --job <unique-directory> --cache <directory> [--java <java-executable>] [--lease <file>]\n       elide-tern-compose --help | --licenses\n";
+const USAGE = "Usage: elide-tern-compose --runtime <elide> --root <project/workspace> --file <saved.kt> --job <unique-directory> --cache <directory> [--java <java-executable>] [--lease <file>] [--mode snapshot|live] [--komodo <launcher>]\n       elide-tern-compose --help | --licenses\n";
 
-type Args = { runtime: string; root: string; file: string; job: string; cache: string; java?: string; lease?: string };
+type Args = { runtime: string; root: string; file: string; job: string; cache: string; java?: string; lease?: string; mode?: string; komodo?: string };
 type Card = { id: string; name: string; detail: string; file?: string; width?: number; height?: number; error?: string };
 type Result = { phase: "ready" | "error" | "cancelled"; message: string; source: string; root: string; images: Card[] };
 
 function parseArgs(argv: string[]): Args {
   const values: Record<string, string> = {};
-  const names: Record<string, true> = { runtime: true, root: true, file: true, job: true, cache: true, java: true, lease: true };
+  const names: Record<string, true> = { runtime: true, root: true, file: true, job: true, cache: true, java: true, lease: true, mode: true, komodo: true };
   for (let i = 0; i < argv.length; i += 2) {
     const key = argv[i]?.slice(2);
     const value = argv[i + 1];
@@ -40,6 +42,7 @@ function parseArgs(argv: string[]): Args {
   for (const key of ["runtime", "root", "file", "job", "cache"]) {
     if (!values[key]) throw new Error(`Missing --${key}.\n${USAGE}`);
   }
+  if (values.mode && values.mode !== "snapshot" && values.mode !== "live") throw new Error("--mode must be snapshot or live.");
   return values as Args;
 }
 
@@ -199,6 +202,9 @@ async function main(argv: string[]): Promise<Result> {
   let phase = "resolving";
   let cancelled = false;
   let renderer: ComposeRenderer | undefined;
+  let live: LivePreview | undefined;
+  let server: LiveServer | undefined;
+  let liveTimer: NodeJS.Timeout | undefined;
   let timer: NodeJS.Timeout | undefined;
   let release: (() => void) | undefined;
   const controller = new AbortController();
@@ -217,7 +223,7 @@ async function main(argv: string[]): Promise<Result> {
     lastStatus = Date.now();
     try {
       const temporary = path.join(job, "status.json.tmp");
-      writeFileSync(temporary, JSON.stringify({ phase, message: text.slice(0, 2048) }), { mode: 0o600 });
+      writeFileSync(temporary, JSON.stringify({ phase, message: text.slice(0, 2048), ...(server ? { url: server.url } : {}) }), { mode: 0o600 });
       renameSync(temporary, path.join(job, "status.json"));
     } catch (error) {
       controller.abort(new Error(`Cannot publish snapshot status: ${message(error)}`));
@@ -331,6 +337,46 @@ async function main(argv: string[]): Promise<Result> {
     status("runtime", `Preparing Compose runtime for ${selected}…`);
     const composeRuntime = await ensureComposeRuntime(cache, signal, (text) => { line(text); status("runtime", text, false); });
     const helpers = await extractHelpers(cache, signal);
+    if (args.mode === "live") {
+      let observed = sourceDigest;
+      let refreshing = false;
+      const refresh = async (): Promise<void> => {
+        if (!live || refreshing || signal.aborted) return;
+        refreshing = true;
+        server!.reset();
+        server!.status("refreshing", "Compiling saved source…");
+        status("refreshing", "Compiling saved source…");
+        try {
+          observed = digest(await sourceBytes(source));
+          const images = await live.refresh();
+          server!.publish(images, true);
+        } finally { refreshing = false; }
+      };
+      server = createLiveServer({ signal, refresh, stop: () => stop("Live preview stopped.") });
+      status("starting", `Starting live previews using ${selected}…`);
+      live = await startLive({
+        runtime, root, source, packageName: packageDeclaration,
+        build: { model, artifact: target, models, bin: runtime },
+        composeRuntime, java, helpers, cache, signal, log: line, launcher: args.komodo,
+        onImages: images => server!.publish(images),
+        onStatus: (next, text) => { server!.status(next, text); status(next, text); },
+        onReset: () => server!.reset(),
+      });
+      server.attach(live);
+      server.publish(live.images, true);
+      // Poll saved source rather than editor buffers; atomic-save replacements remain visible.
+      liveTimer = setInterval(() => {
+        if (refreshing || signal.aborted) return;
+        void sourceBytes(source).then(bytes => {
+          if (digest(bytes) !== observed) return refresh();
+        }).catch(error => { server?.status("error", message(error)); status("error", message(error)); });
+      }, 750);
+      const stopped = Promise.withResolvers<void>();
+      if (signal.aborted) stopped.resolve();
+      else signal.addEventListener("abort", () => stopped.resolve(), { once: true });
+      await stopped.promise;
+      signal.throwIfAborted();
+    }
     status("rendering", `Rendering saved previews using ${selected}…`);
     renderer = await ComposeRenderer.create(composeRuntime, java, helpers, cache, job, signal, { weight: 1, quietMs: 2_147_483_647 });
     // This one-shot snapshot never grows a persistent pool or performs warm-up work.
@@ -354,6 +400,9 @@ async function main(argv: string[]): Promise<Result> {
     return { phase: cancelled ? "cancelled" : "error", message: summary, source, root, images: [] };
   } finally {
     clearInterval(timer);
+    clearInterval(liveTimer);
+    server?.dispose();
+    await live?.dispose();
     renderer?.dispose();
     release?.();
     if (job) {

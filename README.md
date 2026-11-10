@@ -5,7 +5,7 @@ Notebook workers load the same C ABI and Cap'n Proto SDK used by Elide Studio.
 Test and server hosts supervise the canonical runtime independently; GraalVM is
 never loaded into Tern's UI process.
 
-Native surfaces cover REPL, Tests, Debug, Compose snapshots, serving and trace inspection. Project
+Native surfaces cover REPL, Tests, Debug, Compose previews, serving and trace inspection. Project
 sessions share runs and debugger state between views and the built-in agent. SDK LSP/MCP channels
 have broker plumbing; standard client transports and live WebSocket MCP attachment
 remain follow-up work.
@@ -127,6 +127,8 @@ Optional `plugin/config.json` settings:
 - `compose`: helper executable; defaults to `../dist/elide-tern-compose`.
 - `compose_java`: JDK's `java` executable; otherwise uses the resolved project JDK.
 - `compose_cache`: renderer cache directory; defaults to the plugin's data directory.
+- `compose_komodo`: optional compatible Komodo launcher override for live previews.
+  Otherwise the helper resolves Komodo from the Elide installation.
 
 Build failures clear stale images; rendering failures appear on individual cards.
 **Cancel** and closing the pane stop active work. Plugin reload cancels work and restores
@@ -134,10 +136,29 @@ an idle panel; it never automatically executes previews. One Compose build owns 
 at a time. After a forced helper kill, its error names a lock to remove **only after confirming
 its Elide/JVM build processes have stopped**.
 
-This is the saved-file snapshot subset of the VSCode extension: no unsaved/live refresh,
-Komodo input, layout inspection, arbitrary-composable agent rendering, MCP or prewarming.
-Save edits and explicitly rebuild. Galleries allow 32 cards, 8 MiB per PNG, 32 MiB in total
-and 4096 pixels per side. No embedded SDK is required for Compose itself.
+**Live preview** builds the saved source and opens a Tern browser pane beside the gallery.
+It uses Komodo's protocol-2 `workspace-fir` preview session, not repeated snapshots.
+Click to focus a card, drag or scroll to interact, and type when the card reports keyboard
+support. Escape releases input. Frames and composition state update without rebuilding.
+Wheel input is translated to touch drags for the Android layoutlib host.
+Animation fidelity follows the installed Komodo/layoutlib host; the tested Komodo build
+can stall infinite transitions at a cycle boundary even while coroutine timers advance.
+
+Live mode requires a compatible Komodo distribution with Compose compiler plugins.
+It reports an unavailable/incompatible runtime rather than silently falling back to snapshots.
+Saved changes to the previewed file refresh automatically; **Refresh saved source** retries
+the refresh. Unsaved editor buffers are not compiled. Resource, dependency and other-source
+changes require cancelling and starting **Live preview** again. Refresh may reset composition state.
+IME composition and clipboard paste are not supported by the live keyboard protocol.
+
+The native pane owns the live session: **Cancel**, closing it or plugin reload stops the
+helper and Komodo. Closing the browser pane also stops the session after a five-second
+reload grace period. Only one browser controls a session. Its loopback URL contains a
+temporary access token; do not share it.
+
+Layout inspection, arbitrary-composable agent rendering, MCP and prewarming are not
+provided. Galleries allow 32 cards, 8 MiB per PNG, 32 MiB in total and 4096 pixels per side.
+No embedded SDK is required for Compose itself.
 
 ### Debugging
 

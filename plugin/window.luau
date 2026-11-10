@@ -817,6 +817,26 @@ tern.route.link(function(request, cx)
   if string.lower(string.sub(request.url, 1, 8)) ~= "elide://" then
     return nil
   end
+  local port, token = string.match(request.url, "^elide://compose%-live/(%d+)/(%x+)$")
+  if port and #token == 64 and tonumber(port) >= 1 and tonumber(port) <= 65535 then
+    if not local_host(cx) then
+      return { handled = true }
+    end
+    local owner = request.pane or cx.session:focused()
+    if owner then
+      cx.browser:call({
+        op = "open",
+        owner = owner,
+        how = "beside",
+        url = "http://127.0.0.1:" .. port .. "/" .. token .. "/",
+      }):next(function(result, err, current)
+        if err or (result and result.error) then
+          current:toast("error", "Could not open live Compose preview.", tostring(err or result.error.message))
+        end
+      end)
+    end
+    return { handled = true }
+  end
   local target = links.parse(request.url)
   local problem
   if not target then

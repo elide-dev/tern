@@ -64,7 +64,7 @@ exits after two minutes without clients. The native host closes sessions on exit
 crash. Runtime handles are not persisted; a new process starts new kernels.
 History is stored by the shared REPL in SQLite; drafts live in the frontend.
 
-## Compose snapshot block
+## Compose preview block
 
 `plugin/lib/compose.luau` defines `elide.compose`, a host block rather than a window
 canvas: canvases reject image nodes. Explicit palette/menu/workspace actions pass a
@@ -76,16 +76,17 @@ bundled unchanged from the sibling VSCode extension by `scripts/build-compose.ts
 The three Java helper sources are embedded too; VSCode APIs are not loaded.
 
 Each invocation has a unique `compose-jobs/<uuid>` directory. Atomic `status.json`
-reports progress. Completion stdout contains bounded metadata and PNG basenames;
-the block reads those files once, sends native `cx:blob` images and removes the job.
-Snapshots never write source buffers. The helper rejects a changed preview source
+reports progress. In snapshot mode, completion stdout contains bounded metadata and
+PNG basenames; the block reads those files once, sends native `cx:blob` images and removes
+the job. Snapshots never write source buffers. The helper rejects a changed preview source
 between build and publication; this is not an atomic snapshot of concurrent edits
 to the entire workspace. Rebuilds clear old cards before starting.
 
 The block renews a lease every second. Cancel/close writes `cancel`; the helper checks
 it and the 15-second lease every 500 ms, aborts CLI work and disposes renderer JVMs.
-There is no warm process after completion. Reload restores no images and starts no
-build: it cancels a recorded job and waits for its post-cleanup `done` marker.
+Snapshot mode leaves no warm process after completion; live mode owns its language
+server until cancellation. Reload restores no images and starts no build: it cancels
+a recorded job and waits for its post-cleanup `done` marker.
 A bounded restore wait permits another explicit attempt; the helper's exclusive
 `.dev/elide-tern-compose.lock` rejects overlapping Compose runs. A forced kill may
 leave detached Elide children, so abandoned locks are not automatically reclaimed.
@@ -95,7 +96,40 @@ The helper exports at most 32 cards / 32 MiB, at most 8 MiB per PNG and 4096 pix
 per side. Upstream rendering materializes the gallery before these export limits.
 Individual render errors remain cards; build failures publish no images. As with
 the other project actions, previews execute trusted project code, not sandboxed code.
-No live editing, Komodo, inspector or agent protocol is provided by this block.
+Live mode uses `compose/live.ts` and the shared `KomodoBackend`, including its private
+compiler inputs and retirement rules. `compose/komodo.ts` resolves the managed Komodo
+distribution (or an explicit launcher), writes a temporary project manifest using the
+shared project model, and owns a bounded stdio LSP connection. The language server
+opens an authenticated protocol-2 `workspace-fir` preview session. Disposal closes
+scenes and the language server, then terminates its process group before removing the
+temporary manifest and releasing the workspace lock.
+`compose/clock.ts` adds an authenticated, single-client loopback bridge around that
+session. It requests a frame after 100 ms without a pushed frame, with one outstanding
+request per hosted card, and pauses requests during configuration/compilation. This keeps
+delayed coroutines and animation clocks advancing when layoutlib's dirty-frame heuristic
+goes idle at identical pixels. It forwards the shared protocol unchanged with stream
+backpressure and closes both sockets with the backend.
+
+Tern native image nodes expose zoom but no raw pointer coordinates or key releases.
+The native block therefore opens a browser pane through `elide://compose-live/<port>/<token>`
+and `cx.browser:call({op="open", how="beside"})`. `compose/server.ts` binds only
+127.0.0.1 on an ephemeral port, requires the random 256-bit URL token and exact Host,
+and checks the WebSocket Origin. The self-contained page has a restrictive CSP and no
+third-party content. This link carries no build or file commands.
+
+One browser connection controls the session. Frames are coalesced by card, bounded by
+the gallery limits, and paced at 20 Hz with transport backpressure. Input carries a
+scene epoch; refresh/reset rejects old events and releases held pointers and keys.
+Browser blur/visibility changes release input too. Pointer capture retains drags outside
+the image; displayed coordinates are scaled to PNG pixels. Android layoutlib accepts
+touch events, so wheel bursts become paced touch drags. Keyboard support is capability-gated.
+Disconnect releases input immediately and cancels the helper after a five-second reload
+grace period. The native pane lease remains authoritative even without a browser.
+
+Live mode polls the saved preview source every 750 ms and serializes refreshes through
+the shared backend, including declaration/provider changes and compile errors. It does
+not synchronize unsaved native buffers; resource/dependency/other-source changes require
+a new build. Inspector and agent protocols are not exposed.
 
 ## Window integration points
 

@@ -23,6 +23,9 @@ const helpers = Object.fromEntries(await Promise.all(
 const aliases: Record<string, string> = {
   "@elide/ide-core": path.join(upstream, "packages/core/src/index.ts"),
   "@elide/compose-render": path.join(vscode, "src/composeRender.ts"),
+  "@elide/compose-backend": path.join(vscode, "src/composeBackend.ts"),
+  "@elide/compose-komodo": path.join(vscode, "src/composeKomodo.ts"),
+  "@elide/komodo-distribution": path.join(vscode, "src/komodoDistribution.ts"),
   "@elide/compose-runtime": path.join(vscode, "src/composeRuntime.ts"),
   yauzl,
 };
@@ -41,7 +44,7 @@ const result = await Bun.build({
   plugins: [{
     name: "elide-compose-sources",
     setup(build) {
-      build.onResolve({ filter: /^(@elide\/(ide-core|compose-render|compose-runtime|compose-helpers|compose-licenses)|yauzl)$/ }, (args) => {
+      build.onResolve({ filter: /^(@elide\/(ide-core|compose-render|compose-backend|compose-komodo|komodo-distribution|compose-runtime|compose-helpers|compose-licenses)|yauzl)$/ }, (args) => {
         if (Object.hasOwn(virtual, args.path)) return { path: args.path, namespace: "embedded" };
         return { path: aliases[args.path]! };
       });

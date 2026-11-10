@@ -1,5 +1,5 @@
--- Saved-file Compose snapshots. The one-shot helper owns compilation and renderer children;
--- this block owns its lease, job directory and the native image blobs.
+-- Saved snapshots and live sessions share a helper lease. Live input belongs to a
+-- browser pane: native image nodes expose zoom, not pointer coordinates.
 local ui = tern.ui
 local source = require("./source")
 local links = require("./links")
@@ -66,7 +66,7 @@ local function finish_job(state, cx, job)
     state.timer:cancel()
     state.timer = nil
   end
-  state.job, state.cancelling, state.restoring = nil, nil, nil
+  state.job, state.cancelling, state.restoring, state.url = nil, nil, nil, nil
   if alive(state) then
     cx:save()
     cx:render()
@@ -110,6 +110,16 @@ local function watch(state, cx)
     if progress and not state.cancelling then
       state.phase = text(progress.phase, 64)
       state.message = text(progress.message)
+      if state.mode == "live" and type(progress.url) == "string" then
+        local port, token = string.match(progress.url, "^http://127%.0%.0%.1:(%d+)/(%x+)/$")
+        if port and #token == 64 and tonumber(port) >= 1 and tonumber(port) <= 65535 then
+          state.url = progress.url
+          if not state.opened then
+            state.opened = true
+            cx:open("elide://compose-live/" .. port .. "/" .. token)
+          end
+        end
+      end
     end
     cx:render()
     watch(state, cx)
@@ -165,12 +175,13 @@ local function images(state, cx, result, job)
   end
 end
 
-local function start(state, cx)
+local function start(state, cx, mode)
   if state.job or state.invalid or not alive(state) then
     return
   end
-  state.images, state.log = {}, ""
-  state.phase, state.message = "starting", "Building saved-file snapshots…"
+  state.images, state.log, state.url, state.opened = {}, "", nil, nil
+  state.mode = mode or "snapshot"
+  state.phase, state.message = "starting", state.mode == "live" and "Building live previews…" or "Building saved-file snapshots…"
   local job = tern.plugin.data .. "/compose-jobs/" .. source.uuid(math.random)
   local ok, problem = pcall(function()
     local config = tern.json.decode(tern.fs.read(tern.plugin.dir .. "/config.json", 65536))
@@ -192,6 +203,8 @@ local function start(state, cx)
       configured_path(config.compose_cache or (tern.plugin.data .. "/compose-cache")),
       "--lease",
       job .. "/lease",
+      "--mode",
+      state.mode,
     }
     if type(config.compose_java) == "string" and config.compose_java ~= "" then
       local java = config.compose_java
@@ -200,6 +213,10 @@ local function start(state, cx)
       end
       table.insert(argv, "--java")
       table.insert(argv, java)
+    end
+    if state.mode == "live" and type(config.compose_komodo) == "string" and config.compose_komodo ~= "" then
+      table.insert(argv, "--komodo")
+      table.insert(argv, configured_path(config.compose_komodo))
     end
     tern.fs.mkdir(job)
     tern.fs.write(job .. "/lease", "alive\n")
@@ -318,6 +335,12 @@ tern.block.define("compose", {
             actions = { click = "rebuild" },
           }
         ),
+        ui.button("Live preview", {
+          key = "live",
+          role = "compose-live",
+          disabled = state.job ~= nil or state.invalid,
+          actions = { click = "live" },
+        }),
         ui.button(
           "Cancel",
           {
@@ -338,7 +361,9 @@ tern.block.define("compose", {
         {
           key = "snapshot",
           role = "compose-snapshot",
-          text = "Saved-file snapshots · Rebuild reads disk; edits are not automatically refreshed.",
+          text = state.mode == "live"
+            and "Live input runs in a browser pane. Saved source refreshes automatically; cancel before rebuilding resources."
+            or "Saved-file snapshots · Live preview runs interactive compositions in a browser pane.",
         }
       ),
       ui.el("div", { key = "path", role = "compose-path", text = state.path }),
@@ -356,6 +381,8 @@ tern.block.define("compose", {
     end
     if event.act == "rebuild" then
       start(state, cx)
+    elseif event.act == "live" then
+      start(state, cx, "live")
     elseif event.act == "cancel" then
       cancel(state)
     elseif event.act == "source" and not state.invalid then

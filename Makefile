@@ -1,7 +1,7 @@
 ELIDE_SOURCE ?= ../elide
 ELIDE_VSCODE_SOURCE ?= ../elide-vscode
 
-.PHONY: build test fmt check types smoke link repl test-surface compose
+.PHONY: build test fmt check types smoke link repl test-surface compose test-compose
 build: compose
 	cargo build --release -p elide-tern-broker
 	mkdir -p dist
@@ -11,6 +11,8 @@ build: compose
 	mv dist/.elide-tern-worker.new dist/elide-tern-worker
 compose:
 	ELIDE_VSCODE_SOURCE="$(ELIDE_VSCODE_SOURCE)" bun scripts/build-compose.ts
+test-compose:
+	bun test tests/compose-clock.test.ts
 test: build
 	cargo test --workspace
 	python3 tests/broker.py

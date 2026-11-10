@@ -28,6 +28,6 @@ palette = false
 
 [[blocks]]
 id = "compose"
-title = "Compose saved-file snapshots"
+title = "Compose previews"
 # Explicit project/palette/workspace launch supplies the saved .kt and its project root.
 palette = false
