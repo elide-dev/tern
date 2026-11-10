@@ -38,6 +38,7 @@ export interface KomodoOptions {
   signal: AbortSignal;
   log: (line: string) => void;
   launcher?: string;
+  getDocuments: () => ReadonlyMap<string, string>;
 }
 
 type Pending = { resolve: (value: unknown) => void; reject: (error: unknown) => void; timer: NodeJS.Timeout; method: string };
@@ -305,12 +306,23 @@ export async function createKomodo(options: KomodoOptions): Promise<KomodoClient
     };
     const sync = async (files: readonly string[]): Promise<void> => {
       const documents: { uri: string; version: number; text: string }[] = [];
+      const overlays = options.getDocuments();
       let bytes = 0;
       for (const file of new Set(files)) {
         signal.throwIfAborted();
-        const text = await savedSource(file);
+        let text = overlays.get(file);
+        if (text === undefined) {
+          try { text = await savedSource(file); }
+          catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            const uri = pathToFileURL(path.resolve(file)).href;
+            client.notify("textDocument/didClose", { textDocument: { uri } });
+            client.notify("workspace/didChangeWatchedFiles", { changes: [{ uri, type: 3 }] });
+            continue;
+          }
+        }
         bytes += Buffer.byteLength(text);
-        if (bytes > MAX_MESSAGE / 2) throw new KomodoError("Saved sources exceed the Komodo synchronization limit of 8 MiB.", "limit");
+        if (bytes > MAX_MESSAGE / 2) throw new KomodoError("Sources exceed the Komodo synchronization limit of 8 MiB.", "limit");
         documents.push({ uri: pathToFileURL(path.resolve(file)).href, version: ++version, text });
       }
       signal.throwIfAborted();

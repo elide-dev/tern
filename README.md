@@ -114,10 +114,14 @@ in the project workspace toolbar. The native gallery renders `@Preview`, multipr
 member-function and `@PreviewParameter` cards beside the source. Click an image for Tern's
 zoom viewer; **Open source** returns to the file.
 
-**Rebuild** reads saved files, resolves the enclosing Elide workspace and selects the nearest
-Android APK consuming that source set. It builds the required JVM classes and Android resources,
-not an APK or an emulator. Preview code executes locally with your permissions: open only
-projects you trust. The selected application appears in the status line.
+Opening a preview resolves the enclosing Elide workspace and selects the nearest Android APK
+consuming that source set. The initial build prepares JVM classes and Android resources, not
+an APK or emulator. The helper then keeps the same shared incremental compiler and renderer
+running. Kotlin/Java edits in native and Elide source editors, including unsaved buffers,
+refresh automatically; saved dependency sources are watched too. **Refresh** retries without
+restarting the helper. Resource and project-configuration saves rebuild the required inputs
+automatically. Build-only source processing still requires saving, as in VS Code.
+Preview code executes locally with your permissions: open only projects you trust.
 
 Requires an Android-capable Elide runtime, the project's Android SDK/dependencies, and a JDK 17+.
 On first render, the shared installer downloads the pinned, SHA-256-verified layoutlib runtime
@@ -130,13 +134,14 @@ Optional `plugin/config.json` settings:
 - `compose_komodo`: optional compatible Komodo launcher override for live previews.
   Otherwise the helper resolves Komodo from the Elide installation.
 
-Build failures clear stale images; rendering failures appear on individual cards.
-**Cancel** and closing the pane stop active work. Plugin reload cancels work and restores
-an idle panel; it never automatically executes previews. One Compose build owns a workspace
-at a time. After a forced helper kill, its error names a lock to remove **only after confirming
-its Elide/JVM build processes have stopped**.
+Compile/build errors retain the last gallery with an error status; the next edit can recover.
+Rendering failures appear on individual cards. **Cancel** and closing the pane stop active work.
+Plugin reload cancels work and restores an idle panel; it never automatically executes previews.
+Workspace builds serialize, while open previews keep their private compilers and renderers.
+After a forced helper kill during a build, remove its lock **only after confirming its
+Elide/JVM build processes have stopped**.
 
-**Live preview** builds the saved source and opens a Tern browser pane beside the gallery.
+**Live preview** switches to a Tern browser pane beside the gallery.
 It uses Komodo's protocol-2 `workspace-fir` preview session, not repeated snapshots.
 Click to focus a card, drag or scroll to interact, and type when the card reports keyboard
 support. Escape releases input. Frames and composition state update without rebuilding.
@@ -146,9 +151,9 @@ can stall infinite transitions at a cycle boundary even while coroutine timers a
 
 Live mode requires a compatible Komodo distribution with Compose compiler plugins.
 It reports an unavailable/incompatible runtime rather than silently falling back to snapshots.
-Saved changes to the previewed file refresh automatically; **Refresh saved source** retries
-the refresh. Unsaved editor buffers are not compiled. Resource, dependency and other-source
-changes require cancelling and starting **Live preview** again. Refresh may reset composition state.
+Both preview modes observe editor and saved-source changes. **Refresh** retries the current
+inputs; resource/configuration saves rebuild and reopen the live backend automatically.
+Source refreshes reuse the session but may reset composition state.
 IME composition and clipboard paste are not supported by the live keyboard protocol.
 
 The native pane owns the live session: **Cancel**, closing it or plugin reload stops the

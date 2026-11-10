@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { ImageStore, type PreviewBuild, type PreviewKeyEvent } from "@elide/compose-backend";
 import { KomodoBackend } from "@elide/compose-komodo";
-import type { PreviewImage } from "@elide/compose-render";
+import type { CompiledPreview, PreviewImage } from "@elide/compose-render";
 import type { ComposeRuntime } from "@elide/compose-runtime";
 import { createKomodo, type KomodoClient } from "./komodo";
 import { previewClock, type ClockSession } from "./clock";
@@ -13,8 +13,15 @@ export interface LivePreview {
   keyboard(id: string, event: PreviewKeyEvent): boolean;
   blur(id: string): boolean;
   keyboardSupported(id: string): boolean;
-  refresh(): Promise<PreviewImage[]>;
+  compiles(file: string): boolean;
+  refresh(options: LiveRefresh): Promise<PreviewImage[]>;
   dispose(): Promise<void>;
+}
+
+export interface LiveRefresh {
+  documents: ReadonlyMap<string, string>;
+  packageName: string;
+  files?: readonly string[];
 }
 
 export interface LiveOptions {
@@ -22,6 +29,7 @@ export interface LiveOptions {
   root: string;
   source: string;
   packageName: string;
+  documents: ReadonlyMap<string, string>;
   build: PreviewBuild;
   composeRuntime: ComposeRuntime;
   java: string;
@@ -39,7 +47,7 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Saved-source adapter for the same live backend used by the VSCode preview panel. */
+/** Saved and unsaved source adapter for the shared persistent preview backend. */
 export async function startLive(options: LiveOptions): Promise<LivePreview> {
   const controller = new AbortController();
   const signal = AbortSignal.any([options.signal, controller.signal]);
@@ -53,6 +61,12 @@ export async function startLive(options: LiveOptions): Promise<LivePreview> {
   let compileFailure: string | undefined;
   let discoveryFailure: string | undefined;
   let sessionFailure: string | undefined;
+  let documents = options.documents;
+  let sourceFiles: string[] = [];
+  let sourceTexts = new Map<string, string>();
+  const programFiles = new Set<string>();
+  let previews: CompiledPreview[] | undefined;
+  const appendices = new Map<string, string>();
   const subscriptions: (() => void)[] = [];
 
   const report = (): void => {
@@ -99,6 +113,7 @@ export async function startLive(options: LiveOptions): Promise<LivePreview> {
       signal,
       log: options.log,
       launcher: options.launcher,
+      getDocuments: () => documents,
     });
     const client = await opening;
     signal.throwIfAborted();
@@ -146,7 +161,7 @@ export async function startLive(options: LiveOptions): Promise<LivePreview> {
           return `${at}${entry.level}: ${entry.text}`;
         });
         for (const diagnostic of diagnostics) options.log(diagnostic);
-        compileFailure = outcome.failed ? diagnostics.join("\n") || "Komodo could not compile the saved preview source." : undefined;
+        compileFailure = outcome.failed ? diagnostics.join("\n") || "Komodo could not compile the preview source." : undefined;
         report();
       }),
       live.onInputReset(() => { if (!disposed) options.onReset(); }),
@@ -162,24 +177,54 @@ export async function startLive(options: LiveOptions): Promise<LivePreview> {
     signal.throwIfAborted();
     await live.startRenderer(options.composeRuntime);
     options.onStatus("rendering", "Preparing shared Compose compiler inputs…");
-    const documents = new Map([[options.source, await readFile(options.source, { encoding: "utf8", signal })]]);
-    signal.throwIfAborted();
-    await live.configure(options.build, documents, false);
+    await live.configure(options.build, documents, true);
     signal.throwIfAborted();
 
     let refreshing: Promise<unknown> = Promise.resolve();
-    const refresh = (): Promise<PreviewImage[]> => {
+    const refresh = (request: LiveRefresh): Promise<PreviewImage[]> => {
       const next = refreshing.then(async () => {
         signal.throwIfAborted();
-        const text = await readFile(options.source, { encoding: "utf8", signal });
-        // Synchronize discovery too: preview() itself detects changed declarations
-        // and replaces the daemon entries rather than retaining a static gallery.
-        await client.sync([options.source]);
+        const compiler = live.compiler;
+        if (!compiler) throw new Error("Compose preview has no compiler inputs.");
+        for (const [file, text] of request.documents) {
+          if ((compiler.requiresBuild(file) || (compiler.supports(file) && !live.compiles(file)))
+            && text !== await readFile(file, { encoding: "utf8", signal })) {
+            throw new Error(`Save ${file} to rebuild its preview inputs; the live compiler cannot apply this buffer directly.`);
+          }
+        }
+        // Read every compiler unit once so saved dependencies, closed buffers and
+        // dirty overlays all reach discovery and the daemon as one source snapshot.
+        const sources = await compiler.sources(request.documents);
+        const current = new Map<string, string>();
+        for (const unit of sources.files) {
+          for (const [file, text] of unit) if (live.compiles(file)) current.set(file, text);
+        }
+        if (!current.has(options.source)) {
+          current.set(options.source, request.documents.get(options.source)
+            ?? await readFile(options.source, { encoding: "utf8", signal }));
+        }
+        // Keep built dependencies on the classpath until edited. Joining every
+        // source would force unrelated code through the live compiler on open.
+        for (const [file, text] of current) {
+          if ((sourceTexts.size && sourceTexts.get(file) !== text) || request.documents.has(file)) programFiles.add(file);
+        }
+        for (const file of programFiles) if (!current.has(file)) programFiles.delete(file);
+        for (const file of request.files ?? []) if (live.compiles(file)) programFiles.add(file);
+        documents = current;
+        await client.sync([...new Set([...sourceFiles, ...current.keys()])]);
+        sourceFiles = [...current.keys()];
+        sourceTexts = current;
         signal.throwIfAborted();
+        const found = await client.previews(options.source);
+        discoveryFailure = found.errors.length ? found.errors.map((error) => error.message).join("\n") : undefined;
+        for (const error of found.errors) options.log(`Komodo discovery: ${error.message}`);
+        if (!found.errors.length || !previews) previews = found.previews;
+        // Explicitly retain edited dependencies after they are saved or closed.
         const gallery = await live.preview({
           sourceFile: options.source,
-          packageName: options.packageName,
-          documents: new Map([[options.source, text]]),
+          packageName: request.packageName,
+          documents,
+          selection: { previews, files: [...programFiles].filter(file => file !== options.source), appendices },
         });
         signal.throwIfAborted();
         images = [...live.latestImages(gallery.images)];
@@ -197,7 +242,14 @@ export async function startLive(options: LiveOptions): Promise<LivePreview> {
     };
 
     options.onStatus("rendering", "Rendering live Compose previews…");
-    await refresh();
+    try {
+      await refresh({ documents: options.documents, packageName: options.packageName });
+    } catch (error) {
+      signal.throwIfAborted();
+      // A rejected source configure leaves upstream's daemon available for the
+      // next edit; do not tear down the persistent helper on a compiler error.
+      if (!compileFailure) throw error;
+    }
     signal.throwIfAborted();
     return {
       get images() { return images; },
@@ -205,6 +257,7 @@ export async function startLive(options: LiveOptions): Promise<LivePreview> {
       keyboard: (id, event) => !disposed && live.keyboard(id, event),
       blur: (id) => !disposed && live.blur(id),
       keyboardSupported: (id) => !disposed && live.keyboardSupported(id),
+      compiles: (file) => !disposed && live.compiles(file),
       refresh,
       dispose,
     };

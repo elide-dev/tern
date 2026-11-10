@@ -340,7 +340,236 @@ local function source_in(cx, pane, root)
   return nil
 end
 
--- Explicit saved-file snapshots only: never compile the native editor's unsaved buffer.
+-- Window and host VMs do not share buffers. The host registers its private job
+-- directory; only this window can read native editors, including their dirty text.
+local native_jobs = {}
+local native_roots = {}
+local native_polled_at = 0
+local native_busy = false
+local NATIVE_FILE_BYTES = 8 * 1024 * 1024
+local NATIVE_TOTAL_BYTES = 32 * 1024 * 1024
+
+local function native_job_id(value)
+  return type(value) == "string"
+    and #value == 36
+    and string.match(value, "^%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x$") ~= nil
+end
+
+local function native_active(job, cx)
+  return cx.session:pane(job.pane) ~= nil
+    and tern.fs.exists(job.dir .. "/registration.json")
+    and not tern.fs.exists(job.dir .. "/cancel")
+    and not tern.fs.exists(job.dir .. "/done")
+end
+
+local function native_dirty(cx, pane, root)
+  local value = cx.session:read(pane, { lines = 1, max_chars = 1 })
+  if type(value) ~= "table" or value.kind ~= "file" or not value.dirty then
+    return nil
+  end
+  local host = cx.hosts:current()
+  if value.host ~= host.id then
+    return nil
+  end
+  local file = links.absolute(value.path)
+  if not file or string.find(file, "%c") or not links.within(file, root) then
+    return nil
+  end
+  local extension = source.extension(file)
+  return (extension == "kt" or extension == "java") and file or nil
+end
+
+local function publish_native(root, documents, problem, cx)
+  local previous = native_roots[root]
+  local changed = not previous or previous.problem ~= problem
+  if not changed then
+    for file, content in documents do
+      if previous.documents[file] ~= content then
+        changed = true
+        break
+      end
+    end
+    if not changed then
+      for file in previous.documents do
+        if documents[file] == nil then
+          changed = true
+          break
+        end
+      end
+    end
+  end
+  local snapshot = previous
+  if changed then
+    snapshot = { documents = documents, problem = problem }
+    native_roots[root] = snapshot
+  end
+  local encoded
+  for id, job in native_jobs do
+    if job.root == root then
+      if not native_active(job, cx) then
+        native_jobs[id] = nil
+      elseif job.snapshot ~= snapshot then
+        if not encoded then
+          local entries = {}
+          if not problem then
+            for file, content in snapshot.documents do
+              table.insert(entries, tern.json.encode({ file = file, text = content }))
+            end
+          end
+          encoded = '{"root":'
+            .. tern.json.encode(root)
+            .. ',"documents":['
+            .. table.concat(entries, ",")
+            .. "]"
+            .. (problem and (',"error":' .. tern.json.encode(problem)) or "")
+            .. "}"
+        end
+        local ok = pcall(tern.fs.write, job.dir .. "/native-documents.json", encoded)
+        if ok then
+          job.snapshot = snapshot
+        end
+      end
+    end
+  end
+end
+
+local function poll_native(cx)
+  if native_busy then
+    return
+  end
+  -- docs:read resolves against the current host. Never ask a remote host for a
+  -- local preview's source; switching back resumes its synchronization.
+  if not cx or cx.hosts:current().kind ~= "local" then
+    return
+  end
+  native_busy = true
+  native_polled_at = tern.now()
+  local roots, seen = {}, {}
+  for id, job in native_jobs do
+    if not native_active(job, cx) then
+      native_jobs[id] = nil
+    elseif not seen[job.root] then
+      seen[job.root] = true
+      table.insert(roots, job.root)
+    end
+  end
+  for root in native_roots do
+    if not seen[root] then
+      native_roots[root] = nil
+    end
+  end
+  local root_index = 0
+  local next_root
+  next_root = function(current)
+    root_index += 1
+    local root = roots[root_index]
+    if not root or not current or current.hosts:current().kind ~= "local" then
+      native_busy = false
+      return
+    end
+    local queue, files = {}, {}
+    for _, pane in current.session:panes() do
+      if pane.kind == "file" then
+        local file = native_dirty(current, pane.pane, root)
+        if file and not files[file] then
+          files[file] = pane.pane
+          table.insert(queue, file)
+        end
+      end
+    end
+    local documents, total, index = {}, 0, 0
+    local next_file
+    local function finish(fresh, problem)
+      -- A save or close while an async read was pending must remove the overlay.
+      for file in documents do
+        if native_dirty(fresh, files[file], root) ~= file then
+          documents[file] = nil
+        end
+      end
+      publish_native(root, documents, problem, fresh)
+      next_root(fresh)
+    end
+    next_file = function(fresh)
+      if not fresh or fresh.hosts:current().kind ~= "local" then
+        native_busy = false
+        return
+      end
+      index += 1
+      local file = queue[index]
+      if not file then
+        finish(fresh)
+        return
+      end
+      if native_dirty(fresh, files[file], root) ~= file then
+        next_file(fresh)
+        return
+      end
+      -- No native edit event or buffer revision is exposed by the documented API.
+      -- Read only dirty Kotlin/Java buffers, one async read at a time, once per
+      -- completed polling cycle. session:read is capped/truncated; docs:read is exact.
+      local ok, problem = pcall(function()
+        fresh.docs:read(file):next(function(content, err, latest)
+          if not latest or latest.hosts:current().kind ~= "local" then
+            native_busy = false
+            return
+          end
+          if native_dirty(latest, files[file], root) ~= file then
+            next_file(latest)
+          elseif err or type(content) ~= "string" then
+            finish(latest, "Could not read native editor " .. file .. ": " .. tostring(err or "no text returned"))
+          elseif #content > NATIVE_FILE_BYTES or total + #content > NATIVE_TOTAL_BYTES then
+            finish(latest, "Native editor previews allow 8 MiB per file and 32 MiB total.")
+          else
+            documents[file] = content
+            total += #content
+            next_file(latest)
+          end
+        end)
+      end)
+      if not ok then
+        finish(fresh, "Could not read native editor " .. file .. ": " .. tostring(problem))
+      end
+    end
+    next_file(current)
+  end
+  next_root(cx)
+end
+
+local function register_native(id, request, cx)
+  if not native_job_id(id) or cx.hosts:current().kind ~= "local" then
+    return
+  end
+  local dir = tern.plugin.data .. "/compose-jobs/" .. id
+  local ok, registration = pcall(function()
+    return tern.json.decode(tern.fs.read(dir .. "/registration.json", 8192))
+  end)
+  if not ok or type(registration) ~= "table" or type(registration.pane) ~= "number" then
+    return
+  end
+  local root = links.absolute(registration.root)
+  if not root or string.find(root, "%c") or (request.pane and request.pane ~= registration.pane) then
+    return
+  end
+  local job = { dir = dir, root = root, pane = registration.pane }
+  if not native_active(job, cx) then
+    return
+  end
+  local previous = native_jobs[id]
+  if not previous or previous.root ~= root or previous.pane ~= job.pane then
+    native_jobs[id] = job
+  elseif not tern.fs.exists(dir .. "/native-documents.json") then
+    previous.snapshot = nil
+  end
+  -- Initial publication acknowledges registration; the host waits before spawning
+  -- its helper, so opening an already-dirty editor never renders a saved snapshot.
+  -- The host's lease tick supplies a fresh window context; no window timer can
+  -- outlive the job that registered it and strand the next mode's handshake.
+  if not native_busy and (not native_jobs[id].snapshot or tern.now() - native_polled_at >= 0.8) then
+    poll_native(cx)
+  end
+end
+
+-- Native dirty text reaches the helper through the registration handshake above.
 local function open_compose(cx, file, root, target)
   if not local_host(cx) then
     return nil
@@ -355,16 +584,6 @@ local function open_compose(cx, file, root, target)
   then
     cx:toast("info", "Choose a saved Kotlin (.kt) file inside this project.")
     return nil
-  end
-  -- Also covers a path chosen through the prompt while its editor is not focused.
-  for _, pane in cx.session:panes() do
-    if pane.kind == "file" then
-      local current = cx.session:read(pane.pane, { lines = 1, max_chars = 1 })
-      if type(current) == "table" and current.path == file and current.dirty then
-        cx:toast("info", "Save this file before opening Compose previews.", file)
-        return nil
-      end
-    end
   end
   if not configuration(cx) then
     return nil
@@ -391,7 +610,7 @@ local function prompt_compose(cx, context)
     return
   end
   cx:prompt({
-    placeholder = "Saved Kotlin (.kt) path relative to project",
+    placeholder = "Kotlin (.kt) path relative to project",
     value = "",
     icon = "file",
     action = "preview",
@@ -408,7 +627,7 @@ end
 workspace.install({
   debug = launch_debug,
   -- Like Source, Preview is deliberately not cached by action: a second Kotlin file
-  -- must open its own snapshot rather than focusing the first file's result.
+  -- must open its own persistent preview rather than focusing the first file's result.
   preview = function(cx, context, target)
     local file = source_in(cx, target, context.root)
     if file then
@@ -817,6 +1036,11 @@ tern.route.link(function(request, cx)
   if string.lower(string.sub(request.url, 1, 8)) ~= "elide://" then
     return nil
   end
+  local native_id = string.match(request.url, "^elide://compose%-documents/([^/]+)$")
+  if native_id then
+    register_native(native_id, request, cx)
+    return { handled = true }
+  end
   local port, token = string.match(request.url, "^elide://compose%-live/(%d+)/(%x+)$")
   if port and #token == 64 and tonumber(port) >= 1 and tonumber(port) <= 65535 then
     if not local_host(cx) then
@@ -824,16 +1048,18 @@ tern.route.link(function(request, cx)
     end
     local owner = request.pane or cx.session:focused()
     if owner then
-      cx.browser:call({
-        op = "open",
-        owner = owner,
-        how = "beside",
-        url = "http://127.0.0.1:" .. port .. "/" .. token .. "/",
-      }):next(function(result, err, current)
-        if err or (result and result.error) then
-          current:toast("error", "Could not open live Compose preview.", tostring(err or result.error.message))
-        end
-      end)
+      cx.browser
+        :call({
+          op = "open",
+          owner = owner,
+          how = "beside",
+          url = "http://127.0.0.1:" .. port .. "/" .. token .. "/",
+        })
+        :next(function(result, err, current)
+          if err or (result and result.error) then
+            current:toast("error", "Could not open live Compose preview.", tostring(err or result.error.message))
+          end
+        end)
     end
     return { handled = true }
   end

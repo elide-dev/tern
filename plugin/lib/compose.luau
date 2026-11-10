@@ -1,5 +1,5 @@
--- Saved snapshots and live sessions share a helper lease. Live input belongs to a
--- browser pane: native image nodes expose zoom, not pointer coordinates.
+-- Editor previews and live sessions share a helper lease. Live input belongs
+-- to a browser pane: native image nodes expose zoom, not pointer coordinates.
 local ui = tern.ui
 local source = require("./source")
 local links = require("./links")
@@ -8,6 +8,10 @@ local MAX_IMAGES = 32
 local MAX_PNG = 8 * 1024 * 1024
 local MAX_GALLERY = 64 * 1024 * 1024
 local TERMINAL = { ready = true, error = true, cancelled = true }
+local images
+local documents = {}
+local documents_revision = 0
+local documents_timer
 
 local function text(value, limit)
   return type(value) == "string" and string.sub(value, 1, limit or 2048) or ""
@@ -25,7 +29,52 @@ local function alive(state)
   return false
 end
 
+local function publish_documents(state, job)
+  local latest = {}
+  for _, draft in documents do
+    if links.within(draft.file, state.root) then
+      local previous = latest[draft.file]
+      if not previous or previous.revision < draft.revision then
+        latest[draft.file] = draft
+      end
+    end
+  end
+  local encoded = {}
+  for file, draft in latest do
+    table.insert(encoded, tern.json.encode({ file = file, text = draft.text }))
+  end
+  -- Encode the array explicitly: an empty Luau table otherwise becomes {}.
+  -- The helper retries partial JSON from writes through the host filesystem API.
+  tern.fs.write(job .. "/documents.json", '{"documents":[' .. table.concat(encoded, ",") .. "]}")
+  state.documents_revision = documents_revision
+end
+
+local function document(pane, file, content)
+  file = links.absolute(file)
+  if not file or (source.extension(file) ~= "kt" and source.extension(file) ~= "java") then
+    content = nil
+  end
+  local previous = documents[pane]
+  if (content == nil and previous == nil) or (previous and previous.file == file and previous.text == content) then
+    return
+  end
+  documents_revision += 1
+  documents[pane] = type(content) == "string" and { file = file, text = content, revision = documents_revision } or nil
+  if documents_timer then
+    documents_timer:cancel()
+  end
+  documents_timer = tern.timer(200, function()
+    documents_timer = nil
+    for _, state in blocks do
+      if state.job and not state.cancelling and alive(state) then
+        pcall(publish_documents, state, state.job)
+      end
+    end
+  end)
+end
+
 local function cancel(state)
+  state.pending_mode = nil
   if state.job then
     pcall(tern.fs.write, state.job .. "/cancel", "cancel\n")
     state.cancelling = true
@@ -44,6 +93,10 @@ local function close(state)
     state.timer:cancel()
     state.timer = nil
   end
+  if state.awaiting_documents then
+    pcall(tern.fs.remove, state.job)
+    state.job, state.awaiting_documents = nil, nil
+  end
 end
 
 tern.on("pane_exited", function(event)
@@ -60,6 +113,37 @@ local function status(job)
   return ok and type(value) == "table" and value or nil
 end
 
+local function gallery(state, cx, job)
+  local ok, result = pcall(function()
+    return tern.json.decode(tern.fs.read(job .. "/gallery.json", 1024 * 1024))
+  end)
+  if
+    not ok
+    or type(result) ~= "table"
+    or type(result.revision) ~= "number"
+    or result.revision ~= math.floor(result.revision)
+    or result.revision <= (state.revision or 0)
+    or result.revision == math.huge
+    or (result.phase ~= "ready" and result.phase ~= "error")
+  then
+    return
+  end
+  if result.phase == "ready" and type(result.images) ~= "table" then
+    return
+  end
+  state.phase, state.message = result.phase, text(result.message)
+  if result.phase == "ready" then
+    local loaded, cards = pcall(images, state, cx, result, job)
+    if not loaded then
+      state.phase, state.message = "error", text(tostring(cards))
+      return
+    end
+    state.images = cards
+  end
+  state.revision = result.revision
+  pcall(tern.fs.write, job .. "/gallery-ack", tostring(result.revision))
+end
+
 local function finish_job(state, cx, job)
   pcall(tern.fs.remove, job)
   if state.timer then
@@ -67,6 +151,7 @@ local function finish_job(state, cx, job)
     state.timer = nil
   end
   state.job, state.cancelling, state.restoring, state.url = nil, nil, nil, nil
+  state.awaiting_documents = nil
   if alive(state) then
     cx:save()
     cx:render()
@@ -91,9 +176,29 @@ local function watch(state, cx)
         state.message = "Could not renew the preview lease; cancelling."
       end
     end
+    if not state.cancelling then
+      pcall(function()
+        cx:open("elide://compose-documents/" .. string.match(job, "([^/]+)$"))
+      end)
+    end
     local progress = status(job)
+    local root = progress and links.absolute(progress.root)
+    if not state.cancelling and root and root ~= state.root and links.within(state.path, root) then
+      local registered =
+        pcall(tern.fs.write, job .. "/registration.json", tern.json.encode({ pane = state.pane, root = root }))
+      if registered then
+        state.root, state.documents_revision = root, nil
+        pcall(publish_documents, state, job)
+        pcall(function()
+          cx:open("elide://compose-documents/" .. string.match(job, "([^/]+)$"))
+        end)
+      end
+    end
+    if not state.cancelling and not documents_timer and state.documents_revision ~= documents_revision then
+      pcall(publish_documents, state, job)
+    end
     if state.restoring and tern.fs.exists(job .. "/done") then
-      state.phase, state.message = "idle", "Previous renderer stopped. Rebuild to preview the saved file."
+      state.phase, state.message = "idle", "Previous renderer stopped. Refresh to preview editor sources."
       finish_job(state, cx, job)
       return
     end
@@ -102,7 +207,7 @@ local function watch(state, cx)
       -- lock make another explicit attempt safe; do not remove a possibly live job here.
       state.job, state.cancelling, state.restoring = nil, nil, nil
       state.phase, state.message =
-        "idle", "Previous helper did not report exit. Rebuild checks that its workspace lock is released."
+        "idle", "Previous helper did not report exit. Refresh checks that its workspace lock is released."
       cx:save()
       cx:render()
       return
@@ -121,6 +226,9 @@ local function watch(state, cx)
         end
       end
     end
+    if state.mode == "snapshot" and not state.cancelling then
+      gallery(state, cx, job)
+    end
     cx:render()
     watch(state, cx)
   end)
@@ -130,8 +238,8 @@ local function configured_path(value)
   return string.sub(value, 1, 1) == "/" and value or tern.plugin.dir .. "/" .. value
 end
 
-local function images(state, cx, result, job)
-  local total = 0
+images = function(state, cx, result, job)
+  local cards, total = {}, 0
   for index, image in ipairs(type(result.images) == "table" and result.images or {}) do
     if index > MAX_IMAGES then
       state.message ..= " Gallery limited to " .. MAX_IMAGES .. " cards."
@@ -170,19 +278,22 @@ local function images(state, cx, result, job)
       elseif card.error == "" then
         card.error = "The renderer returned no image for this preview."
       end
-      table.insert(state.images, card)
+      table.insert(cards, card)
     end
   end
+  return cards
 end
 
 local function start(state, cx, mode)
   if state.job or state.invalid or not alive(state) then
     return
   end
-  state.images, state.log, state.url, state.opened = {}, "", nil, nil
+  state.log, state.url, state.opened, state.revision = "", nil, nil, nil
   state.mode = mode or "snapshot"
-  state.phase, state.message = "starting", state.mode == "live" and "Building live previews…" or "Building saved-file snapshots…"
-  local job = tern.plugin.data .. "/compose-jobs/" .. source.uuid(math.random)
+  state.phase, state.message =
+    "starting", state.mode == "live" and "Building live previews…" or "Starting editor previews…"
+  local id = source.uuid(math.random)
+  local job = tern.plugin.data .. "/compose-jobs/" .. id
   local ok, problem = pcall(function()
     local config = tern.json.decode(tern.fs.read(tern.plugin.dir .. "/config.json", 65536))
     local runtime = config.runtime or "elide"
@@ -214,48 +325,121 @@ local function start(state, cx, mode)
       table.insert(argv, "--java")
       table.insert(argv, java)
     end
-    if state.mode == "live" and type(config.compose_komodo) == "string" and config.compose_komodo ~= "" then
+    if type(config.compose_komodo) == "string" and config.compose_komodo ~= "" then
       table.insert(argv, "--komodo")
       table.insert(argv, configured_path(config.compose_komodo))
     end
     tern.fs.mkdir(job)
     tern.fs.write(job .. "/lease", "alive\n")
+    publish_documents(state, job)
+    tern.fs.write(job .. "/registration.json", tern.json.encode({ pane = state.pane, root = state.root }))
     state.job = job
     cx:save()
-    tern.process.run(argv, { cwd = state.root }, function(result)
+    local function complete()
+      local pending = state.pending_mode
+      state.pending_mode = nil
+      finish_job(state, cx, job)
+      if pending then
+        start(state, cx, pending)
+      end
+    end
+    local function launch()
+      state.awaiting_documents = nil
+      tern.fs.write(job .. "/lease", "alive\n")
+      publish_documents(state, job)
+      tern.process.run(argv, { cwd = state.root }, function(result)
+        if not alive(state) then
+          close(state)
+          pcall(tern.fs.remove, job)
+          return
+        end
+        state.log = string.sub(result.stderr or "", -8192)
+        local decoded, response = pcall(tern.json.decode, result.stdout or "")
+        if state.cancelling then
+          state.phase, state.message = "cancelled", "Preview cancelled. Refresh to try again."
+        elseif decoded and type(response) == "table" and TERMINAL[response.phase] then
+          state.phase, state.message = response.phase, text(response.message)
+          if response.phase == "ready" and result.status == 0 then
+            if state.mode == "snapshot" then
+              gallery(state, cx, job)
+            end
+          elseif response.phase == "ready" then
+            state.phase, state.message = "error", "Preview helper exited unsuccessfully."
+          end
+        else
+          state.phase, state.message = "error", "Preview helper failed (exit " .. tostring(result.status) .. ")."
+        end
+        complete()
+      end)
+      watch(state, cx)
+    end
+    local started, requested = tern.now(), nil
+    state.awaiting_documents = true
+    local function await_documents()
+      state.timer = nil
       if not alive(state) then
         close(state)
-        pcall(tern.fs.remove, job)
         return
       end
-      state.images = {}
-      state.log = string.sub(result.stderr or "", -8192)
-      local decoded, response = pcall(tern.json.decode, result.stdout or "")
-      if state.cancelling then
-        state.phase, state.message = "cancelled", "Preview cancelled. Rebuild to try again."
-      elseif decoded and type(response) == "table" and TERMINAL[response.phase] then
-        state.phase, state.message = response.phase, text(response.message)
-        if response.phase == "ready" and result.status == 0 then
-          local loaded, load_error = pcall(images, state, cx, response, job)
-          if not loaded then
-            state.images = {}
-            state.phase, state.message = "error", text(tostring(load_error))
-          end
-        elseif response.phase == "ready" then
-          state.phase, state.message = "error", "Preview helper exited unsuccessfully."
-        end
-      else
-        state.phase, state.message = "error", "Preview helper failed (exit " .. tostring(result.status) .. ")."
+      if state.job ~= job then
+        return
       end
-      finish_job(state, cx, job)
-    end)
-    watch(state, cx)
+      if state.cancelling then
+        state.phase, state.message = "cancelled", "Preview cancelled. Refresh to try again."
+        complete()
+        return
+      end
+      if tern.fs.exists(job .. "/native-documents.json") then
+        local launched, launch_error = pcall(launch)
+        if not launched then
+          state.phase, state.message = "error", text(tostring(launch_error))
+          complete()
+        end
+        return
+      end
+      local now = tern.now()
+      if now - started >= 20 then
+        state.phase, state.message = "error", "Could not capture native editor drafts. Refresh to try again."
+        complete()
+        return
+      end
+      if not requested or now - requested >= 2 then
+        requested = now
+        pcall(function()
+          cx:open("elide://compose-documents/" .. id)
+        end)
+      end
+      state.timer = tern.timer(100, await_documents)
+    end
+    await_documents()
   end)
   if not ok then
     state.phase, state.message = "error", text(tostring(problem))
     finish_job(state, cx, job)
   end
   cx:render()
+end
+
+local function request(state, cx, mode)
+  if state.invalid or state.cancelling or not alive(state) then
+    return
+  end
+  if not state.job then
+    start(state, cx, mode)
+  elseif state.mode ~= mode then
+    cancel(state)
+    state.pending_mode = mode
+    state.message = "Switching preview mode; waiting for the renderer to exit…"
+    cx:render()
+  elseif mode == "snapshot" then
+    local ok, problem = pcall(tern.fs.write, state.job .. "/refresh", source.uuid(math.random))
+    if ok then
+      state.phase, state.message = "refreshing", "Refreshing editor sources…"
+    else
+      state.phase, state.message = "error", text(tostring(problem))
+    end
+    cx:render()
+  end
 end
 
 tern.block.define("compose", {
@@ -268,7 +452,7 @@ tern.block.define("compose", {
       root = root or "",
       name = path and string.match(path, "([^/]+)$") or "Compose",
       phase = "idle",
-      message = "Saved-file snapshots. Rebuild compiles and executes this project's preview code from disk.",
+      message = "Editor previews update automatically, including unsaved source changes and saved resources. Refresh executes this project's preview code.",
       images = {},
       log = "",
     }
@@ -326,46 +510,37 @@ tern.block.define("compose", {
     end
     local children = {
       ui.node("row", { key = "controls", role = "compose-controls", gap = "sm" }, {
-        ui.button(
-          "Rebuild",
-          {
-            key = "rebuild",
-            role = "compose-rebuild",
-            disabled = state.job ~= nil or state.invalid,
-            actions = { click = "rebuild" },
-          }
-        ),
+        ui.button("Refresh", {
+          key = "rebuild",
+          role = "compose-rebuild",
+          disabled = state.cancelling or state.invalid,
+          actions = { click = "rebuild" },
+        }),
         ui.button("Live preview", {
           key = "live",
           role = "compose-live",
-          disabled = state.job ~= nil or state.invalid,
+          disabled = state.cancelling or state.invalid or (state.job ~= nil and state.mode == "live"),
           actions = { click = "live" },
         }),
-        ui.button(
-          "Cancel",
-          {
-            key = "cancel",
-            role = "compose-cancel",
-            disabled = state.job == nil or state.cancelling,
-            actions = { click = "cancel" },
-          }
-        ),
+        ui.button("Cancel", {
+          key = "cancel",
+          role = "compose-cancel",
+          disabled = state.job == nil or state.cancelling,
+          actions = { click = "cancel" },
+        }),
         ui.button(
           "Open source",
           { key = "source", role = "compose-source", disabled = state.invalid, actions = { click = "source" } }
         ),
         ui.button("Close", { key = "close", role = "compose-close", actions = { click = "close" } }),
       }),
-      ui.el(
-        "div",
-        {
-          key = "snapshot",
-          role = "compose-snapshot",
-          text = state.mode == "live"
-            and "Live input runs in a browser pane. Saved source refreshes automatically; cancel before rebuilding resources."
-            or "Saved-file snapshots · Live preview runs interactive compositions in a browser pane.",
-        }
-      ),
+      ui.el("div", {
+        key = "snapshot",
+        role = "compose-snapshot",
+        text = state.mode == "live"
+            and "Live input runs in a browser pane. Editor changes and saved resources refresh automatically."
+          or "Editor changes and saved resources refresh automatically · Live preview opens interactive compositions in a browser pane.",
+      }),
       ui.el("div", { key = "path", role = "compose-path", text = state.path }),
       ui.el("div", { key = "status", role = "compose-status", text = state.phase .. ": " .. state.message }),
       ui.node("col", { key = "gallery", role = "compose-gallery", gap = "md" }, cards),
@@ -380,9 +555,9 @@ tern.block.define("compose", {
       return
     end
     if event.act == "rebuild" then
-      start(state, cx)
+      request(state, cx, "snapshot")
     elseif event.act == "live" then
-      start(state, cx, "live")
+      request(state, cx, "live")
     elseif event.act == "cancel" then
       cancel(state)
     elseif event.act == "source" and not state.invalid then
@@ -397,4 +572,4 @@ tern.block.define("compose", {
   end,
 })
 
-return {}
+return { document = document }

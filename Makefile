@@ -12,7 +12,7 @@ build: compose
 compose:
 	ELIDE_VSCODE_SOURCE="$(ELIDE_VSCODE_SOURCE)" bun scripts/build-compose.ts
 test-compose:
-	bun test tests/compose-clock.test.ts
+	bun test tests/compose-clock.test.ts tests/compose-changes.test.ts
 test: build
 	cargo test --workspace
 	python3 tests/broker.py

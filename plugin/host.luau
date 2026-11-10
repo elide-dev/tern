@@ -248,7 +248,7 @@ local broker = require("./lib/broker")
 local buffer = require("./lib/buffer")
 local links = require("./lib/links")
 local source = require("./lib/source")
-require("./lib/compose")
+local compose = require("./lib/compose")
 
 local RENEW_MS = 30000
 local DEBUG_POLL_MS = 500
@@ -307,6 +307,7 @@ local function close(state)
   end
   state.closed = true
   blocks[state.pane] = nil
+  compose.document(state.pane, state.path, nil)
   for _, timer in state.timers do
     timer:cancel()
   end
@@ -934,6 +935,7 @@ local function write(state, cx)
   end
   state.disk, state.missing = text, false
   buffer.mark_saved(state.buf)
+  compose.document(state.pane, state.path, nil)
   return true
 end
 
@@ -965,6 +967,7 @@ local function reload(state, text)
   buf.cursor = buffer.clamp(buf, cursor)
   state.disk = text
   buffer.mark_saved(buf)
+  compose.document(state.pane, state.path, nil)
 end
 
 -- Diagnostics ---------------------------------------------------------------------------------
@@ -1451,6 +1454,7 @@ local function edited(state, edit)
     state.breakpoints = buffer.remap(state.breakpoints, edit)
     refind(state)
   end
+  compose.document(state.pane, state.path, buffer.dirty(state.buf) and buffer.disk(state.buf) or nil)
 end
 
 -- View -----------------------------------------------------------------------------------------
@@ -2557,6 +2561,7 @@ tern.block.define("source", {
         }
       end
     end
+    compose.document(state.pane, state.path, buffer.dirty(state.buf) and buffer.disk(state.buf) or nil)
     local line = tonumber(args[3]) or saved.line or 1
     move_to(state, line)
     if line > 1 then
