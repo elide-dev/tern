@@ -14,7 +14,7 @@ with tempfile.TemporaryDirectory(prefix='tern-install-') as temporary:
         (bundle / directory).mkdir(parents=True)
     shutil.copyfile(source / 'scripts/install-release.sh', bundle / 'install.sh')
     for relative in ['runtime/bin/elide', *(f'dist/elide-tern-{name}' for name in
-                     ['broker', 'worker', 'compose'])]:
+                     ['broker', 'worker', 'compose', 'android'])]:
         path = bundle / relative
         path.write_text('#!/bin/sh\nexit 0\n')
         path.chmod(0o755)

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Android device</title>
+<style>
+:root { color-scheme: light dark; font: 14px system-ui, sans-serif; }
+body { margin: 0; padding: 12px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+nav, form { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
+button, input { font: inherit; padding: 6px 10px; }
+#status { margin: 0; max-width: 72ch; overflow-wrap: anywhere; }
+#status[data-error="true"] { color: light-dark(#a31818, #ff9e9e); }
+#screen { display: block; max-width: 100%; max-height: calc(100vh - 210px); width: auto; height: auto; touch-action: none; user-select: none; outline-offset: 3px; }
+#screen:focus-visible { outline: 2px solid Highlight; }
+small { max-width: 72ch; text-align: center; }
+</style>
+</head>
+<body>
+<nav aria-label="Device controls">
+<button data-key="BACK" disabled>Back</button><button data-key="HOME" disabled>Home</button>
+<button data-key="APP_SWITCH" disabled>Overview</button><button data-key="POWER" disabled>Power</button>
+<button data-key="VOLUME_DOWN" disabled>Volume −</button><button data-key="VOLUME_UP" disabled>Volume +</button>
+<button id="close">Disconnect</button>
+</nav>
+<p id="status" role="status">Connecting to Android device…</p>
+<img id="screen" alt="Android emulator screen" tabindex="0" draggable="false" hidden>
+<form id="text-form"><input id="text" aria-label="Text to send to device" placeholder="ASCII text" maxlength="128" disabled><button id="send-text" disabled>Send text</button></form>
+<small>Click to tap; drag and release to swipe; hold then release to long-press. Scroll swipes. Focus the screen to type; Escape releases focus. ADB screenshots update up to 2.5 times/second. No audio or multitouch. Disconnect leaves the emulator running.</small>
+<script src="client.js"></script>
+</body>
+</html>

@@ -5,7 +5,7 @@ Notebook workers load the same C ABI and Cap'n Proto SDK used by Elide Studio.
 Test and server hosts supervise the canonical runtime independently; GraalVM is
 never loaded into Tern's UI process.
 
-Native surfaces cover REPL, Tests, Debug, Compose previews, serving and trace inspection. Project
+Native surfaces cover REPL, Tests, Debug, Compose previews, Android devices, serving and trace inspection. Project
 sessions share runs and debugger state between views and the built-in agent. SDK LSP/MCP channels
 have broker plumbing; standard client transports and live WebSocket MCP attachment
 remain follow-up work.
@@ -30,6 +30,9 @@ Install that checkout's dependencies with its pinned pnpm first. `make compose` 
 shared project model, layoutlib renderer/runtime installer and Java sources into
 `dist/elide-tern-compose`; Bun and the sibling checkout are not needed at runtime.
 Release bundles must include this executable and `dist/elide-tern-compose.LICENSE`.
+`make android` bundles the same checkout's SDK/manifest utilities into
+`dist/elide-tern-android`, including its browser mirror. Releases also require this
+executable and `dist/elide-tern-android.LICENSE`.
 
 ```sh
 make build
@@ -115,13 +118,17 @@ member-function and `@PreviewParameter` cards beside the source. Click an image 
 zoom viewer; **Open source** returns to the file.
 
 Opening a preview resolves the enclosing Elide workspace and selects the nearest Android APK
-consuming that source set. The initial build prepares JVM classes and Android resources, not
-an APK or emulator. The helper then keeps the same shared incremental compiler and renderer
+consuming that source set. The initial build prepares JVM classes and Android resources.
+The helper then keeps the same shared incremental compiler and renderer
 running. Kotlin/Java edits in native and Elide source editors, including unsaved buffers,
 refresh automatically; saved dependency sources are watched too. **Refresh** retries without
 restarting the helper. Resource and project-configuration saves rebuild the required inputs
 automatically. Build-only source processing still requires saving, as in VS Code.
 Preview code executes locally with your permissions: open only projects you trust.
+
+During rendering, a progress bar shows the current phase: project loading, renderer setup,
+build or preview update. **Show details** expands renderer output. The last gallery stays
+visible during updates; progress clears when rendering finishes or fails.
 
 Requires an Android-capable Elide runtime, the project's Android SDK/dependencies, and a JDK 17+.
 On first render, the shared installer downloads the pinned, SHA-256-verified layoutlib runtime
@@ -142,7 +149,7 @@ After a forced helper kill during a build, remove its lock **only after confirmi
 Elide/JVM build processes have stopped**.
 
 **Live preview** switches to a Tern browser pane beside the gallery.
-It uses Komodo's protocol-2 `workspace-fir` preview session, not repeated snapshots.
+It uses Komodo's protocol-2 `workspace-fir` preview session.
 Click to focus a card, drag or scroll to interact, and type when the card reports keyboard
 support. Escape releases input. Frames and composition state update without rebuilding.
 Wheel input is translated to touch drags for the Android layoutlib host.
@@ -150,7 +157,7 @@ Animation fidelity follows the installed Komodo/layoutlib host; the tested Komod
 can stall infinite transitions at a cycle boundary even while coroutine timers advance.
 
 Live mode requires a compatible Komodo distribution with Compose compiler plugins.
-It reports an unavailable/incompatible runtime rather than silently falling back to snapshots.
+An unavailable or incompatible runtime produces an error.
 Both preview modes observe editor and saved-source changes. **Refresh** retries the current
 inputs; resource/configuration saves rebuild and reopen the live backend automatically.
 Source refreshes reuse the session but may reset composition state.
@@ -164,6 +171,72 @@ temporary access token; do not share it.
 Layout inspection, arbitrary-composable agent rendering, MCP and prewarming are not
 provided. Galleries allow 32 cards, 8 MiB per PNG, 32 MiB in total and 4096 pixels per side.
 No embedded SDK is required for Compose itself.
+
+### Android Virtual Devices
+
+Choose **Manage Android Virtual Devices** from the palette, even outside an Elide
+project. The native manager lists AVDs and running emulator serials, with **Create**,
+**Start**, **Stop**, **Delete** and **View** actions. Separate create/start/stop/delete
+palette commands work without a project too. **Refresh** reads changes made by Android
+Studio or other terminals. Deletion asks for confirmation and refuses running or locked
+devices; creation never overwrites an existing AVD.
+
+The project menu and workspace toolbar offer **Manage project Android devices**.
+This evaluates the project's Android configuration using the configured Elide runtime;
+workspaces with multiple Android members show a member picker. **Create configured AVD**
+uses Elide's `android-avd` target and configured device settings. Custom creation selects
+an installed system image, hardware profile and name. Non-Android projects report a
+configuration error; use the standalone manager instead.
+
+Requires a local Android SDK with Emulator, Platform-Tools, Command-line Tools and a
+JDK for `avdmanager`. Install system images with Android Studio or `sdkmanager` first:
+the helper does not install packages or accept licenses. SDK resolution follows Elide:
+explicit `android_sdk` override, project `android.sdk`, environment, conventional SDK
+locations. An explicit missing path fails rather than silently selecting another SDK.
+Optional `plugin/config.json` settings:
+
+- `android`: helper executable; defaults to `../dist/elide-tern-android`.
+- `android_sdk`: SDK directory override, distinct from the embedded Elide `sdk` setting.
+
+**Start** opens the emulator's own window and returns once ADB registers it; Android may
+still be booting. **View** mirrors a running device in an adjacent Tern browser pane.
+It supports taps, drag-and-release swipes, long presses, scroll swipes, navigation keys
+and printable ASCII text. Escape releases keyboard focus. This is an ADB screenshot
+mirror (up to 2.5 frames/second), not native-window embedding or a video stream; no audio,
+multitouch or IME injection. Use the emulator window for those capabilities.
+
+Closing the manager or disconnecting/closing its browser stops the mirror, **not the
+emulator**. Plugin reload expires the old mirror's lease; choose **View** again.
+Only **Stop** terminates a device, and only the selected emulator. Each mirror has an
+unpredictable loopback access URL; do not share it.
+
+The compiled helper also works directly from any terminal, with no Tern, Bun, sibling
+checkout or Elide runtime required unless `--root` is supplied:
+
+```sh
+dist/elide-tern-android list
+dist/elide-tern-android images
+dist/elide-tern-android profiles
+dist/elide-tern-android create --name demo \
+  --image 'system-images;android-36;default;arm64-v8a' --device pixel_6
+dist/elide-tern-android start --name demo              # --headless omits the OS window
+dist/elide-tern-android view --name demo               # open the printed URL in a browser
+dist/elide-tern-android stop --name demo               # or --serial emulator-5554
+dist/elide-tern-android delete --name demo --yes
+dist/elide-tern-android create --root /path/to/android-project --runtime elide
+```
+
+Choose an image/ABI reported by `images` for your machine. `--sdk PATH` overrides SDK
+discovery; `--json` emits structured results/errors. For ambiguous workspaces, CLI callers
+pass the Android member directory as `--root`. A conflicting manifest `android.sdk`
+cannot be overridden for Elide's configured creation target: correct it or create a
+custom AVD. Helpers support macOS/Linux SDK tools; Windows `.bat` launchers are not supported.
+
+With an installed, host-compatible image, run
+`make test-android ANDROID_IMAGE='system-images;android-34;default;arm64-v8a'`
+(optionally `ANDROID_SDK=/path/to/sdk`). This creates an isolated AVD, checks overwrite
+and deletion protection, starts/stops/restarts it, then deletes it. It also covers the
+persistent advisory lock Android leaves behind after a clean emulator exit.
 
 ### Debugging
 

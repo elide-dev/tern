@@ -149,6 +149,42 @@ remain on the built classpath, avoiding a cold compile of unrelated project code
 Resource/model changes recreate the live backend after building; ordinary edits keep it.
 Inspector and agent protocols are not exposed.
 
+## Android Virtual Devices
+
+`plugin/lib/android.luau` owns a window canvas and the standalone palette commands.
+Project menu/workspace actions pass their explicit root; global commands deliberately
+omit it. The manager calls the bundled `elide-tern-android` executable with argument
+arrays and JSON responses. Project resolution evaluates manifests through Elide and
+uses shared core decoding/SDK lookup; it does not resolve classpaths or build application
+code. Ambiguous Android workspaces return structured member choices for the native picker.
+Configured AVD creation delegates to Elide's inspected `android-avd` target.
+
+`android/sdk.ts` invokes SDK-local `emulator`, `adb` and `avdmanager`. Creation uses
+installed images and known hardware profiles, never `--force` or automatic SDK installation.
+Running instances are associated with AVD names through `adb -s SERIAL emu avd name`.
+Stop targets one serial; a provided name must match. Delete rejects running, unidentified
+or locked AVDs. Emulator launch detaches with an owned diagnostic log, detects startup
+failure and leaves successful instances running independently of the UI.
+
+`android/view.ts` serves the embedded mirror over an ephemeral IPv4-loopback port.
+The random 256-bit path token, exact Host and WebSocket Origin checks, restrictive CSP
+and single controller follow the Compose bridge's trust boundary. The page has no shell,
+file or arbitrary ADB endpoint. Screenshots use `adb exec-out screencap -p`, bounded to
+8 MiB and 8192 pixels per side, with one capture and one unacknowledged frame at a time.
+Capture runs at most every 400 ms and pauses while hidden after an initial frame,
+except for two seconds after input (driven native browser panes may report hidden).
+Gestures map displayed pixels back to screenshot coordinates and are sent on release;
+navigation keys are allowlisted, printable ASCII text is shell-quoted, and literal `%s`
+is preserved. The queue holds at most eight commands. No held input survives a browser
+blur; disconnect invalidates queued input. No audio/multitouch/video transport is exposed.
+
+The native canvas opens the mirror with `cx.browser:call({op="open", how="beside"})`.
+Its private `android-views/<uuid>` job directory carries an atomic `view.json`, a
+one-second lease heartbeat and a cancellation marker. A 15-second expired lease,
+manager close or five-second browser disconnect grace closes the helper, never the
+emulator. Standalone `view` prints its URL and exits after disconnect; an unopened
+URL expires after one minute. Plugin reload restores the manager without relaunching devices.
+
 ## Window integration points
 
 The window half also plugs into Tern's chrome, events and routes. None of these

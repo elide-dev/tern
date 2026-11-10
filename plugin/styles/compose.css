@@ -1,16 +1,26 @@
-/* Native saved-file snapshot cards; images are host blobs, not a window canvas. */
+/* Compose gallery and renderer progress. */
 [data-surface="plugin.elide.compose"] [data-role="compose-controls"] {
   flex-wrap: wrap;
   flex-shrink: 0;
 }
-[data-surface="plugin.elide.compose"] [data-role="compose-snapshot"],
 [data-surface="plugin.elide.compose"] [data-role="compose-card-detail"] {
   color: var(--t2);
   font-size: 12px;
 }
-[data-surface="plugin.elide.compose"] [data-role="compose-path"],
-[data-surface="plugin.elide.compose"] [data-role="compose-status"] {
+[data-surface="plugin.elide.compose"] [data-role="compose-path"] {
+  color: var(--t2);
+  font-size: 12px;
   overflow-wrap: anywhere;
+}
+[data-surface="plugin.elide.compose"] [data-role="compose-status"] {
+  padding: 16px;
+  border: 1px solid var(--l2);
+  border-radius: 8px;
+  flex-shrink: 0;
+  overflow-wrap: anywhere;
+}
+[data-surface="plugin.elide.compose"] [data-role="compose-details"] {
+  align-self: flex-start;
 }
 [data-surface="plugin.elide.compose"] [data-role="compose-gallery"] {
   align-items: flex-start;
