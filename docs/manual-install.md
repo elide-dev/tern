@@ -39,7 +39,7 @@ Android device management also requires `dist/elide-tern-android` and its `.LICE
 notice, plus a separately installed Android SDK (Emulator, Platform-Tools, Command-line
 Tools and system images) and JDK. **Manage Android Virtual Devices** works without a
 project; the project menu and workspace toolbar resolve Android project configuration.
-**View** embeds an interactive ADB screenshot mirror in a browser pane. See
+**Browser mirror** opens an optional ADB screenshot view, not a natively embedded emulator. See
 [Android Virtual Devices](../README.md#android-virtual-devices) for CLI commands and limits.
 
 To remove the integration, run `tern plugin unlink elide`. Install a later preview into

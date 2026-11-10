@@ -24,15 +24,20 @@ local function render(cx, state)
   local disabled = state.busy or state.failed
   local rows = {}
   for index, avd in state.avds or {} do
-    table.insert(rows, ui.node("col", { role = "android-device", gap = "sm" }, {
-      ui.el("strong", { text = avd.name }),
-      ui.el("div", { text = avd.state .. (avd.serial and (" · " .. avd.serial) or "") }),
-      ui.node("row", { gap = "sm" }, {
-        button("Start", "start-" .. index, disabled or avd.serial ~= nil),
-        button("Stop", "stop-" .. index, disabled or avd.serial == nil),
-        button("View", "view-" .. index, disabled or avd.serial == nil or state.mirror ~= nil),
-        button("Delete…", "delete-" .. index, disabled or avd.serial ~= nil),
+    local running = avd.serial ~= nil
+    local actions = { button(running and "Stop" or "Start", (running and "stop-" or "start-") .. index, disabled) }
+    if running then
+      table.insert(actions, button("Browser mirror", "view-" .. index, disabled or state.mirror ~= nil))
+    else
+      table.insert(actions, button("Delete…", "delete-" .. index, disabled))
+    end
+    table.insert(rows, ui.node("row", { role = "android-device", gap = "md" }, {
+      ui.node("col", { role = "android-device-info", gap = "sm", grow = 1 }, {
+        ui.el("strong", { text = avd.name, role = "android-device-name" }),
+        ui.el("div", { role = running and "android-running" or "android-stopped",
+          text = avd.state .. (avd.serial and (" · " .. avd.serial) or "") }),
       }),
+      ui.node("row", { role = "android-device-actions", gap = "sm" }, actions),
     }))
   end
   if #rows == 0 and not state.busy and not state.failed then
@@ -42,17 +47,21 @@ local function render(cx, state)
     button("Refresh", "refresh", state.busy),
     button("Create AVD…", "create", disabled),
   }
-  if state.project and state.project.avd then
-    table.insert(controls, button("Create configured AVD", "configured", disabled))
+  local configured_exists = false
+  for _, avd in state.avds or {} do
+    configured_exists = configured_exists or (state.project ~= nil and avd.name == state.project.avd)
+  end
+  if state.project and state.project.avd and not configured_exists then
+    table.insert(controls, button("Create " .. state.project.avd, "configured", disabled))
   end
   cx.canvas:set(state.pane, { view = ui.node("col", { role = "android-manager", gap = "md" }, {
-    ui.el("strong", { text = state.context and "Project Android devices" or "Android Virtual Devices" }),
-    ui.el("div", { text = state.context and state.context.root or "Standalone SDK management" }),
-    ui.node("row", { gap = "sm" }, controls),
+    ui.el("strong", { role = "android-heading", text = "Android devices" }),
+    ui.el("div", { role = "android-context", text = state.context and state.context.root or "Local Android SDK" }),
+    ui.node("row", { role = "android-toolbar", gap = "sm" }, controls),
     ui.el("div", { role = "android-status", text = state.message or "Loading devices…" }),
-    ui.el("div", { role = "android-sdk", text = state.sdk and ("SDK: " .. state.sdk) or "" }),
-    ui.node("col", { gap = "md" }, rows),
-    ui.el("div", { text = "Start opens the emulator window; View mirrors it in a browser pane. Closing either pane leaves the device running." }),
+    ui.node("col", { gap = "sm" }, rows),
+    ui.el("div", { role = "android-note", text = "Start opens the emulator in its own window. Native embedding is unavailable; Browser mirror is an optional low-frame-rate ADB view." }),
+    ui.el("div", { role = "android-sdk", text = state.sdk and ("SDK · " .. state.sdk) or "" }),
   }) })
 end
 
@@ -357,9 +366,17 @@ end
 function M.install(config, path, runtime)
   configuration, plugin_path, runtime_path = config, path, runtime
   tern.css("android-manager", [[
-    [data-role="android-manager"] { padding: 16px; overflow: auto; font-family: system-ui, sans-serif; }
-    [data-role="android-device"] { padding: 12px; border: 1px solid var(--l2); border-radius: 6px; }
-    [data-role="android-sdk"] { overflow-wrap: anywhere; color: var(--t2); }
+    [data-role="android-manager"] { padding: 20px; overflow: auto; font-family: system-ui, sans-serif; max-width: 960px; }
+    [data-role="android-heading"] { font-size: 18px; font-weight: 600; }
+    [data-role="android-context"], [data-role="android-sdk"], [data-role="android-note"] { overflow-wrap: anywhere; color: var(--t2); font-size: 12px; }
+    [data-role="android-toolbar"] { flex-wrap: wrap; padding-bottom: 8px; border-bottom: 1px solid var(--l2); }
+    [data-role="android-device"] { padding: 12px 0; border-bottom: 1px solid var(--l2); align-items: center; flex-wrap: wrap; }
+    [data-role="android-device-info"] { min-width: 140px; }
+    [data-role="android-device-name"] { overflow-wrap: anywhere; font-size: 13px; }
+    [data-role="android-device-actions"] { flex-wrap: wrap; }
+    [data-role="android-running"] { color: var(--ok); font-size: 12px; }
+    [data-role="android-stopped"] { color: var(--t2); font-size: 12px; }
+    [data-role="android-status"] { font-size: 12px; overflow-wrap: anywhere; }
   ]])
   tern.command({ id = "android", title = "Manage Android Virtual Devices", icon = "list", run = function(cx)
     M.open(cx)

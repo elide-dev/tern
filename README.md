@@ -176,14 +176,14 @@ No embedded SDK is required for Compose itself.
 
 Choose **Manage Android Virtual Devices** from the palette, even outside an Elide
 project. The native manager lists AVDs and running emulator serials, with **Create**,
-**Start**, **Stop**, **Delete** and **View** actions. Separate create/start/stop/delete
+**Start**, **Stop**, **Delete** and **Browser mirror** actions, shown only when applicable. Separate create/start/stop/delete
 palette commands work without a project too. **Refresh** reads changes made by Android
 Studio or other terminals. Deletion asks for confirmation and refuses running or locked
 devices; creation never overwrites an existing AVD.
 
 The project menu and workspace toolbar offer **Manage project Android devices**.
 This evaluates the project's Android configuration using the configured Elide runtime;
-workspaces with multiple Android members show a member picker. **Create configured AVD**
+workspaces with multiple Android members show a member picker. **Create <configured name>**
 uses Elide's `android-avd` target and configured device settings. Custom creation selects
 an installed system image, hardware profile and name. Non-Android projects report a
 configuration error; use the standalone manager instead.
@@ -199,14 +199,14 @@ Optional `plugin/config.json` settings:
 - `android_sdk`: SDK directory override, distinct from the embedded Elide `sdk` setting.
 
 **Start** opens the emulator's own window and returns once ADB registers it; Android may
-still be booting. **View** mirrors a running device in an adjacent Tern browser pane.
+still be booting. **Browser mirror** mirrors a running device in an adjacent Tern browser pane.
 It supports taps, drag-and-release swipes, long presses, scroll swipes, navigation keys
 and printable ASCII text. Escape releases keyboard focus. This is an ADB screenshot
 mirror (up to 2.5 frames/second), not native-window embedding or a video stream; no audio,
 multitouch or IME injection. Use the emulator window for those capabilities.
 
 Closing the manager or disconnecting/closing its browser stops the mirror, **not the
-emulator**. Plugin reload expires the old mirror's lease; choose **View** again.
+emulator**. Plugin reload expires the old mirror's lease; choose **Browser mirror** again.
 Only **Stop** terminates a device, and only the selected emulator. Each mirror has an
 unpredictable loopback access URL; do not share it.
 
