@@ -10,6 +10,9 @@ const MAX_PNG = 8 * 1024 * 1024;
 const MAX_BYTES = 32 * 1024 * 1024;
 const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 type Frame = { id: string; name: string; detail: string; data?: string; error?: string; width?: number; height?: number; live?: boolean; keyboard: boolean };
+/** Page buttons the native pane carries out: switch to snapshots, open the source, close the preview. */
+export type LiveAction = "snapshot" | "source" | "close";
+const ACTIONS: Record<LiveAction, true> = { snapshot: true, source: true, close: true };
 export interface LiveServer {
   url: string;
   attach(value: LivePreview): void;
@@ -20,7 +23,14 @@ export interface LiveServer {
 }
 
 /** One loopback page controls one live composition session. The unguessable path is its credential. */
-export function createLiveServer(options: { signal: AbortSignal; refresh: () => Promise<void>; stop: () => void }): LiveServer {
+export function createLiveServer(options: {
+  signal: AbortSignal;
+  /** The previewed file's name and its path relative to the project, for the page's toolbar. */
+  file: { name: string; path: string };
+  refresh: () => Promise<void>;
+  stop: () => void;
+  request: (action: LiveAction) => void;
+}): LiveServer {
   const token = randomBytes(32).toString("hex");
   const prefix = `/${token}/`;
   let backend: LivePreview | undefined;
@@ -105,6 +115,7 @@ export function createLiveServer(options: { signal: AbortSignal; refresh: () => 
         clearTimeout(disconnect);
         socket = ws;
         reset();
+        send({ type: "file", ...options.file });
         send({ type: "gallery", epoch, ids: [...images.keys()] });
         send(lastStatus);
         for (const id of images.keys()) pending.add(id);
@@ -121,6 +132,7 @@ export function createLiveServer(options: { signal: AbortSignal; refresh: () => 
         try { value = JSON.parse(payload); } catch { ws.close(1008, "Invalid input"); return; }
         if (!value || typeof value !== "object" || value.epoch !== epoch) return;
         if (value.type === "stop") { reset(); options.stop(); return; }
+        if (value.type === "request" && typeof value.action === "string" && Object.hasOwn(ACTIONS, value.action)) { reset(); options.request(value.action as LiveAction); return; }
         if (value.type === "refresh") {
           if (refreshing || !backend) return;
           refreshing = true; reset();

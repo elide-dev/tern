@@ -120,20 +120,24 @@ and [upstream provenance](third_party/README.md).
 Open a saved Kotlin `.kt` file and choose **Open Compose preview**, or click **Preview**
 in the project workspace toolbar. The native gallery renders `@Preview`, multipreview,
 member-function and `@PreviewParameter` cards beside the source. Click an image for Tern's
-zoom viewer; **Open source** returns to the file.
+zoom viewer. The pane's toolbar holds icon buttons, named in their tooltips: the
+**Snapshot previews** and **Interactive live preview** mode toggles, **Refresh previews**
+(**Start previews** while stopped), **Stop renderer**, **Open source** and **Close preview**.
 
 Opening a preview resolves the enclosing Elide workspace and selects the nearest Android APK
 consuming that source set. The initial build prepares JVM classes and Android resources.
 The helper then keeps the same shared incremental compiler and renderer
 running. Kotlin/Java edits in native and Elide source editors, including unsaved buffers,
-refresh automatically; saved dependency sources are watched too. **Refresh** retries without
+refresh automatically; saved dependency sources are watched too. **Refresh previews** retries without
 restarting the helper. Resource and project-configuration saves rebuild the required inputs
 automatically. Build-only source processing still requires saving, as in VS Code.
 Preview code executes locally with your permissions: open only projects you trust.
 
-During rendering, a progress bar shows the current phase: project loading, renderer setup,
-build or preview update. **Show details** expands renderer output. The last gallery stays
-visible during updates; progress clears when rendering finishes or fails.
+During rendering, a progress panel shows the current phase over a bar, the steps done so far
+(project, renderer, build, render) and the renderer's latest line. The last gallery stays
+visible, dimmed, during updates; progress clears when rendering finishes or fails. A failure
+shows its message, with compiler output in a terminal well; after the helper exits,
+**Show output** expands its build/runtime output.
 
 Requires an Android-capable Elide runtime, the project's Android SDK/dependencies, and a JDK 17+.
 On first render, the shared installer downloads the pinned, SHA-256-verified layoutlib runtime
@@ -147,13 +151,17 @@ Optional `plugin/config.json` settings:
   Otherwise the helper resolves Komodo from the Elide installation.
 
 Compile/build errors retain the last gallery with an error status; the next edit can recover.
-Rendering failures appear on individual cards. **Cancel** and closing the pane stop active work.
+Rendering failures appear on individual cards. **Stop renderer** and closing the pane stop active work.
 Plugin reload cancels work and restores an idle panel; it never automatically executes previews.
 Workspace builds serialize, while open previews keep their private compilers and renderers.
 After a forced helper kill during a build, remove its lock **only after confirming its
 Elide/JVM build processes have stopped**.
 
-**Live preview** switches to a Tern browser pane beside the gallery.
+**Interactive live preview** replaces the gallery with the live page in the same pane, for as
+long as the session runs; Tern's browser toolbar stays hidden. The page carries the pane's
+toolbar: **Snapshot previews** returns to the gallery, and **Refresh previews**, **Stop renderer**,
+**Open source** and **Close preview** act as in the gallery. When the session ends, the pane
+shows the gallery again with the session's last status.
 It uses Komodo's protocol-2 `workspace-fir` preview session.
 Click to focus a card, drag or scroll to interact, and type when the card reports keyboard
 support. Escape releases input. Frames and composition state update without rebuilding.
@@ -163,15 +171,16 @@ can stall infinite transitions at a cycle boundary even while coroutine timers a
 
 Live mode requires a compatible Komodo distribution with Compose compiler plugins.
 An unavailable or incompatible runtime produces an error.
-Both preview modes observe editor and saved-source changes. **Refresh** retries the current
-inputs; resource/configuration saves rebuild and reopen the live backend automatically.
+Both preview modes observe editor and saved-source changes. **Refresh previews** retries the
+current inputs; resource/configuration saves rebuild and reopen the live backend automatically.
 Source refreshes reuse the session but may reset composition state.
 IME composition and clipboard paste are not supported by the live keyboard protocol.
 
-The native pane owns the live session: **Cancel**, closing it or plugin reload stops the
-helper and Komodo. Closing the browser pane also stops the session after a five-second
-reload grace period. Only one browser controls a session. Its loopback URL contains a
-temporary access token; do not share it.
+The Compose pane owns the live session: **Stop renderer**, **Close preview** or plugin reload
+stops the helper and Komodo. Closing the live page shows the gallery pane, with
+**Show live preview** to bring it back; the session stops after a five-second grace period.
+Only one page controls a session. Its loopback URL contains a temporary access token; do not
+share it. The page follows Tern's light or dark theme setting, or the system's appearance.
 
 Layout inspection, arbitrary-composable agent rendering, MCP and prewarming are not
 provided. Galleries allow 32 cards, 8 MiB per PNG, 32 MiB in total and 4096 pixels per side.

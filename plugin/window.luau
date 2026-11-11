@@ -562,7 +562,7 @@ local function poll_native(cx)
   next_root(cx)
 end
 
-local function register_native(id, request, cx)
+local function register_native(id, cx)
   if not native_job_id(id) or cx.hosts:current().kind ~= "local" then
     return
   end
@@ -574,7 +574,9 @@ local function register_native(id, request, cx)
     return
   end
   local root = links.absolute(registration.root)
-  if not root or string.find(root, "%c") or (request.pane and request.pane ~= registration.pane) then
+  -- A block's link reports the focused pane, not the block: an editor, or the live page over
+  -- the Compose pane. registration.json, written by the host, names the job's pane.
+  if not root or string.find(root, "%c") then
     return
   end
   local job = { dir = dir, root = root, pane = registration.pane }
@@ -1053,6 +1055,70 @@ local function with_root(cx, root, act)
   end)
 end
 
+-- Live Compose pages open over their Compose pane, in its place, until closed. Their website
+-- data profile names them to styles/compose.css, which hides the browser's toolbar: the page
+-- carries the pane's own.
+local LIVE_PROFILE = "elide-compose"
+-- Pages whose close arrived before their open finished.
+local live_closed = {}
+
+local function live_blocks(cx, url, act)
+  cx.browser:call({ op = "blocks" }):next(function(result, err, current)
+    if not current then
+      return
+    end
+    local found = {}
+    if not err and result and result.ok and type(result.ok.blocks) == "table" then
+      for _, block in result.ok.blocks do
+        if
+          type(block) == "table"
+          and type(block.url) == "string"
+          and string.sub(block.url, 1, #url) == url
+          and type(block.block) == "number"
+        then
+          table.insert(found, block.block)
+        end
+      end
+    end
+    act(current, found)
+  end)
+end
+
+local function show_live(cx, owner, url)
+  live_closed[url] = nil
+  live_blocks(cx, url, function(current, found)
+    if #found > 0 or live_closed[url] then
+      return
+    end
+    -- The page follows the system's appearance unless Tern's theme pins light or dark.
+    local theme = current.settings:get("theme")
+    local scheme = if theme == "Light" then "#light" elseif theme == "Dark" then "#dark" else ""
+    current.browser
+      :call({ op = "open", owner = owner, how = "over", url = url .. scheme, profile = LIVE_PROFILE })
+      :next(function(result, err, latest)
+        if not latest then
+          return
+        end
+        if err or (result and result.error) then
+          latest:toast("error", "Could not open live Compose preview.", tostring(err or result.error.message))
+        elseif live_closed[url] and result and result.ok then
+          live_closed[url] = nil
+          latest.browser:call({ op = "close", block = result.ok.block })
+        end
+      end)
+  end)
+end
+
+local function hide_live(cx, url)
+  live_closed[url] = true
+  live_blocks(cx, url, function(current, found)
+    for _, block in found do
+      live_closed[url] = nil
+      current.browser:call({ op = "close", block = block })
+    end
+  end)
+end
+
 -- `elide://` links (contract in docs/architecture.md). Every elide:// link is claimed, so a
 -- rejected one is dropped with a toast instead of reaching the system's URL handlers.
 tern.route.link(function(request, cx)
@@ -1061,28 +1127,20 @@ tern.route.link(function(request, cx)
   end
   local native_id = string.match(request.url, "^elide://compose%-documents/([^/]+)$")
   if native_id then
-    register_native(native_id, request, cx)
+    register_native(native_id, cx)
     return { handled = true }
   end
-  local port, token = string.match(request.url, "^elide://compose%-live/(%d+)/(%x+)$")
-  if port and #token == 64 and tonumber(port) >= 1 and tonumber(port) <= 65535 then
-    if not local_host(cx) then
-      return { handled = true }
-    end
-    local owner = request.pane or cx.session:focused()
-    if owner then
-      cx.browser
-        :call({
-          op = "open",
-          owner = owner,
-          how = "beside",
-          url = "http://127.0.0.1:" .. port .. "/" .. token .. "/",
-        })
-        :next(function(result, err, current)
-          if err or (result and result.error) then
-            current:toast("error", "Could not open live Compose preview.", tostring(err or result.error.message))
-          end
-        end)
+  local pane, port, token, verb = string.match(request.url, "^elide://compose%-live/(%d+)/(%d+)/(%x+)(/?%a*)$")
+  if port and #token == 64 and tonumber(port) >= 1 and tonumber(port) <= 65535 and (verb == "" or verb == "/close") then
+    local url = "http://127.0.0.1:" .. port .. "/" .. token .. "/"
+    if verb == "/close" then
+      hide_live(cx, url)
+    elseif local_host(cx) then
+      -- The link names its Compose pane: a block's link reports the focused pane instead.
+      local owner = cx.session:pane(tonumber(pane))
+      if owner and owner.kind == "plugin" and owner.block == "elide.compose" then
+        show_live(cx, owner.pane, url)
+      end
     end
     return { handled = true }
   end

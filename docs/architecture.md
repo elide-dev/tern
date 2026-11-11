@@ -86,7 +86,9 @@ progress; atomic `gallery.json` publishes a revision and bounded PNG metadata wh
 helper remains running. PNG basenames include the revision. The block loads new revisions
 as native `cx:blob` images and acknowledges them through `gallery-ack`; only acknowledged,
 superseded PNGs are removed. Errors retain the last gallery; successful empty galleries
-remove obsolete cards. Closing the session removes its job directory.
+remove obsolete cards. Closing the session removes its job directory. Failure messages carry
+no build output: the helper streams that to stderr, whose tail the block shows apart from the
+message once the helper exits.
 
 `compose/changes.ts` watches workspace directories (including atomic saves, source creation
 and deletion) and the job's refresh/document inputs, ignoring generated `.dev` output.
@@ -97,11 +99,13 @@ an edit warms its private compiler before publishing, rather than trusting stale
 
 The host publishes dirty Elide source buffers to `documents.json`. Native file editors belong
 to the window VM: the host writes `registration.json` and opens the validated
-`elide://compose-documents/<uuid>` route. The window reads dirty Kotlin/Java documents through
-`cx.docs:read` and publishes `native-documents.json`; helper launch waits for that first
-capture. Native buffers poll once per second (no native edit event/revision is exposed),
-Elide buffers debounce for 200 ms. Saved/closed buffers drop their overlays; neither path
-writes source files. Canonical workspace-root updates widen capture to sibling libraries.
+`elide://compose-documents/<uuid>` route. A block's link reports the focused pane, not the
+block, so the window takes the job's pane from `registration.json`. The window reads dirty
+Kotlin/Java documents through `cx.docs:read` and publishes `native-documents.json`; helper
+launch waits for that first capture. Native buffers poll once per second (no native edit
+event/revision is exposed), Elide buffers debounce for 200 ms. Saved/closed buffers drop
+their overlays; neither path writes source files. Canonical workspace-root updates widen
+capture to sibling libraries.
 Malformed/oversized captures report errors instead of silently previewing disk contents.
 
 The block renews a lease every second. Cancel/close writes `cancel`; the helper checks
@@ -133,11 +137,23 @@ goes idle at identical pixels. It forwards the shared protocol unchanged with st
 backpressure and closes both sockets with the backend.
 
 Tern native image nodes expose zoom but no raw pointer coordinates or key releases.
-The native block therefore opens a browser pane through `elide://compose-live/<port>/<token>`
-and `cx.browser:call({op="open", how="beside"})`. `compose/server.ts` binds only
-127.0.0.1 on an ephemeral port, requires the random 256-bit URL token and exact Host,
-and checks the WebSocket Origin. The self-contained page has a restrictive CSP and no
-third-party content. This link carries no build or file commands.
+Live input therefore goes through a browser page that takes the Compose pane's place while
+the session runs. Once `status.json` carries the server URL, the block opens
+`elide://compose-live/<pane>/<port>/<token>`; the window checks that `<pane>` is an
+`elide.compose` block and calls `cx.browser:call({op="open", owner=pane, how="over",
+profile="elide-compose"})`, adding `#light` or `#dark` when Tern's theme pins one. The pane
+stays parked behind the page. `styles/compose.css` hides the browser's toolbar, load bar and
+notes in browser panes whose website-data chip names `elide-compose`. That rule targets
+Tern's internal `.kit-web-*` classes and `:has()`, which Tern 0.9.16 applies but its CSS
+reference does not list; a Tern change can bring the toolbar back. The page draws the
+pane's toolbar instead. Its mode, source and close buttons reach the block as `status.json`
+`request: {id, action}`, carried out once per id on the next lease tick. A mode switch,
+Stop, Close, the helper's exit and plugin reload open `…/close`, which closes every browser
+block showing that URL (an open still in flight closes when it lands); the saved route lets
+a reloaded block close it. `compose/server.ts` binds only 127.0.0.1 on an ephemeral port,
+requires the random 256-bit URL token and exact Host, and checks the WebSocket Origin. The
+self-contained page has a restrictive CSP and no third-party content. These links carry no
+build or file commands.
 
 One browser connection controls the session. Frames are coalesced by card, bounded by
 the gallery limits, and paced at 20 Hz with transport backpressure. Input carries a

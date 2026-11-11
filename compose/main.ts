@@ -14,7 +14,7 @@ import { ensureComposeRuntime } from "@elide/compose-runtime";
 import helperSources from "@elide/compose-helpers";
 import licenses from "@elide/compose-licenses";
 import { startLive, type LivePreview } from "./live";
-import { createLiveServer, type LiveServer } from "./server";
+import { createLiveServer, type LiveAction, type LiveServer } from "./server";
 import { PreviewChanges } from "./changes";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -235,7 +235,6 @@ async function main(argv: string[]): Promise<Result> {
   let source = "";
   let root = "";
   let job = "";
-  let log = "";
   let selected = "";
   let phase = "resolving";
   let cancelled = false;
@@ -256,13 +255,17 @@ async function main(argv: string[]): Promise<Result> {
   process.on("SIGINT", terminate);
   process.on("SIGTERM", terminate);
   let lastStatus = 0;
+  let statusText = "";
+  // The page's latest action for the native pane; the id lets the pane carry each out once.
+  let request: { id: number; action: LiveAction } | undefined;
   const status = (nextPhase: string, text: string, force = true): void => {
     phase = nextPhase;
+    statusText = text;
     if (!job || (!force && Date.now() - lastStatus < 250)) return;
     lastStatus = Date.now();
     try {
       const temporary = path.join(job, "status.json.tmp");
-      writeFileSync(temporary, JSON.stringify({ phase, root, message: text.slice(0, 2048), revision: galleryRevision, ...(server ? { url: server.url } : {}) }), { mode: 0o600 });
+      writeFileSync(temporary, JSON.stringify({ phase, root, message: text.slice(0, 2048), revision: galleryRevision, ...(server ? { url: server.url } : {}), ...(request ? { request } : {}) }), { mode: 0o600 });
       renameSync(temporary, path.join(job, "status.json"));
     } catch (error) {
       controller.abort(new Error(`Cannot publish snapshot status: ${message(error)}`));
@@ -270,7 +273,6 @@ async function main(argv: string[]): Promise<Result> {
   };
   const line = (text: string): void => {
     const bounded = text.slice(-MAX_LOG);
-    log = `${log}${bounded}\n`.slice(-MAX_LOG);
     process.stderr.write(`${bounded}\n`);
     status(phase, `${selected ? `${selected}: ` : ""}${bounded.slice(-1800)}`, false);
   };
@@ -389,7 +391,13 @@ async function main(argv: string[]): Promise<Result> {
     const composeRuntime = await ensureComposeRuntime(cache, signal, text => { line(text); status("runtime", text, false); });
     const helpers = await extractHelpers(cache, signal);
     if (args.mode === "live") {
-      server = createLiveServer({ signal, refresh: async () => { changes!.request(); }, stop: () => stop("Live preview stopped.") });
+      const file = { name: path.basename(source), path: path.relative(root, source) };
+      server = createLiveServer({
+        signal, file,
+        refresh: async () => { changes!.request(); },
+        stop: () => stop("Live preview stopped."),
+        request: action => { request = { id: (request?.id ?? 0) + 1, action }; status(phase, statusText); },
+      });
     } else {
       backend = new ComposeBackend(`${root}\0${source}`, cache, helpers, new ImageStore(path.join(cache, "compose-images")));
       signal.addEventListener("abort", () => backend?.dispose(), { once: true });
@@ -513,7 +521,8 @@ async function main(argv: string[]): Promise<Result> {
     }
   } catch (error) {
     const failure = cancelled ? message(signal.reason ?? error) : message(error);
-    const summary = `${selected ? `${selected}: ` : ""}${failure.slice(0, 8192)}${!cancelled && log ? `\n\nRecent build/runtime output:\n${log}` : ""}`;
+    // Build/runtime output already went to stderr line by line; the pane shows it apart from the message.
+    const summary = `${selected ? `${selected}: ` : ""}${failure.slice(0, 8192)}`;
     process.stderr.write(`${summary}\n`);
     status(cancelled ? "cancelled" : "error", summary);
     return { phase: cancelled ? "cancelled" : "error", message: summary, source, root, images: [] };

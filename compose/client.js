@@ -1,11 +1,17 @@
 "use strict";
+// Tern passes its pinned appearance (#light or #dark); otherwise the page follows the system's.
+const scheme = location.hash.slice(1);
+if (scheme === "light" || scheme === "dark") document.documentElement.style.colorScheme = scheme;
 const status = document.querySelector("#status");
 const gallery = document.querySelector("#gallery");
 const refresh = document.querySelector("#refresh");
 const progress = document.querySelector("#progress");
 const activity = document.querySelector("#activity");
+const latest = document.querySelector("#latest");
+const summary = document.querySelector("#summary");
 const diagnostics = document.querySelector("#diagnostics");
 const detail = document.querySelector("#detail");
+const actions = document.querySelectorAll("#snapshot, #stop, #source, #close");
 const phases = {
   starting: "Starting previews…",
   resolving: "Loading project…",
@@ -15,14 +21,26 @@ const phases = {
   refreshing: "Updating previews…",
   rendering: "Rendering previews…",
   cancelling: "Stopping previews…",
+  switching: "Switching to snapshot previews…",
+  closing: "Closing preview…",
 };
+// Busy phases show their label over a bar and the renderer's latest line; a running session only
+// its summary in the bar; a failure its first line, with the rest (compiler output) behind a disclosure.
 function showStatus(phase, message) {
   const label = phases[phase];
-  status.textContent = label || message;
-  progress.hidden = !label;
+  const text = (message || "").trimEnd();
+  if (phase === "live") summary.textContent = text;
+  activity.hidden = phase === "live";
+  activity.classList.toggle("failed", phase === "error");
   activity.setAttribute("aria-busy", String(!!label));
-  detail.textContent = label ? message : "";
+  progress.hidden = !label;
+  const [first, ...rest] = text.split("\n");
+  status.textContent = label || first;
+  latest.textContent = label ? text.split("\n").pop() : "";
+  latest.hidden = !latest.textContent;
+  detail.textContent = label ? "" : rest.join("\n").trim();
   diagnostics.hidden = !detail.textContent;
+  diagnostics.open = !diagnostics.hidden;
 }
 const cards = new Map();
 let epoch = 0;
@@ -113,7 +131,13 @@ function connect() {
     if (data.type === "reset") {
       reset(); epoch = data.epoch;
       for (const card of cards.values()) card.live = false;
-    } else if (data.type === "status") {
+    } else if (data.type === "file") {
+      document.querySelector("#name").textContent = data.name;
+      document.querySelector("#name").title = data.path;
+      document.querySelector("#path").textContent = data.path;
+      document.title = "Compose · " + data.name;
+    } else if (data.type === "status" && !stopped) {
+      // Once the page asked to stop or leave, the renderer's own status no longer applies.
       showStatus(data.phase, data.message);
       refresh.disabled = data.phase !== "live" && data.phase !== "error";
     } else if (data.type === "gallery") {
@@ -136,8 +160,9 @@ function connect() {
   };
   socket.onclose = () => {
     reset(); refresh.disabled = true;
+    for (const button of actions) button.disabled = true;
     for (const card of cards.values()) card.live = false;
-    showStatus("stopped", stopped ? "Preview stopped." : "Disconnected. Reopen Live preview from the Compose pane.");
+    showStatus("stopped", stopped ? "Preview stopped." : "Disconnected from the renderer.");
   };
 }
 refresh.onclick = () => {
@@ -150,6 +175,19 @@ document.querySelector("#stop").onclick = () => {
   showStatus("cancelling", "");
   send({ type: "stop" });
 };
+// The Compose pane carries these out: it leaves live mode, opens the file or closes itself.
+function request(action, phase) {
+  reset();
+  if (phase) {
+    stopped = true; refresh.disabled = true;
+    for (const button of actions) button.disabled = true;
+    showStatus(phase, "");
+  }
+  send({ type: "request", action });
+}
+document.querySelector("#snapshot").onclick = () => request("snapshot", "switching");
+document.querySelector("#source").onclick = () => request("source");
+document.querySelector("#close").onclick = () => request("close", "closing");
 window.addEventListener("blur", reset);
 document.addEventListener("visibilitychange", () => { if (document.hidden) reset(); });
 window.addEventListener("pagehide", () => { reset(); socket?.close(); });

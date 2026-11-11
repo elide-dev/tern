@@ -3,38 +3,79 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Live Compose preview</title>
+<title>Compose</title>
 <style>
-:root { color-scheme: light dark; font: 14px system-ui, sans-serif; }
-body { margin: 0; padding: 16px; }
-header { position: sticky; top: 0; background: Canvas; padding: 8px 0; z-index: 1; }
-button { font: inherit; padding: 6px 12px; cursor: pointer; }
-#status { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
-#activity { margin: 12px 0; padding: 16px; border: 1px solid GrayText; border-radius: 8px; }
-#progress { display: block; width: 100%; height: 6px; margin-top: 12px; accent-color: Highlight; }
-#progress[hidden], #diagnostics[hidden] { display: none; }
-#diagnostics { margin-top: 12px; }
-#diagnostics summary { cursor: pointer; color: GrayText; }
-#detail { max-height: 200px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+:root { color-scheme: light dark; font: 13px system-ui, sans-serif; --line: color-mix(in srgb, CanvasText 14%, Canvas); --muted: color-mix(in srgb, CanvasText 60%, Canvas); --bad: #d9534f; --kotlin: #7f52ff; }
+body { margin: 0; padding: 0 16px 16px; }
+header { position: sticky; top: 0; background: Canvas; padding-top: 12px; z-index: 1; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.file-icon { flex: none; width: 18px; height: 18px; color: var(--kotlin); }
+.file { display: flex; flex-direction: column; flex: 1; min-width: 120px; }
+.file strong, .file span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file strong { font-size: 13px; }
+.file span, .detail, .hint { color: var(--muted); font-size: 12px; }
+.controls { display: flex; align-items: center; gap: 12px; flex: none; }
+.buttons { display: flex; gap: 3px; flex-shrink: 0; }
+.separator { flex: none; width: 1px; height: 18px; background: var(--line); }
+button.icon { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
+button.icon:hover:not(:disabled) { background: color-mix(in srgb, CanvasText 10%, transparent); }
+button.icon:active:not(:disabled), button.icon[aria-pressed="true"] { background: color-mix(in srgb, CanvasText 14%, transparent); }
+button.icon:focus-visible { outline: 2px solid Highlight; outline-offset: 1px; }
+button.icon:disabled { opacity: .4; cursor: default; }
+button.icon[aria-pressed="true"]:disabled { opacity: 1; }
+svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.45; stroke-linecap: round; stroke-linejoin: round; }
+.file-icon svg { width: 18px; height: 18px; fill: currentColor; stroke: none; }
+#activity { margin: 12px 0 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; }
+#activity[hidden], #progress[hidden], #latest[hidden], #diagnostics[hidden], #summary:empty { display: none; }
+#activity.failed { border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); }
+#activity.failed #status { color: var(--bad); }
+#status { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+#progress { display: block; width: 100%; height: 4px; margin-top: 10px; accent-color: Highlight; }
+#latest { margin: 8px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+#diagnostics { margin-top: 10px; }
+#diagnostics summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+#detail { max-height: 240px; margin: 8px 0 0; padding: 8px 10px; overflow: auto; border-radius: 6px; background: color-mix(in srgb, CanvasText 6%, Canvas); white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.status-line { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 8px 0 12px; }
+#summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #gallery { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16px; }
-article { border: 1px solid GrayText; border-radius: 8px; padding: 12px; max-width: 100%; }
-h2 { font-size: 15px; margin: 0 0 6px; }
-.detail, .hint { color: GrayText; font-size: 12px; }
-img { display: block; max-width: 100%; height: auto; touch-action: none; user-select: none; }
+article { box-sizing: border-box; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px 12px; max-width: 100%; }
+h2 { font-size: 13px; margin: 0 0 2px; }
+article .detail { margin: 0 0 8px; }
+img { display: block; max-width: 100%; height: auto; border-radius: 4px; touch-action: none; user-select: none; }
 img:focus { outline: 2px solid Highlight; outline-offset: 2px; }
-.error { white-space: pre-wrap; max-width: 600px; }
+.error { color: var(--bad); white-space: pre-wrap; overflow-wrap: anywhere; max-width: 600px; font-size: 12px; }
+.error:empty { display: none; }
 </style>
 </head>
 <body>
 <header>
-<button id="refresh" disabled>Refresh</button>
-<button id="stop">Stop</button>
+<div class="toolbar" role="toolbar" aria-label="Compose preview">
+<span class="file-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M2.975 2.976v18.048h18.05v-.03l-4.478-4.511-4.48-4.515 4.48-4.515 4.443-4.477z"/></svg></span>
+<div class="file"><strong id="name"></strong><span id="path"></span></div>
+<div class="controls">
+<div class="buttons" role="group" aria-label="Preview mode">
+<button id="snapshot" class="icon" aria-pressed="false" title="Snapshot previews" aria-label="Snapshot previews"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.25 2.25h9.5a1 1 0 0 1 1 1v9.5a1 1 0 0 1-1 1h-9.5a1 1 0 0 1-1-1v-9.5a1 1 0 0 1 1-1z"/><path d="M2.4 11.4 5.9 7.9l3 3 1.6-1.6 3.1 3.1"/><circle cx="10.4" cy="5.6" r="1.15"/></svg></button>
+<button class="icon" aria-pressed="true" title="Interactive live preview" aria-label="Interactive live preview" disabled><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.25 8.5V3.75a1 1 0 0 1 2 0V7.5"/><path d="M7.25 7V2.75a1 1 0 0 1 2 0V7"/><path d="M9.25 7.25V3.75a1 1 0 0 1 2 0V8"/><path d="M11.25 6.25a1 1 0 0 1 2 0v3.25a4.5 4.5 0 0 1-4.5 4.5h-.6a4.4 4.4 0 0 1-3.2-1.4L2.6 10.1a1 1 0 0 1 1.45-1.4l1.2 1.15"/></svg></button>
+</div>
+<span class="separator" aria-hidden="true"></span>
+<div class="buttons" role="group" aria-label="Renderer">
+<button id="refresh" class="icon" title="Refresh previews" aria-label="Refresh previews" disabled><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.25 8A5.25 5.25 0 1 1 11.71 4.29L13.21 5.79"/><path d="M13.21 2.79v3h-3"/></svg></button>
+<button id="stop" class="icon" title="Stop renderer" aria-label="Stop renderer"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9" rx="1.5"/></svg></button>
+</div>
+<span class="separator" aria-hidden="true"></span>
+<div class="buttons" role="group" aria-label="Pane">
+<button id="source" class="icon" title="Open source" aria-label="Open source"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 1.75h4.9L12 4.85v9.4H4z"/><path d="M8.75 1.9V5h3.1M6.9 8 5.75 9.4l1.15 1.4M9.1 8l1.15 1.4L9.1 10.8"/></svg></button>
+<button id="close" class="icon" title="Close preview" aria-label="Close preview"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 4.5 7 7m0-7-7 7"/></svg></button>
+</div>
+</div>
+</div>
 <div id="activity" aria-busy="true">
 <p id="status" role="status">Connecting…</p>
 <progress id="progress" aria-labelledby="status"></progress>
-<details id="diagnostics" hidden><summary>Details</summary><pre id="detail"></pre></details>
+<p id="latest"></p>
+<details id="diagnostics" hidden><summary>Output</summary><pre id="detail"></pre></details>
 </div>
-<p class="hint">Click to focus · Drag and scroll to interact · Escape to release input</p>
+<div class="status-line"><span id="summary" class="detail"></span><span class="hint">Click to focus · Drag and scroll to interact · Escape releases input</span></div>
 </header>
 <main id="gallery"></main>
 <script src="./client.js"></script>
