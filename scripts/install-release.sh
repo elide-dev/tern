@@ -32,5 +32,12 @@ if [ ! -e "$bundle_root/plugin/config.json" ]; then
 JSON
 fi
 tern plugin link "$bundle_root/plugin"
+# Pkl highlighting: Tern loads grammars from its Syntaxes folder. Link ours unless the user keeps their own.
+syntaxes="${TERN_CONFIG_DIR:-$HOME/Library/Application Support/tern}/syntaxes"
+mkdir -p "$syntaxes"
+if [ ! -e "$syntaxes/Pkl.sublime-syntax" ] || [ -L "$syntaxes/Pkl.sublime-syntax" ]; then
+  ln -sfn "$bundle_root/plugin/syntaxes/Pkl.sublime-syntax" "$syntaxes/Pkl.sublime-syntax"
+fi
+echo "Restart Tern to load Pkl highlighting."
 echo "Installed. Keep this release directory in place while using the plugin."
 echo "Open Tern in a project directory, then choose Open project workspace."

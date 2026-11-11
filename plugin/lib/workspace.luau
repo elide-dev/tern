@@ -3,6 +3,8 @@ local opening = {}
 local M = {}
 local ui = tern.ui
 local entries = {}
+-- The toolbar's largest share of its split; Tern keeps every side at 10% or more.
+local MAX_SHARE = 0.12
 
 local function key(cx, pane)
   return "workspace:" .. cx:window_key() .. ":" .. tostring(pane)
@@ -41,9 +43,9 @@ local function separator()
   return ui.el("span", { role = "project-separator", attrs = { ["aria-hidden"] = "true" } })
 end
 
--- The toolbar for the file the workspace editor shows (`nil` when none): Source appears
--- only for a file the source block shows; Debug names the file it would launch, else it
--- opens the debugger's target picker.
+-- The toolbar for the file the workspace editor shows (`nil` when none): Preview appears only
+-- for a Kotlin file; Debug names the file it would launch, else it opens the debugger's
+-- target picker.
 local function controls(context, file)
   local debug_title = if file and source.debuggable(file)
     then "Debug " .. (string.match(file, "([^/]+)$") or file)
@@ -54,13 +56,11 @@ local function controls(context, file)
     button("Show project files", "files", "folder"),
     button("Show device manager", "android", "smartphone"),
   }
-  if file and source.lang(file) then
-    table.insert(tools, 1, button("Source", "source", "file"))
-  end
   if file and source.extension(file) == "kt" then
-    table.insert(tools, 1, button("Preview Compose file", "preview", "file"))
+    table.insert(tools, 1, button("Preview Compose file", "preview", "eye"))
   end
   return ui.node("row", { role = "project-actions", gap = "md", aria = "Project toolbar" }, {
+    ui.el("span", { role = "project-mark", attrs = { ["aria-hidden"] = "true" } }),
     ui.el("span", { role = "project-name", text = context.name or "Project", title = context.root }),
     separator(),
     ui.node("buttons", { variant = "toolbar", label = "Build and execution", role = "project-execution" }, {
@@ -97,10 +97,11 @@ function M.install(actions)
     "workspace-toolbar",
     [[
     [data-role="project-actions"] {
-      position: absolute; top: 50%; transform: translateY(-50%);
+      position: absolute; top: 0;
       width: 100%; height: 36px; max-height: 100%; min-height: 0; gap: 10px; flex-wrap: nowrap; align-items: center;
       overflow-x: auto; overflow-y: hidden; font-family: system-ui, sans-serif;
     }
+    [data-role="project-mark"] { width: 16px; height: 16px; flex-shrink: 0; margin-right: -4px; }
     [data-role="project-name"] {
       min-width: 48px; max-width: 220px; overflow: hidden; text-overflow: ellipsis;
       white-space: nowrap; font-size: 12px; font-weight: 600; color: var(--t1);
@@ -125,12 +126,51 @@ function M.install(actions)
       end
     end
   end
-  -- Follows the editor's file without a timer: these events fire when it can change.
+  -- A toolbar left alone in its tab has no editor or terminal to act beside: it closes with them.
+  local function alone(cx, pane)
+    local tab = cx.session:tab_of(pane)
+    local layout = tab and cx.session:layout(tab)
+    return layout ~= nil and layout.root ~= nil and layout.root.pane == pane
+  end
+  -- The split node holding `pane` directly, and its side there.
+  local function holder(node, pane)
+    for side = 1, 2 do
+      local child = node[side]
+      if child and child.pane == pane then
+        return node, side
+      elseif child then
+        local found, at = holder(child, pane)
+        if found then
+          return found, at
+        end
+      end
+    end
+    return nil, nil
+  end
+  -- Tern has no pane size limit, so the toolbar's height is capped as a share of the split above its
+  -- editor: past it (its editor closed and it took the editor's rows, or a divider moved), it shrinks
+  -- back to the smallest share Tern allows.
+  local function hold(cx, pane)
+    local tab = cx.session:tab_of(pane)
+    local layout = tab and cx.session:layout(tab)
+    if not (layout and layout.root) then
+      return
+    end
+    local node, side = holder(layout.root, pane)
+    if node and side == 1 and node.split == "down" and node.ratio > MAX_SHARE then
+      cx.layout:resize(pane, "down", -1000)
+    end
+  end
+  -- Follows the editor's file without a timer: these events fire when it can change. Focus also
+  -- moves when a pane closes, which catches closed terminals that report no `pane_closed`.
   local function follow(_, cx)
     -- Only panes that are still this plugin's canvases: a recorded id can outlive its canvas.
     for _, canvas in cx.canvas:list() do
       local workspace = canvas.owner == tern.plugin.id and entries[canvas.pane]
-      if workspace then
+      if workspace and alone(cx, canvas.pane) then
+        cx.layout:close(canvas.pane)
+      elseif workspace then
+        hold(cx, canvas.pane)
         render(cx, canvas.pane, workspace, false)
       end
     end
@@ -250,7 +290,9 @@ function M.install(actions)
     if entries[event.pane] or tern.kv.get(key(cx, event.pane)) then
       entries[event.pane] = nil
       tern.kv.set(key(cx, event.pane), nil)
+      return
     end
+    follow(event, cx)
   end)
 end
 
@@ -281,6 +323,7 @@ function M.open(context, cx)
     return
   end
   cx.layout:resize(editor, "down", 12)
+  -- Split off the editor, the toolbar takes a share of the editor's rows only, not the tab's.
   local pane, problem = cx.canvas:open({
     title = context.name or "Project",
     about = "Project actions for " .. context.root,

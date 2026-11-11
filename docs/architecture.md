@@ -22,7 +22,12 @@ the in-process `tern serve` harness can exceed the synchronous launch call's plu
 
 Project workspaces compose existing Tern primitives: `cx.docs:open` owns the file
 editor, `cx:open` reveals the project in Files, `cx.layout` owns adjustable splits,
-and an owner-tagged `cx.canvas` holds the action bar. The toolbar carries no test or
+and an owner-tagged `cx.canvas` holds the action bar, split off the editor. Tern has no pane
+size limit and keeps every split side at 10% or more, so the plugin caps the bar at 12% of
+its split: on `focus`, `title` and `pane_closed` a taller bar (its editor closed, a divider
+moved) is resized back to the minimum, and a bar left alone in its tab closes. It is still a
+pane: floats are picture-in-picture cards with their own header, status line segments are
+off by default, and Files header buttons show for every folder. The toolbar carries no test or
 document model. Its persisted pane references and explicit project root let actions
 survive plugin reloads without following an unrelated focused directory. Results
 use native TSP launchers beside the editor. Closing a workspace uses Tern's ordinary
@@ -329,8 +334,8 @@ Offsets are UTF-16 code units.
 
 - **Arguments.** The absolute file, then optionally the project root and a one-based line.
   Without a root the block looks for the nearest `elide.pkl` above the file.
-- **Opening.** `elide://source` (above), the workspace toolbar's **Source** button (the workspace
-  editor's file), the project menu's **Open Elide source…** and the `plugin.elide.source` command
+- **Opening.** `elide://source` (above), the project menu's **Open Elide source…** and the
+  `plugin.elide.source` command
   (the focused file, else a prompted project path), and "Open with Elide source" from the `files`
   globs in `plugin.toml`. It is not in the palette: it always needs a file.
 - **Editing.** The block opts into the `edit` and `undo` features. With Tern's native editing on,
@@ -590,8 +595,8 @@ The window half shows a control only when it can act or has something to show:
 - Status segments appear only inside a detected project, and the outcome segment only
   after an `elide test`, `build` or `run` finished in that pane.
 - The workspace toolbar follows its editor's file on `focus` and `title` events (no
-  timer, and a redraw only when the file changed). **Source** appears only for a file
-  the source block shows. **Debug** stays, because without a debuggable file it opens
+  timer, and a redraw only when the file changed). **Preview** appears only for a Kotlin
+  file. **Debug** stays, because without a debuggable file it opens
   the debugger's target picker; its tooltip says which it will do.
 - The project menu lists **View test runs** only once the project has a `run-*` report
   directory under `.dev/reports/tests/tern/`.

@@ -1,0 +1,130 @@
+%YAML 1.2
+---
+# Pkl (https://pkl-lang.org) for Tern's highlighter. Installed into Tern's Syntaxes folder by install.sh.
+name: Pkl
+scope: source.pkl
+file_extensions: [pkl, pcf]
+first_line_match: ^\s*(amends|extends|module)\s
+
+variables:
+  ident: '(?:[A-Za-z_$][A-Za-z0-9_$]*|`[^`]+`)'
+  keyword: '\b(?:abstract|amends|as|class|const|else|extends|external|fixed|for|function|hidden|if|import\*?|in|is|let|local|module|new|open|out|outer|read[?*]?|super|this|throws|trace|typealias|when)\b'
+
+contexts:
+  main:
+    - include: comments
+    - include: strings
+    - include: annotations
+    - include: declarations
+    - include: literals
+    - match: '{{keyword}}'
+      scope: keyword.control.pkl
+    - match: '\b(?:Any|Boolean|Bytes|Collection|DataSize|Duration|Dynamic|Float|Function\d?|Int|Int8|Int16|Int32|List|Listing|Map|Mapping|Module|Mixin|Null|NonNull|Number|Object|Pair|Regex|Set|String|Typed|UInt|UInt8|UInt16|UInt32|nothing|unknown)\b'
+      scope: storage.type.pkl
+    - match: '\b[A-Z][A-Za-z0-9_]*\b'
+      scope: entity.name.type.pkl
+    - match: '\b({{ident}})\s*(?=\()'
+      captures:
+        1: variable.function.pkl
+    - match: '\b({{ident}})\s*(?==(?!=)|\{)'
+      captures:
+        1: variable.other.member.pkl
+    - match: '\?\?|\|>|->|[=!<>]=|&&|\|\||[-+*/%<>!=]|~/|\*\*|\?\.|!!'
+      scope: keyword.operator.pkl
+    - match: '[{}()\[\],.:;]'
+      scope: punctuation.pkl
+
+  comments:
+    - match: '///.*$'
+      scope: comment.line.documentation.pkl
+    - match: '//.*$'
+      scope: comment.line.pkl
+    - match: '/\*'
+      push:
+        - meta_scope: comment.block.pkl
+        - match: '\*/'
+          pop: true
+    - match: '^#!.*$'
+      scope: comment.line.pkl
+
+  annotations:
+    - match: '@{{ident}}(?:\.{{ident}})*'
+      scope: variable.annotation.pkl
+
+  declarations:
+    - match: '\b(class|typealias)\s+({{ident}})'
+      captures:
+        1: keyword.control.pkl
+        2: entity.name.class.pkl
+    - match: '\b(function)\s+({{ident}})'
+      captures:
+        1: keyword.control.pkl
+        2: entity.name.function.pkl
+
+  literals:
+    - match: '\b(?:true|false|null)\b'
+      scope: constant.language.pkl
+    - match: '\b(?:NaN|Infinity)\b'
+      scope: constant.numeric.pkl
+    - match: '\b0x[0-9A-Fa-f_]+\b|\b0b[01_]+\b|\b0o[0-7_]+\b'
+      scope: constant.numeric.pkl
+    - match: '(?:\b\d[\d_]*)?\.?\b\d[\d_]*(?:[eE][+-]?\d[\d_]*)?\b'
+      scope: constant.numeric.pkl
+
+  strings:
+    # Custom delimiters: #"..."#, ##"""..."""## and so on; escapes and interpolation take the same #s.
+    - match: '(#+)"""'
+      push:
+        - meta_scope: string.quoted.triple.pkl
+        - match: '"""\1'
+          pop: true
+        - include: delimited_escapes
+    - match: '(#+)"'
+      push:
+        - meta_scope: string.quoted.double.pkl
+        - match: '"\1|$'
+          pop: true
+        - include: delimited_escapes
+    - match: '"""'
+      push:
+        - meta_scope: string.quoted.triple.pkl
+        - match: '"""'
+          pop: true
+        - include: escapes
+    - match: '"'
+      push:
+        - meta_scope: string.quoted.double.pkl
+        - match: '"|$'
+          pop: true
+        - include: escapes
+
+  escapes:
+    - match: '\\\('
+      scope: punctuation.section.interpolation.begin.pkl
+      push: interpolation
+    - match: '\\(?:[tnr"\\]|u\{[0-9A-Fa-f]+\})'
+      scope: constant.character.escape.pkl
+
+  delimited_escapes:
+    - match: '\\#+\('
+      scope: punctuation.section.interpolation.begin.pkl
+      push: interpolation
+    - match: '\\#+(?:[tnr"\\]|u\{[0-9A-Fa-f]+\})'
+      scope: constant.character.escape.pkl
+
+  interpolation:
+    - clear_scopes: 1
+    - meta_scope: meta.interpolation.pkl
+    - match: '\)'
+      scope: punctuation.section.interpolation.end.pkl
+      pop: true
+    - match: '\('
+      push: parens
+    - include: main
+
+  parens:
+    - match: '\)'
+      pop: true
+    - match: '\('
+      push: parens
+    - include: main

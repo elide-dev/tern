@@ -38,6 +38,9 @@ with tempfile.TemporaryDirectory(prefix='tw-', dir='/tmp') as temporary:
     other.mkdir()
     (other / 'elide.pkl').write_text('amends "elide:project.pkl"\n')
     (other / 'outside.txt').write_text('Other project stays separate\n')
+    third = state / 'third-project'
+    third.mkdir()
+    (third / 'elide.pkl').write_text('amends "elide:project.pkl"\n')
     package = state / 'crates/plugins/fixtures/elide'
     shutil.copytree(root / 'plugin', package, ignore=shutil.ignore_patterns('config.json', 'tern.d.luau'))
     # A stand-in runtime: it answers the plugin's capability probes like a current Elide, then
@@ -144,17 +147,17 @@ sleep 300
                 assert button.get('title') and ctl('tree', selector + '[aria-label]').get('nodes'), button
                 assert not button.get('text'), 'Toolbar actions should use native icons without repeated labels'
                 assert ctl('tree', selector + ' svg').get('nodes'), ctl('tree', selector + ' *')
-            # Controls follow the editor's file: elide.pkl has no Source view and no debug target.
-            assert not ctl('tree', '[data-role="project-source"]').get('nodes'), 'Source must hide for elide.pkl'
+            # Controls follow the editor's file: elide.pkl has no Compose preview and no debug target.
+            assert not ctl('tree', '[data-role="project-preview"]').get('nodes'), 'Preview must hide for elide.pkl'
             assert ctl('tree', '[data-role="project-debug"]')['nodes'][0].get('title') == 'Open debugger'
             toolbar = ctl('tree', '[data-role="project-actions"]')['nodes'][0]
             assert toolbar['rect'][3] <= 40, toolbar
             pane = next(node for node in ctl('tree', '.tn-pane')['nodes']
                         if node['rect'][1] <= toolbar['rect'][1]
                         and node['rect'][1] + node['rect'][3] >= toolbar['rect'][1] + toolbar['rect'][3])
-            assert pane['rect'][3] <= 70, pane
+            # Top-aligned: the toolbar keeps its place when the divider below it moves.
+            assert 0 <= toolbar['rect'][1] - pane['rect'][1] <= 16, (toolbar, pane)
             center = lambda node: node['rect'][1] + node['rect'][3] / 2
-            assert abs(center(toolbar) - center(pane)) <= 1, (toolbar, pane)
             for group in ['project-name', 'project-execution', 'project-tools']:
                 node = ctl('tree', '[data-role="' + group + '"]')['nodes'][0]
                 assert abs(center(node) - center(toolbar)) <= 1, node
@@ -183,7 +186,6 @@ sleep 300
                 print('PASS: actual terminal process starts in project root with no injected command', flush=True)
             opened = open_file('one.js')
             assert opened['id'] == editor, 'Ordinary Files click must reuse the workspace editor'
-            wait(lambda: ctl('tree', '[data-role="project-source"]').get('nodes'))
             wait(lambda: ctl('tree', '[data-role="project-debug"]')['nodes'][0].get('title') == 'Debug one.js')
             assert active_tab()['panes'] == 3
             assert open_file('two.py')['id'] == editor
@@ -294,6 +296,27 @@ sleep 300
             ctl('click', '[data-role="project-build"]')
             assert wait(lambda: launched(str(fake_runtime) + ' --ignore-version build --surface=screen'))
             print('PASS: Build opens the full Build page', flush=True)
+            # The toolbar sits above the editor. When the editor closes it takes the editor's rows, then
+            # shrinks back under its height cap; it closes with the tab's last other pane.
+            lua('cx.docs:open(' + json.dumps(str(third / 'elide.pkl')) + ', {how="tab"})')
+            ctl('tab', len(ctl('state')['tabs']))
+            ctl('file', 'wait')
+            ctl('plugins', 'run', 'plugin.elide.workspace')
+            third_toolbar = wait(lambda: next((canvas['pane'] for canvas in lua('cx.canvas:list()')
+                                               if canvas['about'] == 'Project actions for ' + str(third.resolve())), None))
+            third_tab = lua('cx.session:tab_of(' + str(third_toolbar) + ')')
+            layout = lua('cx.session:layout(' + str(third_tab) + ')')['root']
+            assert layout['1']['1'] == {'pane': third_toolbar} and layout['1']['ratio'] <= 0.12, layout
+            third_editor, third_terminal = layout['1']['2']['pane'], layout['2']['pane']
+            lua('{cx.layout:close(' + str(third_editor) + ')}')
+            def capped():
+                root = lua('cx.session:layout(' + str(third_tab) + ')')['root']
+                return root if root.get('2') == {'pane': third_terminal} and root['ratio'] <= 0.12 else None
+            assert wait(capped)['1'] == {'pane': third_toolbar}
+            lua('{cx.layout:focus(' + str(third_terminal) + ')}')
+            ctl('close')
+            wait(lambda: not any(canvas['pane'] == third_toolbar for canvas in lua('cx.canvas:list()')))
+            print('PASS: the toolbar keeps its height cap when the editor closes, and closes with the last pane', flush=True)
             assert 'exceeded its budget' not in before_launches
             assert 'plugin style sheet has errors' not in (out / 'tern.log').read_text()
             print('PASS: native workspace routing, modifiers, retained edits, reopening, and project isolation', flush=True)

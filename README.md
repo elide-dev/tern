@@ -50,7 +50,10 @@ from its command palette. The native REPL has a language picker with Tern's Mate
 language icons; Ctrl+L also opens it, arrows choose and Enter switches. Each language
 retains its draft, undo state and history. The entire REPL shares one notebook kernel. Enter evaluates and Shift+Enter
 inserts a newline. `/help` lists the shared REPL commands. Clear clears the transcript;
-it does not reset the runtime.
+it does not reset the runtime. Before launching, the plugin checks that `sdk` names an
+embedded SDK directory (it holds `embedder.json`) and that `broker` exists, and names the
+bad path in a toast otherwise. A REPL that fails to start keeps its pane open with the
+error until you press Enter, instead of closing behind Tern's exit dialog.
 
 ### Project workspace
 
@@ -60,7 +63,9 @@ This creates a project tab with Tern's Files browser, native file editor, a term
 and a compact icon toolbar for Build, Test, Run, Debug, REPL, and static serving.
 The play button runs the project's tests on the full Tests page; `elide test` typed in a
 terminal draws inline instead.
-Buttons have hover labels and accessible names. All panes use Tern's normal
+Buttons have hover labels and accessible names. The toolbar sits above the editor; its height
+is capped, so closing the editor gives the toolbar's rows back to the terminal, and the
+toolbar closes once nothing else is left in its tab. All panes use Tern's normal
 adjustable splits. Opening the workspace again refreshes its toolbar without resetting
 your layout. Project actions retain their original root as focus changes.
 
@@ -396,8 +401,8 @@ lenses, links and status line in an isolated window.
 
 ### Source editor
 
-**Open with Elide source** (from a file's menu), the workspace toolbar's **Source** button,
-or **Open Elide source…** in the project menu opens a project source file in Elide's own
+**Open with Elide source** (from a file's menu) or **Open Elide source…** in the project
+menu opens a project source file in Elide's own
 editor: Tern's highlighting, undo and redo, auto-indent, indent and comment toggles, find
 (⌃F), go to line (⌃G), soft wrap (⌥Z), save with ⌘S, and a reload when the file changes on
 disk. Overlays appear when they can act: **Coverage** tints covered, uncovered and

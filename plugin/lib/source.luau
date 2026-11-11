@@ -18,6 +18,7 @@ local LANGS = {
   kt = "kotlin",
   kts = "kotlin",
   java = "java",
+  pkl = "pkl",
 }
 
 -- Sources the project debugger launches (JavaScript, TypeScript, Python).
@@ -205,7 +206,7 @@ function M.uuid(random)
   )
 end
 
-local COMMENTS = { javascript = "//", typescript = "//", kotlin = "//", python = "#" }
+local COMMENTS = { javascript = "//", typescript = "//", kotlin = "//", python = "#", pkl = "//" }
 
 -- The line comment prefix for `path`'s language.
 function M.comment(path)

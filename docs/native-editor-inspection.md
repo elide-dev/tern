@@ -11,10 +11,12 @@ Language grammar contribution request:
 [stencil-hq/tern-sdk#267](https://github.com/stencil-hq/tern-sdk/issues/267).
 The requested registry would share plugin-contributed grammars across native files,
 TSP code/editor nodes, diffs and Markdown fences. Pkl is the first acceptance case;
-the REPL already sends its language ID. The installed SDK exposes no grammar
-registration API, so source decoration remains a TSP-only fallback, not native
-file-editor highlighting. Grammar contributions are independent of LSP semantics
-and the revision-checked annotation-provider request.
+the REPL already sends its language ID. The installed SDK exposes no plugin grammar
+registration API. Until it does, `install.sh` links `plugin/syntaxes/Pkl.sublime-syntax`
+into Tern's user Syntaxes folder (`$TERN_CONFIG_DIR/syntaxes`, default
+`~/Library/Application Support/tern/syntaxes`, read at startup), which highlights `.pkl`
+files in native editors and anywhere else Tern resolves the `pkl` language. Grammar contributions are
+independent of LSP semantics and the revision-checked annotation-provider request.
 
 The integration should enhance Tern's existing file editor. Tern owns buffers,
 undo, editing, navigation, layout, accessibility, and rendering. Elide owns test
