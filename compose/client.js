@@ -181,13 +181,27 @@ function connect() {
     }
   };
   socket.onclose = () => {
-    reset(); refresh.disabled = true; interactive = false;
-    for (const button of actions) button.disabled = true;
+    reset(); interactive = false; disconnected = true;
     for (const card of cards.values()) update(card);
+    // With the service gone, Tern carries out Start, Open source and Close (see `ask`).
+    document.querySelector("#stop").disabled = true;
+    for (const button of [refresh, document.querySelector("#source"), document.querySelector("#close")]) button.disabled = false;
+    refresh.title = "Start previews"; refresh.setAttribute("aria-label", "Start previews");
     showStatus("stopped", stopped ? "Preview stopped." : "Disconnected from the renderer.");
   };
 }
+let disconnected = false;
+// Without a service Tern reads the page's address: `#<action>-<n>`, a fresh `n` per click.
+function ask(action) {
+  location.hash = `${action}-${Date.now()}`;
+}
 refresh.onclick = () => {
+  if (disconnected) {
+    refresh.disabled = true;
+    showStatus("starting", "");
+    ask("start");
+    return;
+  }
   reset(); refresh.disabled = true;
   showStatus("refreshing", "");
   send({ type: "refresh" });
@@ -197,8 +211,12 @@ document.querySelector("#stop").onclick = () => {
   showStatus("cancelling", "");
   send({ type: "stop" });
 };
-// The Compose pane carries these out: it opens the file or closes itself.
+// Tern carries these out: it opens the file or closes the pane.
 function request(action, phase) {
+  if (disconnected) {
+    ask(action);
+    return;
+  }
   reset();
   if (phase) {
     stopped = true; refresh.disabled = true;

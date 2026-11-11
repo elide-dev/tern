@@ -69,13 +69,14 @@ exits after two minutes without clients. The native host closes sessions on exit
 crash. Runtime handles are not persisted; a new process starts new kernels.
 History is stored by the shared REPL in SQLite; drafts live in the frontend.
 
-## Compose preview block
+## Compose previews
 
-`plugin/lib/compose.luau` defines `elide.compose`, a host block. Explicit palette/menu/workspace
-actions pass a saved `.kt` path and project root. The block runs `dist/elide-tern-compose open`
-through `tern.process.run`, with the dirty Elide editors of the project on stdin, and shows the
-page whose URL it prints over its pane. The block draws only startup progress, failures and
-**Start previews**; the previews, their input and the renderer's progress are the page's.
+A Compose preview is one browser pane on its session's loopback page, which draws the toolbar,
+the renderer's startup and failures, and the previews. Explicit palette/menu/workspace actions
+pass a saved `.kt` path and project root to the window half (`open_compose` in
+`plugin/window.luau`), which runs `dist/elide-tern-compose open` through `tern.process.run` and
+opens the page it prints beside the editor. A failure to start is a toast; there is no pane
+before the page.
 
 ### Preview service
 
@@ -139,32 +140,40 @@ page has a restrictive CSP and no third-party content.
 |---|---|---|
 |`GET /<token>/`, `client.js`, `events`|page|the page and its single WebSocket|
 |`GET /<token>/info`|window|the session's workspace root and file|
-|`GET /<token>/pane?after=<n>`|block|long-poll for page requests (`source`, `close`) and `retarget`|
-|`POST /<token>/documents`|block, window|editor overlays: `host` (Elide editors) or `native` (Tern editors)|
+|`GET /<token>/pane?after=<n>`|window|long-poll for page requests (`source`, `close`) and `retarget`|
+|`POST /<token>/documents`|host half, window|editor overlays: `host` (Elide editors) or `native` (Tern editors)|
 |`POST /<token>/retarget`|window|preview another file of the workspace in the same page|
-|`POST /<token>/close`, `stop`|block, page|end the session; stop the service|
+|`POST /<token>/close`, `stop`|window, page|end the session; stop the service|
 
-A retired token answers 410 with the reason. The block closes its pane on `retargeted` (another
-pane took the workspace's preview) and `page-closed`, and shows **Start previews** after any
-other end. A session also ends when its page has been disconnected for five seconds, or when
-neither a page nor a pane poll has been seen for 15 seconds.
+A retired token answers 410 with the reason. The window closes the page on `retargeted`
+(another pane took the workspace's preview), `page-closed` and `closed`. After any other end
+(Stop renderer, keep-alive expiry, a crash) the page stays and says so; with its socket gone,
+its buttons set the address's fragment (`#start-<n>`, `#source-<n>`, `#close-<n>`), which the
+window reads every second through the browser's `state` op. **Start previews** runs `open`
+again and sends the same pane to the new session (`goto`); so does opening a preview of that
+workspace. Closing the pane closes its session at once. A session also ends when its page has
+been disconnected for five seconds, or when neither a page nor a pane poll has been seen for 15
+seconds.
 
 Tern native image nodes expose zoom but no raw pointer coordinates or key releases, so the
-previews are a browser page over the pane. The block opens
-`elide://compose-live/<pane>/<port>/<token>`; the window checks that `<pane>` is an
-`elide.compose` block and calls `cx.browser:call({op="open", owner=pane, how="over",
-profile="elide-compose"})`, adding `#light` or `#dark` when Tern's theme pins one. The pane
-stays parked behind the page. `styles/compose.css` hides the browser's toolbar, load bar and
-notes in browser panes whose website-data chip names `elide-compose`. That rule targets
+previews are a browser page. The window opens it with `cx.browser:call({op="open",
+owner=editor, how="beside", profile="elide-compose"})`, adding `#light` or `#dark` when Tern's
+theme pins one, asks the session's `info` for its workspace and file when it takes over a page
+after a reload, and carries out the page's requests. Each plugin load takes over the compose
+pages still open
+(`window_start` runs once per window). `styles/compose.css` hides the browser's toolbar, load
+bar and notes in browser panes whose website-data chip names `elide-compose`. That rule targets
 Tern's internal `.kit-web-*` classes and `:has()`, which Tern 0.9.16 applies but its CSS
 reference does not list; a Tern change can bring the toolbar back. The page draws the
-pane's toolbar instead. `…/close` closes every browser block showing that URL (an open still
-in flight closes when it lands); the saved URL lets a reloaded block close it.
+pane's toolbar instead.
 
-Window and host VMs do not share buffers. The block posts dirty Elide editors on every change,
-one request in flight. Native file editors belong to the window VM: after opening a page, the
-window asks the session's `info` for its workspace and, every 100 ms while sessions exist
-(no native edit event or revision is exposed), reads the dirty Kotlin/Java editors of that
+Window and host VMs do not share buffers. The window lists its sessions in kv
+(`compose:sessions`, by window key: session URL to workspace root); the host half
+(`plugin/lib/compose.luau`) reads the list on every Elide editor change, and every 500 ms while
+it holds dirty editors, posting them to each session of their workspace (all of them to a new
+session), one request in flight, until a post finds the session ended. Native file editors belong to the
+window VM: for each open page, every 100 ms while sessions exist (no native edit event or
+revision is exposed), the window reads the dirty Kotlin/Java editors of that
 workspace through `cx.docs:read` and posts them with `replace: true` when they changed.
 Saved/closed buffers drop their overlays; neither path writes source files. Malformed or
 oversized captures post an error, which suspends the preview instead of rendering disk
@@ -258,10 +267,25 @@ interactive zsh; with `SHELL=/bin/sh` the same split takes 25 ms). That can exce
 `canvas_action` wall budget, and Tern then aborts the handler as the split returns; the plugin
 records the pending launch before splitting and finishes it from the new pane's `pane_created`
 event (recording it, closing the replaced panes). The pane replaces an open
-Compose preview block (`elide.compose`, the current tab's first), else the manager it was
+Compose preview (the `elide.compose` block, or the live page browser pane that replaced it; the
+current tab's first), else the manager it was
 chosen in; showing a device that already has a pane swaps that pane into the place. **Start** opens
 `display --name NAME --start` (with the manager's `--sdk`, `--root` and `--runtime`), so the
-pane appears before the emulator does. Display panes are recorded per AVD name or physical
+pane appears before the emulator does. Run opens its page first: `android.run_device` plans
+the device (`--emulator` for the project's AVD, which Elide adopts and waits for; a stopped one
+is started with `start` first, which returns once the emulator registers with adb, so Elide
+never finds the AVD missing and boots its own copy; `--device=SERIAL` after `wait` otherwise).
+`android.follow` records the pane ids before the page's split; the page's pane (or its
+`pane_created`, when the split aborted the hook) is then polled every 500 ms with
+`cx.session:surface`. The Run page keys its progress bar `program` (`main.activity.program`)
+once a build in its stream finished successfully: an Android `elide run` builds the APK, then
+deploys in a second build. The device pane then opens beside the editor the Run acted on, in
+the place of a Compose preview in its tab, closing every open one. The page itself opens right
+of the workspace's bottom terminal (the toolbar hands actions that terminal), else right of the
+editor. A page showing its summary (`main.activity.summary`) ended without a finished build,
+and so did a pane that closed or
+exited: no device pane. A pane without a surface 3 s after it opened is plain output, and gets
+the device pane then. Display panes are recorded per AVD name or physical
 serial (pane, name, serial) in plugin kv, so a reload still knows them; panes are matched by
 the title the display sets (`NAME`, `SERIAL`, then `NAME · SERIAL`), and a saved id whose pane
 now carries another title is dropped. On `pane_closed` for an emulator's pane, the plugin

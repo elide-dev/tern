@@ -32,9 +32,9 @@ environment = {**os.environ, 'ANDROID_AVD_HOME': str(home)}
 common = ['--sdk', args.sdk] if args.sdk else []
 
 
-def call(command, *options, succeeds=True):
+def call(command, *options, succeeds=True, timeout=180):
     result = subprocess.run([str(helper), command, '--json', *common, *options],
-                            env=environment, capture_output=True, text=True, timeout=180)
+                            env=environment, capture_output=True, text=True, timeout=timeout)
     value = json.loads(result.stdout)
     assert (result.returncode == 0) == succeeds, (command, value, result.stderr)
     return value
@@ -101,10 +101,15 @@ try:
     for iteration in range(2):
         started = call('start', '--name', name)
         serial = started['serial']
+        assert call('wait', '--name', name, timeout=300)['serial'] == serial
+        assert call('wait', '--serial', serial)['serial'] == serial
+        call('wait', '--serial', 'emulator-1', succeeds=False)
+        call('wait', '--name', name, '--serial', serial, succeeds=False)
         call('delete', '--name', name, '--yes', succeeds=False)
         call('stop', '--name', name + '-different', '--serial', serial, succeeds=False)
         snapshot = call('list')
-        assert any(avd.get('serial') == serial and avd['name'] == name for avd in snapshot['avds'])
+        assert any(avd.get('serial') == serial and avd['name'] == name and avd.get('embeddable') is True
+                   for avd in snapshot['avds']), snapshot
         if iteration == 0:
             display_check(serial)
         call('stop', '--name', name, '--serial', serial)

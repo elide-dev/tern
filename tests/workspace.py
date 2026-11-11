@@ -51,6 +51,7 @@ case "$*" in
   *--help-all*) printf 'Commands:\\n  tern          Host a native Tern surface\\n'; exit 0 ;;
   *test*--help*) echo "      --surface <MODE>  How the run draws inside Tern: inline, screen or auto"; exit 0 ;;
   *build*--help*) echo "      --surface <MODE>  How the build draws inside Tern: inline, screen or auto"; exit 0 ;;
+  *run*--help*) echo "      --surface=<MODE>  Draw the run as a view inside Tern: inline, screen or auto"; exit 0 ;;
 esac
 echo "fake-elide $*"
 sleep 300
@@ -296,6 +297,14 @@ sleep 300
             ctl('click', '[data-role="project-build"]')
             assert wait(lambda: launched(str(fake_runtime) + ' --ignore-version build --surface=screen'))
             print('PASS: Build opens the full Build page', flush=True)
+            # Run opens the full Run page when the runtime lists --surface in `run --help`; the fixture
+            # manifest declares no android, so no device is prepared first.
+            time.sleep(6)
+            lua('cx.layout:focus(' + str(other_editor) + ')')
+            wait(lambda: any(n.get('rect', [0, 0, 0, 0])[2] > 0 for n in ctl('tree', '[data-role="project-run"]').get('nodes', [])))
+            ctl('click', '[data-role="project-run"]')
+            assert wait(lambda: launched(str(fake_runtime) + ' --ignore-version run --surface=screen'))
+            print('PASS: Run opens the full Run page', flush=True)
             # The toolbar sits above the editor. When the editor closes it takes the editor's rows, then
             # shrinks back under its height cap; it closes with the tab's last other pane.
             lua('cx.docs:open(' + json.dumps(str(third / 'elide.pkl')) + ', {how="tab"})')

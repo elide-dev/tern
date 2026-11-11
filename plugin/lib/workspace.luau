@@ -297,7 +297,9 @@ function M.install(actions)
             tern.kv.set(key(current, event.pane), workspace)
           end
         end
-        local pane = actions[event.act](cx, context, target, opened)
+        -- The project terminal, when still open: Run puts its page beside it, at the bottom.
+        local terminal = cx.session:pane(workspace.terminal) and workspace.terminal or nil
+        local pane = actions[event.act](cx, context, target, opened, terminal)
         if pane ~= false then
           opened(cx, pane)
         end

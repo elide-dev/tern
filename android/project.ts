@@ -18,6 +18,8 @@ export class ProjectChoiceError extends Error {
   }
 }
 
+export class NotAndroidError extends Error {}
+
 export function projectInfo(project: Project) {
   return { root: project.root, name: project.name, avd: project.avd, image: project.image, device: project.device };
 }
@@ -51,7 +53,7 @@ export async function resolveProject(root: string, runtime?: string): Promise<Pr
     candidates.push({ root: memberRoot, manifest: await manifestAt(memberRoot) });
   }
   const android = candidates.filter(candidate => candidate.manifest.android);
-  if (!android.length) throw new Error(`No Android-configured Elide project at ${supplied}. Declare an android block or omit --root for standalone AVD management.`);
+  if (!android.length) throw new NotAndroidError(`No Android-configured Elide project at ${supplied}. Declare an android block or omit --root for standalone AVD management.`);
   if (android.length !== 1) {
     throw new ProjectChoiceError(android.map(candidate => ({ root: candidate.root, name: projectName(candidate.manifest, candidate.root) })));
   }

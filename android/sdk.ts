@@ -84,6 +84,32 @@ export class AndroidSdk {
     return running;
   }
 
+  /** Waits until a device finished booting; given a `name`, first until an emulator running that AVD attaches. */
+  async waitBooted(target: { name?: string; serial?: string }): Promise<{ serial: string; name?: string }> {
+    const { name } = target;
+    let serial = target.serial;
+    if (serial) {
+      if (!(await this.attached()).some(device => device.serial === serial)) throw new Error(`No attached device ${serial}.`);
+    } else {
+      const deadline = Date.now() + 90_000;
+      for (;;) {
+        const matches = (await this.running()).filter(device => device.name === name);
+        if (matches.length > 1) throw new Error(`Multiple emulators run ${name}: ${matches.map(device => device.serial).join(", ")}`);
+        if (matches.length === 1) { serial = matches[0]!.serial; break; }
+        if (Date.now() >= deadline) throw new Error(`${name} did not start within 90 seconds.`);
+        await delay(500);
+      }
+    }
+    const adb = await this.tool("adb");
+    const deadline = Date.now() + 180_000;
+    for (;;) {
+      const booted = await run(adb, ["-s", serial, "shell", "getprop", "sys.boot_completed"], { env: this.env, timeout: 5_000 }).catch(() => "");
+      if (booted.trim() === "1") return { serial, ...(name ? { name } : {}) };
+      if (Date.now() >= deadline) throw new Error(`${name ?? serial} did not finish booting within 3 minutes.`);
+      await delay(500);
+    }
+  }
+
   private async physical(attached: AndroidDevice[]): Promise<Physical[]> {
     const adb = await this.tool("adb");
     return Promise.all(attached.filter(device => !device.emulator).map(async ({ serial, state, ready }): Promise<Physical> => {
