@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { button as renderButton, panel } from "./icons";
+import { button as renderButton, panel, pill } from "./icons";
 
 /**
  * Shows one Android device inside the terminal it runs in: frames are drawn with the kitty graphics
@@ -38,6 +38,9 @@ const QUERY_ID = 31;
 /** Toolbar images: buttons from ICON_ID (by their index in ACTS), then the panel behind them. */
 const ICON_ID = 40;
 const PANEL_ID = 60;
+/** The progress bar's track and its moving segment. */
+const TRACK_ID = 70;
+const SEGMENT_ID = 71;
 /** The toolbar's height in rows: room for Tern-sized buttons with padding around them. */
 const BAR_ROWS = 3;
 const SCREEN_OFF = "The screen is off. Press Power to wake it.";
@@ -229,43 +232,74 @@ export async function runDisplay(title: string, connect: Connect): Promise<void>
   };
 
   // ── Progress ───────────────────────────────────────────────────────────────────
-  /** Before the first frame: the device's name, an indeterminate bar with the step, then any notice. */
-  let tick = 0, animation: Timer | undefined;
+  /**
+   * Before the first frame: the device's name, an indeterminate bar with the step, then any
+   * notice. The bar is two images sent once: a track and a segment that a 60 fps timer moves by
+   * re-placing it at a pixel offset, so it glides instead of stepping a cell at a time.
+   */
+  let animation: Timer | undefined, seconds = -1;
+  /** The bar's images as sent (geometry and colors), its first column and its pixel sizes. */
+  let bar: { key: string; column: number; width: number; segment: number } | undefined;
   const NOTICE_LINES = 5;
   const middle = () => Math.max(3, Math.floor((geometry!.rows - BAR_ROWS - NOTICE_LINES) / 2));
+  /** Places the segment where it is now: an eased sweep back and forth, 1.1 s each way. */
+  const moveSegment = () => {
+    if (!geometry || !bar || restored || drawn) return;
+    const g = geometry, phase = ((Date.now() - started) / 1100) % 2;
+    const sweep = (1 - Math.cos(Math.PI * (phase < 1 ? phase : 2 - phase))) / 2;
+    const x = Math.round(sweep * (bar.width - bar.segment));
+    const column = bar.column + Math.floor(x / g.cellWidth), offset = x % g.cellWidth;
+    out(`${ESC}7${ESC}[${middle()};${column}H${ESC}_Ga=p,i=${SEGMENT_ID},p=1,X=${offset},C=1,z=1,q=2${ESC}\\${ESC}8`);
+  };
   const progress = () => {
     if (!geometry || restored || drawn) return;
     const g = geometry, row = middle();
     /** A cleared row with `text` centered on it; the cursor must already be on the row. */
     const centered = (text: string, style = "") =>
       `${ESC}[2K` + (text ? `${ESC}[${Math.max(1, Math.floor((g.cols - text.length) / 2) + 1)}G${style}${clip(text, g.cols - 2)}${ESC}[0m` : "");
-    let bar = "";
-    if (step) {
-      const width = Math.max(8, Math.min(32, g.cols - 8)), segment = Math.floor(width / 4), travel = width - segment;
-      const position = tick % (2 * travel) < travel ? tick % (2 * travel) : 2 * travel - tick % (2 * travel);
-      const track = background && foreground ? color(mix(background, foreground, 0.12), 38) : ESC + "[2m";
-      bar = `${ESC}[2K${ESC}[${Math.floor((g.cols - width) / 2) + 1}G${track}${"━".repeat(position)}${ESC}[0m${color(foreground, 38)}${"━".repeat(segment)}${ESC}[0m${track}${"━".repeat(travel - position)}${ESC}[0m`;
-    }
-    const seconds = Math.floor((Date.now() - started) / 1000);
+    seconds = Math.floor((Date.now() - started) / 1000);
     // Below the bar and step come notices; with nothing in progress they take the bar's place.
     const notices = message ? wrap(message, Math.max(16, Math.min(72, g.cols - 4))).slice(0, NOTICE_LINES).map((notice, index) => centered(notice, index ? ESC + "[2m" : "")) : [];
-    const below = step ? [bar, centered(""), centered(seconds >= 3 ? `${step} ${seconds}s` : step, ESC + "[2m"), ...notices] : notices;
+    const below = step ? [`${ESC}[2K`, centered(""), centered(seconds >= 3 ? `${step} ${seconds}s` : step, ESC + "[2m"), ...notices] : notices;
     let text = `${ESC}[${row - 2};1H${centered(title, ESC + "[1m")}${ESC}[${row - 1};1H${ESC}[2K`;
     for (let index = 0; index < 3 + NOTICE_LINES; index++) text += `${ESC}[${row + index};1H${below[index] ?? `${ESC}[2K`}`;
+    if (step) {
+      const columns = Math.max(8, Math.min(32, g.cols - 8)), column = Math.floor((g.cols - columns) / 2) + 1;
+      const width = columns * g.cellWidth, segment = Math.round(width / 4), height = g.cellHeight;
+      const thickness = Math.max(2, Math.round(3 * scale()));
+      const key = `${width}x${height}:${ink().join(",")}`;
+      if (bar?.key !== key) {
+        text += graphics(`a=t,f=32,s=${width},v=${height},i=${TRACK_ID},q=2`, pill(width, height, thickness, ink(), 0.14));
+        text += graphics(`a=t,f=32,s=${segment},v=${height},i=${SEGMENT_ID},q=2`, pill(segment, height, thickness, ink(), 0.9));
+      }
+      bar = { key, column, width, segment };
+      text += `${ESC}[${row};${column}H${ESC}_Ga=p,i=${TRACK_ID},p=1,C=1,z=0,q=2${ESC}\\`;
+    } else {
+      text += `${ESC}_Ga=d,d=i,i=${TRACK_ID},q=2${ESC}\\${ESC}_Ga=d,d=i,i=${SEGMENT_ID},q=2${ESC}\\`;
+    }
     out(`${ESC}7${text}${ESC}8`);
+    if (step) moveSegment();
   };
-  const clearProgress = () => {
+  const stopAnimation = () => {
     clearInterval(animation);
     animation = undefined;
+  };
+  const clearProgress = () => {
+    stopAnimation();
     if (!geometry) return;
-    let rows = "";
+    let rows = `${ESC}_Ga=d,d=I,i=${TRACK_ID},q=2${ESC}\\${ESC}_Ga=d,d=I,i=${SEGMENT_ID},q=2${ESC}\\`;
+    bar = undefined;
     for (let row = middle() - 2; row <= middle() + 3 + NOTICE_LINES; row++) rows += `${ESC}[${row};1H${ESC}[2K`;
     out(`${ESC}7${rows}${ESC}8`);
   };
   const setStep = (text: string | undefined) => {
     step = text;
-    if (step && !animation) animation = setInterval(() => { tick++; progress(); }, 80);
-    if (!step) { clearInterval(animation); animation = undefined; }
+    // The segment moves every frame; the text (elapsed seconds) only when a second has passed.
+    if (step && !animation) animation = setInterval(() => {
+      if (Math.floor((Date.now() - started) / 1000) !== seconds) progress();
+      else moveSegment();
+    }, 16);
+    if (!step) stopAnimation();
     progress();
   };
   const status = (text: string) => {
@@ -275,7 +309,7 @@ export async function runDisplay(title: string, connect: Connect): Promise<void>
   };
   const redraw = () => {
     out(`${ESC}_Ga=d,d=A,q=2${ESC}\\${ESC}[2J`);
-    drawn = undefined;
+    drawn = bar = undefined;
     toolbar();
     progress();
   };

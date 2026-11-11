@@ -171,8 +171,10 @@ failure and leaves successful instances running independently of the UI.
 fractions of the latest frame, wheel notches, keys, paste and toolbar buttons. It takes a
 `Connect` function and calls it only once the terminal is set up, so connecting (and with
 `display --start`, starting the emulator) runs inside the view: until the first frame it
-centers the device's name, an animated indeterminate bar, the reported step with elapsed
-seconds, and wrapped notices. A failed connection stays on screen until the view closes,
+centers the device's name, an indeterminate bar, the reported step with elapsed seconds, and
+wrapped notices. The bar is a track and a segment image sent once; a 16 ms timer re-places the
+segment at a pixel offset (`X=`) along an eased sweep, and text redraws only when the elapsed
+seconds change. A failed connection stays on screen until the view closes,
 then exits 0; closing while connecting aborts it, and `AndroidSdk.start` then kills the
 emulator it launched. The display queries the terminal for kitty graphics, SGR pixel mouse
 (1016), the kitty keyboard, cell/window pixel sizes and its foreground/background colors

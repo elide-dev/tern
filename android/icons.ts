@@ -121,3 +121,19 @@ export function panel(width: number, height: number, style: PanelStyle): Buffer 
   }
   return pixels;
 }
+
+/** Straight-alpha RGBA of a horizontal line with round ends, `width` long, centered in `height`. */
+export function pill(width: number, height: number, thickness: number, color: readonly [number, number, number], opacity: number): Buffer {
+  const pixels = Buffer.alloc(width * height * 4), r = thickness / 2, cy = height / 2;
+  for (let py = 0; py < height; py++) {
+    for (let px = 0; px < width; px++) {
+      const x = px + 0.5, y = py + 0.5;
+      const dx = Math.max(r - x, x - (width - r), 0);
+      const coverage = Math.max(0, Math.min(1, r + 0.5 - Math.hypot(dx, y - cy)));
+      const offset = (py * width + px) * 4;
+      pixels[offset] = color[0]; pixels[offset + 1] = color[1]; pixels[offset + 2] = color[2];
+      pixels[offset + 3] = Math.round(coverage * opacity * 255);
+    }
+  }
+  return pixels;
+}
