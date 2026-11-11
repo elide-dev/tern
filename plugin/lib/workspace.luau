@@ -5,6 +5,7 @@ local ui = tern.ui
 local entries = {}
 -- The toolbar's largest share of its split; Tern keeps every side at 10% or more.
 local MAX_SHARE = 0.12
+local FOLLOW_MS = 250
 
 local function key(cx, pane)
   return "workspace:" .. cx:window_key() .. ":" .. tostring(pane)
@@ -92,6 +93,34 @@ local function render(cx, pane, workspace, force)
   end
 end
 
+-- Tern reports no event when an editor shows another document or finishes loading one, and a
+-- `focus` or `title` can arrive before the editor reports its new file: while a toolbar is open,
+-- its editor's file is also checked every FOLLOW_MS.
+local following = false
+local function follow_editors()
+  if following then
+    return
+  end
+  following = true
+  tern.timer(FOLLOW_MS, function(cx)
+    following = false
+    if not cx then
+      return
+    end
+    local open = false
+    for _, canvas in cx.canvas:list() do
+      local workspace = canvas.owner == tern.plugin.id and entries[canvas.pane]
+      if workspace then
+        open = true
+        render(cx, canvas.pane, workspace, false)
+      end
+    end
+    if open then
+      follow_editors()
+    end
+  end)
+end
+
 function M.install(actions)
   tern.css(
     "workspace-toolbar",
@@ -122,6 +151,7 @@ function M.install(actions)
         if workspace and workspace.context then
           entries[canvas.pane] = workspace
           render(cx, canvas.pane, workspace, true)
+          follow_editors()
         end
       end
     end
@@ -161,9 +191,11 @@ function M.install(actions)
       cx.layout:resize(pane, "down", -1000)
     end
   end
-  -- Follows the editor's file without a timer: these events fire when it can change. Focus also
-  -- moves when a pane closes, which catches closed terminals that report no `pane_closed`.
+  -- Follows the editor's file on the events that can change it at once (follow_editors catches the
+  -- changes they miss). Focus also moves when a pane closes, which catches closed terminals that
+  -- report no `pane_closed`.
   local function follow(_, cx)
+    follow_editors()
     -- Only panes that are still this plugin's canvases: a recorded id can outlive its canvas.
     for _, canvas in cx.canvas:list() do
       local workspace = canvas.owner == tern.plugin.id and entries[canvas.pane]
@@ -226,17 +258,6 @@ function M.install(actions)
           end
           entries[canvas.pane] = workspace
           tern.kv.set(key(cx, canvas.pane), workspace)
-          -- The editor reports its new file once the open lands; redraw the toolbar then.
-          local toolbar = canvas.pane
-          tern.timer(100, function(current)
-            if current and entries[toolbar] == workspace then
-              for _, open in current.canvas:list() do
-                if open.pane == toolbar and open.owner == tern.plugin.id then
-                  render(current, toolbar, workspace, false)
-                end
-              end
-            end
-          end)
           return { handled = true }
         end
       end
@@ -309,6 +330,7 @@ function M.open(context, cx)
         entries[canvas.pane] = existing
         tern.kv.set(key(cx, canvas.pane), existing)
         render(cx, canvas.pane, existing, true)
+        follow_editors()
         cx:open(context.root)
         cx.layout:focus(cx.session:pane(existing.editor) and existing.editor or canvas.pane)
         return
@@ -340,6 +362,7 @@ function M.open(context, cx)
   local workspace = { context = context, editor = editor, terminal = terminal, results = {} }
   entries[pane] = workspace
   tern.kv.set(key(cx, pane), workspace)
+  follow_editors()
   local tab = cx.session:tab_of(editor)
   if tab then
     cx.layout:name_tab(tab, context.name or "Project")

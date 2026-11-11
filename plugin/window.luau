@@ -4,6 +4,7 @@ local project = require("./lib/project")
 local source = require("./lib/source")
 local workspace = require("./lib/workspace")
 local android = require("./lib/android")
+local loopback = require("./lib/loopback")
 
 local function path(value)
   if string.sub(value, 1, 1) == "/" then
@@ -367,26 +368,18 @@ local function source_in(cx, pane, root)
   return nil
 end
 
--- Window and host VMs do not share buffers. The host registers its private job
--- directory; only this window can read native editors, including their dirty text.
-local native_jobs = {}
+-- Window and host VMs do not share buffers: only this window can read native editors, including
+-- their dirty text. Each Compose page shown over its pane (the compose-live route) registers its
+-- session here; the dirty Kotlin/Java editors of the session's workspace are posted to it.
+local native_sessions = {}
 local native_roots = {}
-local native_polled_at = 0
 local native_busy = false
+local native_ticker
 local NATIVE_FILE_BYTES = 8 * 1024 * 1024
 local NATIVE_TOTAL_BYTES = 32 * 1024 * 1024
 
-local function native_job_id(value)
-  return type(value) == "string"
-    and #value == 36
-    and string.match(value, "^%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x$") ~= nil
-end
-
-local function native_active(job, cx)
-  return cx.session:pane(job.pane) ~= nil
-    and tern.fs.exists(job.dir .. "/registration.json")
-    and not tern.fs.exists(job.dir .. "/cancel")
-    and not tern.fs.exists(job.dir .. "/done")
+local function native_active(session, cx)
+  return cx.session:pane(session.pane) ~= nil
 end
 
 local function native_dirty(cx, pane, root)
@@ -430,32 +423,32 @@ local function publish_native(root, documents, problem, cx)
     snapshot = { documents = documents, problem = problem }
     native_roots[root] = snapshot
   end
-  local encoded
-  for id, job in native_jobs do
-    if job.root == root then
-      if not native_active(job, cx) then
-        native_jobs[id] = nil
-      elseif job.snapshot ~= snapshot then
-        if not encoded then
-          local entries = {}
-          if not problem then
-            for file, content in snapshot.documents do
-              table.insert(entries, tern.json.encode({ file = file, text = content }))
-            end
+  local body
+  for url, session in native_sessions do
+    if session.root == root and session.snapshot ~= snapshot and not session.posting then
+      if not body then
+        local entries = {}
+        if not problem then
+          for file, content in snapshot.documents do
+            table.insert(entries, tern.json.encode({ file = file, text = content }))
           end
-          encoded = '{"root":'
-            .. tern.json.encode(root)
-            .. ',"documents":['
-            .. table.concat(entries, ",")
-            .. "]"
-            .. (problem and (',"error":' .. tern.json.encode(problem)) or "")
-            .. "}"
         end
-        local ok = pcall(tern.fs.write, job.dir .. "/native-documents.json", encoded)
-        if ok then
-          job.snapshot = snapshot
-        end
+        body = '{"origin":"native","replace":true,"documents":['
+          .. table.concat(entries, ",")
+          .. "]"
+          .. (problem and (',"error":' .. tern.json.encode(problem)) or "")
+          .. "}"
       end
+      -- One post per session in flight; a newer snapshot goes out on the next poll.
+      session.posting = true
+      loopback.request(url .. "documents", body, 10000, function(status)
+        session.posting = false
+        if status == 200 then
+          session.snapshot = snapshot
+        elseif status == 404 or status == 410 or status == 0 then
+          native_sessions[url] = nil
+        end
+      end)
     end
   end
 end
@@ -470,14 +463,13 @@ local function poll_native(cx)
     return
   end
   native_busy = true
-  native_polled_at = tern.now()
   local roots, seen = {}, {}
-  for id, job in native_jobs do
-    if not native_active(job, cx) then
-      native_jobs[id] = nil
-    elseif not seen[job.root] then
-      seen[job.root] = true
-      table.insert(roots, job.root)
+  for url, session in native_sessions do
+    if not native_active(session, cx) then
+      native_sessions[url] = nil
+    elseif not seen[session.root] then
+      seen[session.root] = true
+      table.insert(roots, session.root)
     end
   end
   for root in native_roots do
@@ -562,43 +554,23 @@ local function poll_native(cx)
   next_root(cx)
 end
 
-local function register_native(id, cx)
-  if not native_job_id(id) or cx.hosts:current().kind ~= "local" then
+-- No native edit event or buffer revision is exposed, so dirty editors are read every 100 ms
+-- while a session runs.
+local function native_tick(cx)
+  if native_ticker or next(native_sessions) == nil then
     return
   end
-  local dir = tern.plugin.data .. "/compose-jobs/" .. id
-  local ok, registration = pcall(function()
-    return tern.json.decode(tern.fs.read(dir .. "/registration.json", 8192))
+  native_ticker = tern.timer(100, function(fresh)
+    native_ticker = nil
+    if not fresh then
+      return
+    end
+    poll_native(fresh)
+    native_tick(fresh)
   end)
-  if not ok or type(registration) ~= "table" or type(registration.pane) ~= "number" then
-    return
-  end
-  local root = links.absolute(registration.root)
-  -- A block's link reports the focused pane, not the block: an editor, or the live page over
-  -- the Compose pane. registration.json, written by the host, names the job's pane.
-  if not root or string.find(root, "%c") then
-    return
-  end
-  local job = { dir = dir, root = root, pane = registration.pane }
-  if not native_active(job, cx) then
-    return
-  end
-  local previous = native_jobs[id]
-  if not previous or previous.root ~= root or previous.pane ~= job.pane then
-    native_jobs[id] = job
-  elseif not tern.fs.exists(dir .. "/native-documents.json") then
-    previous.snapshot = nil
-  end
-  -- Initial publication acknowledges registration; the host waits before spawning
-  -- its helper, so opening an already-dirty editor never renders a saved snapshot.
-  -- The host's lease tick supplies a fresh window context; no window timer can
-  -- outlive the job that registered it and strand the next mode's handshake.
-  if not native_busy and (not native_jobs[id].snapshot or tern.now() - native_polled_at >= 0.8) then
-    poll_native(cx)
-  end
 end
 
--- Native dirty text reaches the helper through the registration handshake above.
+-- One preview per workspace: a running one shows `file` instead of opening another pane.
 local function open_compose(cx, file, root, target)
   if not local_host(cx) then
     return nil
@@ -617,11 +589,34 @@ local function open_compose(cx, file, root, target)
   if not configuration(cx) then
     return nil
   end
-  local pane = cx:new_block("elide.compose", { file, root }, "beside", target and { target = target } or nil)
-  if not pane then
-    cx:toast("error", "Could not open Compose preview.")
+  local function create(current)
+    local pane = current:new_block("elide.compose", { file, root }, "beside", target and { target = target } or nil)
+    if not pane then
+      current:toast("error", "Could not open Compose preview.")
+    end
+    return pane
   end
-  return pane
+  for url, session in native_sessions do
+    if links.within(file, session.root) and native_active(session, cx) then
+      local name = string.match(file, "([^/]+)$")
+      loopback.request(url .. "retarget", tern.json.encode({ file = file }), 5000, function(status, _, current)
+        if not current then
+          return
+        end
+        if status ~= 200 then
+          native_sessions[url] = nil
+          create(current)
+          return
+        end
+        local focused = current.session:focused()
+        if not focused or current.session:tab_of(focused) ~= current.session:tab_of(session.pane) then
+          current:toast("info", "Compose preview now shows " .. name .. ".")
+        end
+      end)
+      return session.pane
+    end
+  end
+  return create(cx)
 end
 
 local function prompt_compose(cx, context)
@@ -658,8 +653,8 @@ workspace.install({
   android = function(cx, context, target)
     return android.open(cx, context, target)
   end,
-  -- Like Source, Preview is deliberately not cached by action: a second Kotlin file
-  -- must open its own persistent preview rather than focusing the first file's result.
+  -- Like Source, Preview is deliberately not cached by action: a second Kotlin file of the
+  -- workspace moves its running preview to that file (open_compose) instead of focusing it.
   preview = function(cx, context, target)
     local file = source_in(cx, target, context.root)
     if file then
@@ -1125,21 +1120,28 @@ tern.route.link(function(request, cx)
   if string.lower(string.sub(request.url, 1, 8)) ~= "elide://" then
     return nil
   end
-  local native_id = string.match(request.url, "^elide://compose%-documents/([^/]+)$")
-  if native_id then
-    register_native(native_id, cx)
-    return { handled = true }
-  end
   local pane, port, token, verb = string.match(request.url, "^elide://compose%-live/(%d+)/(%d+)/(%x+)(/?%a*)$")
   if port and #token == 64 and tonumber(port) >= 1 and tonumber(port) <= 65535 and (verb == "" or verb == "/close") then
     local url = "http://127.0.0.1:" .. port .. "/" .. token .. "/"
     if verb == "/close" then
       hide_live(cx, url)
+      native_sessions[url] = nil
     elseif local_host(cx) then
       -- The link names its Compose pane: a block's link reports the focused pane instead.
       local owner = cx.session:pane(tonumber(pane))
       if owner and owner.kind == "plugin" and owner.block == "elide.compose" then
         show_live(cx, owner.pane, url)
+        -- The session's workspace bounds the native editors posted to it.
+        loopback.request(url .. "info", nil, 5000, function(status, body, current)
+          local ok, info = pcall(tern.json.decode, body)
+          local root = status == 200 and ok and type(info) == "table" and links.absolute(info.root)
+          if not current or not root or string.find(root, "%c") then
+            return
+          end
+          native_sessions[url] = { url = url, pane = owner.pane, root = root }
+          poll_native(current)
+          native_tick(current)
+        end)
       end
     end
     return { handled = true }

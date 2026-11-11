@@ -1,4 +1,4 @@
-/* Compose preview block: a toolbar like the device manager's, renderer progress, problems and the gallery. */
+/* Compose preview block: a toolbar like the device manager's, startup progress and problems; the previews are its page's. */
 [data-surface="plugin.elide.compose"] [data-role="compose-preview"] {
   padding: 12px 16px;
   overflow: auto;
@@ -26,7 +26,7 @@
   white-space: nowrap;
   font-size: 13px;
 }
-[data-surface="plugin.elide.compose"] :is([data-role="compose-path"], [data-role="compose-card-detail"], [data-role="compose-hint"]) {
+[data-surface="plugin.elide.compose"] [data-role="compose-path"] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -49,57 +49,12 @@
   background: var(--l2);
 }
 
-/* Progress: bar, steps, the renderer's latest line. */
+/* Starting, problems and the running notice: bordered panels. */
 [data-surface="plugin.elide.compose"] :is([data-role="compose-progress"], [data-role="compose-problem"], [data-role="compose-notice"]) {
   flex-shrink: 0;
   padding: 12px 14px;
   border: 1px solid var(--l2);
   border-radius: 8px;
-}
-[data-surface="plugin.elide.compose"] [data-role="compose-steps"] {
-  flex-wrap: wrap;
-  row-gap: 4px;
-  font-size: 12px;
-}
-[data-surface="plugin.elide.compose"] :is([data-role="compose-step"], [data-role="compose-step-done"], [data-role="compose-step-active"]) {
-  align-items: center;
-}
-[data-surface="plugin.elide.compose"] [data-role="compose-step"] {
-  color: var(--t3);
-}
-[data-surface="plugin.elide.compose"] [data-role="compose-step-done"] {
-  color: var(--t2);
-}
-[data-surface="plugin.elide.compose"] [data-role="compose-step-done"] [data-role="compose-step-icon"] {
-  color: var(--ok);
-}
-[data-surface="plugin.elide.compose"] [data-role="compose-step-active"] {
-  color: var(--t1);
-  font-weight: 600;
-}
-[data-surface="plugin.elide.compose"] [data-role="compose-step-dot"] {
-  flex: none;
-  width: 6px;
-  height: 6px;
-  margin: 0 3px;
-  border-radius: 50%;
-  background: currentColor;
-  opacity: .5;
-}
-[data-surface="plugin.elide.compose"] [data-role="compose-step-active"] [data-role="compose-step-dot"] {
-  background: var(--accent);
-  opacity: 1;
-  animation: compose-pulse 1.2s ease-in-out infinite;
-}
-@keyframes compose-pulse {
-  50% { opacity: .35; }
-}
-[data-surface="plugin.elide.compose"] [data-role="compose-activity"] {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--t2);
-  font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 /* Problems: the message, then compiler or helper output in a bounded terminal well. */
@@ -110,13 +65,10 @@
   flex: none;
   color: var(--bad);
 }
-[data-surface="plugin.elide.compose"] :is([data-role="compose-problem-message"], [data-role="compose-card-error"], [data-role="compose-notice-text"]) {
+[data-surface="plugin.elide.compose"] :is([data-role="compose-problem-message"], [data-role="compose-notice-text"]) {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-size: 12px;
-}
-[data-surface="plugin.elide.compose"] [data-role="compose-output-toggle"] {
-  align-self: flex-start;
 }
 [data-surface="plugin.elide.compose"] [data-role="compose-output"] {
   max-height: 240px;
@@ -129,25 +81,13 @@
   font-size: 12px;
 }
 
-/* Notices: a stopped renderer, a live session, the last render's summary. */
-[data-surface="plugin.elide.compose"] :is([data-role="compose-notice"], [data-role="compose-ready"]) {
-  flex-shrink: 0;
+/* Notices: a running session behind its page, a stopped or new preview filling the pane. */
+[data-surface="plugin.elide.compose"] [data-role="compose-notice"] {
   align-items: center;
-}
-[data-surface="plugin.elide.compose"] [data-role="compose-notice"] [data-role="compose-notice-text"] {
-  flex: 1;
 }
 [data-surface="plugin.elide.compose"] [data-role="compose-notice-icon"] {
   flex: none;
   color: var(--t2);
-}
-[data-surface="plugin.elide.compose"] [data-role="compose-ready"] {
-  color: var(--t2);
-  font-size: 12px;
-}
-[data-surface="plugin.elide.compose"] [data-role="compose-ready-icon"] {
-  flex: none;
-  color: var(--ok);
 }
 [data-surface="plugin.elide.compose"] [data-role="compose-empty"] {
   flex: 1;
@@ -161,43 +101,8 @@
   width: 28px;
   height: 28px;
 }
-
-/* Gallery: cards side by side, wrapping; dimmed while a newer render runs. */
-[data-surface="plugin.elide.compose"] :is([data-role="compose-gallery"], [data-role="compose-gallery-stale"]) {
-  flex-wrap: wrap;
-  align-items: flex-start;
-  flex-shrink: 0;
-  transition: opacity .2s;
-}
-[data-surface="plugin.elide.compose"] [data-role="compose-gallery-stale"] {
-  opacity: .55;
-}
-[data-surface="plugin.elide.compose"] :is([data-role="compose-card"], [data-role="compose-card-failed"]) {
-  padding: 10px 12px 12px;
-  border: 1px solid var(--l2);
-  border-radius: 8px;
-  max-width: 100%;
-  min-width: 0;
-  flex-shrink: 0;
-}
-[data-surface="plugin.elide.compose"] [data-role="compose-card-head"] {
-  align-items: center;
-  min-width: 0;
-}
-[data-surface="plugin.elide.compose"] [data-role="compose-card-icon"] {
-  flex: none;
-  color: var(--t2);
-}
-[data-surface="plugin.elide.compose"] [data-role="compose-card-failed"] [data-role="compose-card-icon"],
-[data-surface="plugin.elide.compose"] [data-role="compose-card-error"] {
-  color: var(--bad);
-}
-[data-surface="plugin.elide.compose"] [data-role="compose-card-name"] {
-  font-size: 13px;
-}
-[data-surface="plugin.elide.compose"] [data-role="compose-image"] {
-  max-width: 100%;
-  border-radius: 4px;
+[data-surface="plugin.elide.compose"] [data-role="compose-empty"] [data-role="compose-start"] {
+  align-self: center;
 }
 
 /* Live previews: the page window.luau opens over the Compose pane, under the `elide-compose`

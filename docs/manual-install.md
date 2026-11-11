@@ -35,7 +35,7 @@ notice. Choose **Open Compose preview** on a saved Kotlin file, or **Preview** i
 the workspace toolbar. This additionally requires an Android-capable runtime,
 the project's Android SDK/dependencies and a JDK 17+; layoutlib downloads on first
 use. Bun and VSCode are not required. See [Compose previews](../README.md#compose-previews)
-for the supported snapshot subset and configuration.
+for requirements and configuration.
 
 Android device management also requires `dist/elide-tern-android` and its `.LICENSE`
 notice, plus a separately installed Android SDK (Emulator, Platform-Tools, Command-line

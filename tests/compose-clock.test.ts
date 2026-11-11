@@ -12,7 +12,8 @@ async function until(condition: () => boolean) {
   }
 }
 
-test("idle clock bounds outstanding frames and pauses across failed compilations", async () => {
+/** A renderer peer behind a clock, configured with two hosted cards. */
+async function hosted(showing: () => boolean) {
   const token = "a".repeat(64);
   const commands: Record<string, unknown>[] = [];
   let renderer: Socket | undefined;
@@ -36,22 +37,28 @@ test("idle clock bounds outstanding frames and pauses across failed compilations
   const address = peer.address();
   if (!address || typeof address === "string") throw new Error("Missing peer port");
   const controller = new AbortController();
-  const clock = await previewClock({ protocol: 2, port: address.port, token }, controller.signal);
+  const clock = await previewClock({ protocol: 2, port: address.port, token }, controller.signal, showing);
   const backend = connect({ host: "127.0.0.1", port: clock.port });
   backend.on("error", () => {});
   backend.resume();
   const send = (command: string) => backend.write(JSON.stringify({ command }) + "\n");
   const emit = (value: Record<string, unknown>) => renderer!.write(JSON.stringify(value) + "\n");
   const frames = () => commands.filter(command => command.command === "frame").length;
+  const close = () => { controller.abort(); clock.dispose(); backend.destroy(); renderer?.destroy(); peer.close(); };
+  backend.write(token + "\n");
+  await until(() => renderer !== undefined);
+  send("configure");
+  await until(() => commands.some(command => command.command === "configure"));
+  emit({ event: "configured" });
+  send("entries");
+  await until(() => commands.some(command => command.command === "entries"));
+  emit({ event: "entries", hosted: ["first", "second"] });
+  return { commands, send, emit, frames, close, controller, backend, renderer: () => renderer! };
+}
+
+test("idle clock bounds outstanding frames and pauses across failed compilations", async () => {
+  const { commands, send, emit, frames, close, controller, backend, renderer } = await hosted(() => true);
   try {
-    backend.write(token + "\n");
-    await until(() => renderer !== undefined);
-    send("configure");
-    await until(() => commands.some(command => command.command === "configure"));
-    emit({ event: "configured" });
-    send("entries");
-    await until(() => commands.some(command => command.command === "entries"));
-    emit({ event: "entries", hosted: ["first", "second"] });
     await until(() => frames() === 1);
     await Bun.sleep(300);
     expect(frames()).toBe(1); // A slow renderer cannot accumulate frame requests.
@@ -72,9 +79,22 @@ test("idle clock bounds outstanding frames and pauses across failed compilations
     await until(() => frames() === 3);
 
     controller.abort();
-    await until(() => backend.destroyed && renderer!.destroyed);
+    await until(() => backend.destroyed && renderer().destroyed);
     expect(frames()).toBe(3);
   } finally {
-    controller.abort(); clock.dispose(); backend.destroy(); renderer?.destroy(); peer.close();
+    close();
+  }
+}, 10000);
+
+test("idle clock requests no frames while no page shows the cards", async () => {
+  let showing = false;
+  const { frames, close } = await hosted(() => showing);
+  try {
+    await Bun.sleep(400);
+    expect(frames()).toBe(0);
+    showing = true;
+    await until(() => frames() === 1);
+  } finally {
+    close();
   }
 }, 10000);

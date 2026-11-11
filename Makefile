@@ -16,7 +16,7 @@ android:
 test-android: android
 	python3 tests/android.py --image "$(ANDROID_IMAGE)" $(if $(ANDROID_SDK),--sdk "$(ANDROID_SDK)")
 test-compose:
-	bun test tests/compose-clock.test.ts tests/compose-changes.test.ts
+	ELIDE_VSCODE_SOURCE="$(ELIDE_VSCODE_SOURCE)" bun test --preload ./tests/compose-preload.ts tests/compose-clock.test.ts tests/compose-changes.test.ts tests/compose-server.test.ts
 test: build
 	cargo test --workspace
 	python3 tests/broker.py

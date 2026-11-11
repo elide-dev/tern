@@ -118,72 +118,60 @@ and [upstream provenance](third_party/README.md).
 ### Compose previews
 
 Open a saved Kotlin `.kt` file and choose **Open Compose preview**, or click **Preview**
-in the project workspace toolbar. The native gallery renders `@Preview`, multipreview,
-member-function and `@PreviewParameter` cards beside the source. Click an image for Tern's
-zoom viewer. The pane's toolbar holds icon buttons, named in their tooltips: the
-**Snapshot previews** and **Interactive live preview** mode toggles, **Refresh previews**
-(**Start previews** while stopped), **Stop renderer**, **Open source** and **Close preview**.
+in the project workspace toolbar. A live page opens in the preview pane and renders the file's
+`@Preview`, multipreview, member-function and `@PreviewParameter` cards; Tern's browser toolbar
+stays hidden. Every card runs its composition: click to focus a card, drag or scroll to
+interact, and type when the card reports keyboard support. Escape releases input. Wheel input is
+translated to touch drags for the Android layoutlib host. The page's toolbar holds icon buttons,
+named in their tooltips: **Refresh previews**, **Stop renderer**, **Open source** and
+**Close preview**.
 
 Opening a preview resolves the enclosing Elide workspace and selects the nearest Android APK
-consuming that source set. The initial build prepares JVM classes and Android resources.
-The helper then keeps the same shared incremental compiler and renderer
-running. Kotlin/Java edits in native and Elide source editors, including unsaved buffers,
-refresh automatically; saved dependency sources are watched too. **Refresh previews** retries without
-restarting the helper. Resource and project-configuration saves rebuild the required inputs
-automatically. Build-only source processing still requires saving, as in VS Code.
+consuming that source set. Cards from the last build appear at once while `elide build`
+confirms the inputs (`verifying build…` in the summary); a build that changed them renders
+again. Kotlin edits in native and Elide source editors, including unsaved buffers, reach the
+running composition without a build; saved dependency sources are watched too and refresh
+through an incremental build. Resource and project-configuration saves rebuild the required
+inputs automatically. Editing a source the live compiler cannot apply (Java, build-only
+processing) asks you to save it, as in VS Code.
 Preview code executes locally with your permissions: open only projects you trust.
 
-During rendering, a progress panel shows the current phase over a bar, the steps done so far
-(project, renderer, build, render) and the renderer's latest line. The last gallery stays
-visible, dimmed, during updates; progress clears when rendering finishes or fails. A failure
-shows its message, with compiler output in a terminal well; after the helper exits,
-**Show output** expands its build/runtime output.
+One preview runs per workspace: previewing another file of the workspace shows it in the
+running preview's pane. The workspace's preview service (the Komodo language server, the
+compiler and the hosted cards) stays warm for 10 minutes after its pane closes, so the next
+preview paints at once; it starts nothing before the first preview. **Stop renderer** stops it
+at once and leaves the pane with **Start previews**. Closing the page closes its pane after a
+five-second reload grace period. Plugin reload ends the session (the service stays warm) and
+never automatically executes previews.
 
-Requires an Android-capable Elide runtime, the project's Android SDK/dependencies, and a JDK 17+.
-On first render, the shared installer downloads the pinned, SHA-256-verified layoutlib runtime
-from Google Maven. Supported plugin hosts are macOS arm64/x64 and Linux x64.
+Requires an Android-capable Elide runtime, the project's Android SDK/dependencies, a JDK 17+
+and a compatible Komodo distribution with Compose compiler plugins; an unavailable or
+incompatible Komodo is an error in the page. On first render, the shared installer downloads
+the pinned, SHA-256-verified layoutlib runtime from Google Maven. Supported plugin hosts are
+macOS arm64/x64 and Linux x64.
 Optional `plugin/config.json` settings:
 
 - `compose`: helper executable; defaults to `../dist/elide-tern-compose`.
 - `compose_java`: JDK's `java` executable; otherwise uses the resolved project JDK.
 - `compose_cache`: renderer cache directory; defaults to the plugin's data directory.
-- `compose_komodo`: optional compatible Komodo launcher override for live previews.
+- `compose_komodo`: compatible Komodo launcher override.
   Otherwise the helper resolves Komodo from the Elide installation.
+- `compose_keep_alive_minutes`: how long the preview service stays warm after its pane closes;
+  defaults to 10, and `0` stops it with its pane.
 
-Compile/build errors retain the last gallery with an error status; the next edit can recover.
-Rendering failures appear on individual cards. **Stop renderer** and closing the pane stop active work.
-Plugin reload cancels work and restores an idle panel; it never automatically executes previews.
-Workspace builds serialize, while open previews keep their private compilers and renderers.
-After a forced helper kill during a build, remove its lock **only after confirming its
-Elide/JVM build processes have stopped**.
+Compile errors keep the last frames with an error status; the next edit can recover.
+Rendering failures appear on individual cards, which keep their last good pixels.
+It uses Komodo's protocol-2 `workspace-fir` preview session. Animation fidelity follows the
+installed Komodo/layoutlib host; the tested Komodo build can stall infinite transitions at a
+cycle boundary even while coroutine timers advance. Source refreshes reuse the session but may
+reset composition state. IME composition and clipboard paste are not supported by the live
+keyboard protocol.
 
-**Interactive live preview** replaces the gallery with the live page in the same pane, for as
-long as the session runs; Tern's browser toolbar stays hidden. The page carries the pane's
-toolbar: **Snapshot previews** returns to the gallery, and **Refresh previews**, **Stop renderer**,
-**Open source** and **Close preview** act as in the gallery. When the session ends, the pane
-shows the gallery again with the session's last status.
-It uses Komodo's protocol-2 `workspace-fir` preview session.
-Click to focus a card, drag or scroll to interact, and type when the card reports keyboard
-support. Escape releases input. Frames and composition state update without rebuilding.
-Wheel input is translated to touch drags for the Android layoutlib host.
-Animation fidelity follows the installed Komodo/layoutlib host; the tested Komodo build
-can stall infinite transitions at a cycle boundary even while coroutine timers advance.
-
-Live mode requires a compatible Komodo distribution with Compose compiler plugins.
-An unavailable or incompatible runtime produces an error.
-Both preview modes observe editor and saved-source changes. **Refresh previews** retries the
-current inputs; resource/configuration saves rebuild and reopen the live backend automatically.
-Source refreshes reuse the session but may reset composition state.
-IME composition and clipboard paste are not supported by the live keyboard protocol.
-
-The Compose pane owns the live session: **Stop renderer**, **Close preview** or plugin reload
-stops the helper and Komodo. Closing the live page shows the gallery pane, with
-**Show live preview** to bring it back; the session stops after a five-second grace period.
 Only one page controls a session. Its loopback URL contains a temporary access token; do not
 share it. The page follows Tern's light or dark theme setting, or the system's appearance.
 
-Layout inspection, arbitrary-composable agent rendering, MCP and prewarming are not
-provided. Galleries allow 32 cards, 8 MiB per PNG, 32 MiB in total and 4096 pixels per side.
+Layout inspection, arbitrary-composable agent rendering and MCP are not provided. Galleries
+allow 32 cards, 8 MiB per PNG, 32 MiB in total and 4096 pixels per side.
 No embedded SDK is required for Compose itself.
 
 ### Android devices

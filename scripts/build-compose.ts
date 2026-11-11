@@ -1,12 +1,10 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { root, sources, upstream, vscode } from "./compose-sources";
 
 // The same source dependency as the native Elide surfaces: bundle the shared implementation,
 // not a second copy of its project/classpath rules. No sibling files are read at runtime.
-const root = path.resolve(import.meta.dir, "..");
-const upstream = path.resolve(root, process.env.ELIDE_VSCODE_SOURCE ?? "../elide-vscode");
-const vscode = path.join(upstream, "packages/vscode");
 const resolve = createRequire(path.join(vscode, "package.json"));
 const yauzl = resolve.resolve("yauzl");
 const yauzlRoot = path.dirname(yauzl);
@@ -20,15 +18,7 @@ const helpers = Object.fromEntries(await Promise.all(
   ["CompileRenderer.java", "DiscoverPreviews.java", "RenderServer.java"].map(async (name) =>
     [name, await readFile(path.join(vscode, "media/compose", name), "utf8")]),
 ));
-const aliases: Record<string, string> = {
-  "@elide/ide-core": path.join(upstream, "packages/core/src/index.ts"),
-  "@elide/compose-render": path.join(vscode, "src/composeRender.ts"),
-  "@elide/compose-backend": path.join(vscode, "src/composeBackend.ts"),
-  "@elide/compose-komodo": path.join(vscode, "src/composeKomodo.ts"),
-  "@elide/komodo-distribution": path.join(vscode, "src/komodoDistribution.ts"),
-  "@elide/compose-runtime": path.join(vscode, "src/composeRuntime.ts"),
-  yauzl,
-};
+const aliases: Record<string, string> = { ...sources, yauzl };
 const virtual: Record<string, unknown> = {
   "@elide/compose-helpers": helpers,
   "@elide/compose-licenses": licenses,

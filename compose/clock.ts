@@ -17,9 +17,10 @@ export interface ClockSession extends PreviewSession {
  * Keep Android's clock advancing when layoutlib stops requesting frames after two
  * identical images (a delayed coroutine or the turning point of an animation).
  * The shared backend still owns the protocol and scenes. This authenticated local
- * bridge only requests idle frames, with at most one outstanding frame per card.
+ * bridge only requests idle frames, with at most one outstanding frame per card, and
+ * none while `showing` is false (no page shows the cards).
  */
-export async function previewClock(session: PreviewSession, signal: AbortSignal): Promise<ClockSession> {
+export async function previewClock(session: PreviewSession, signal: AbortSignal, showing: () => boolean): Promise<ClockSession> {
   signal.throwIfAborted();
   if (!/^[a-f0-9]{64}$/.test(session.token)) throw new Error("Komodo returned an unsupported preview session token.");
   let downstream: Socket | undefined;
@@ -74,7 +75,7 @@ export async function previewClock(session: PreviewSession, signal: AbortSignal)
       client.pipe(upstream);
       auth = Buffer.alloc(0);
       timer = setInterval(() => {
-        if (busy || !configured || pending.size || !active.size || Date.now() - lastFrame < 100 || !upstream || upstream.writableLength) return;
+        if (!showing() || busy || !configured || pending.size || !active.size || Date.now() - lastFrame < 100 || !upstream || upstream.writableLength) return;
         for (const id of active) pending.add(id);
         upstream.write('{"command":"frame"}\n');
       }, 50);
