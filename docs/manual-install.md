@@ -37,10 +37,10 @@ for the supported snapshot subset and configuration.
 
 Android device management also requires `dist/elide-tern-android` and its `.LICENSE`
 notice, plus a separately installed Android SDK (Emulator, Platform-Tools, Command-line
-Tools and system images) and JDK. **Manage Android Virtual Devices** works without a
+Tools and system images) and JDK. **Show device manager** works without a
 project; the project menu and workspace toolbar resolve Android project configuration.
 **Start** shows the emulator in a Tern pane, with no separate emulator window. See
-[Android Virtual Devices](../README.md#android-virtual-devices) for CLI commands and limits.
+[Android devices](../README.md#android-devices) for CLI commands and limits.
 
 To remove the integration, run `tern plugin unlink elide`. Install a later preview into
 a separate directory and run its installer to switch versions; keep the old directory

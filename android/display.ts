@@ -1,28 +1,52 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { EmulatorClient, Proto, bytes, decode, nested, number, type Endpoint, type Fields } from "./grpc";
+import { button as renderButton, panel } from "./icons";
 
 /**
- * Renders one emulator inside the terminal it runs in: frames arrive over the emulator's gRPC
- * screenshot stream and are drawn with the kitty graphics protocol; SGR pixel mouse reports
- * become touches and kitty keyboard reports become key events. The emulator outlives the view.
+ * Shows one Android device inside the terminal it runs in: frames are drawn with the kitty graphics
+ * protocol, SGR mouse reports become touches and kitty keyboard reports become key events. The
+ * bottom row holds the device's buttons. The device outlives the view.
  */
+
+export type Frame = { data: Buffer; width: number; height: number };
+export type Modifiers = { ctrl: boolean; alt: boolean; shift: boolean };
+export type Wheel = "up" | "down" | "left" | "right";
+export type ToolbarButton = "back" | "home" | "recents" | "power" | "volume-down" | "volume-up" | "rotate-left" | "rotate-right";
+export type DeviceEvents = { status(text: string): void; stop(reason?: string): void };
+
+/** A device the view draws and drives; points are fractions (0–1) of the latest frame. */
+export interface Device {
+  readonly title: string;
+  readonly label: string;
+  open(events: DeviceEvents): Promise<void>;
+  /** Replaces the frame stream with one sized to fit `width`×`height`; `undefined` is a dark screen. */
+  stream(width: number, height: number, onFrame: (frame: Frame | undefined) => void): void;
+  touch(phase: "down" | "move" | "up", u: number, v: number, pinch: boolean): void;
+  scroll(u: number, v: number, wheel: Wheel): void;
+  key(name: string, modifiers: Modifiers): void;
+  paste(text: string): void;
+  press(button: ToolbarButton): void;
+  /** After a lost connection: the closing line when the device itself went away, else undefined. */
+  ended(waiting: () => boolean): Promise<string | undefined>;
+  close(): Promise<void>;
+}
 
 const ESC = "\x1b";
 const FRAME_ID = 1;
 const QUERY_ID = 31;
-const TOOLBAR = [
-  { label: "Back", act: "back" }, { label: "Home", act: "home" }, { label: "Recents", act: "recents" },
-  { label: "Power", act: "power" }, { label: "Vol−", act: "volume-down" }, { label: "Vol+", act: "volume-up" },
-  { label: "⟲", act: "rotate-left" }, { label: "⟳", act: "rotate-right" }, { label: "Close", act: "close" },
-] as const;
-type Action = (typeof TOOLBAR)[number]["act"];
-const HARDWARE: Partial<Record<Action, string>> = {
-  back: "GoBack", home: "GoHome", recents: "AppSwitch", power: "Power", "volume-down": "AudioVolumeDown", "volume-up": "AudioVolumeUp",
-};
-/** Image rotation (Rotation.SkinRotation) to the physical-model z angle the emulator window uses. */
-const ANGLES = [0, 90, 180, -90];
+/** Toolbar images: buttons from ICON_ID (by their index in ACTS), then the panel behind them. */
+const ICON_ID = 40;
+const PANEL_ID = 60;
+/** The toolbar's height in rows: room for Tern-sized buttons with padding around them. */
+const BAR_ROWS = 3;
+const SCREEN_OFF = "The screen is off. Press Power to wake it.";
+type Act = ToolbarButton | "close";
+/** The device's navigation buttons sit in the middle, hardware keys left of them, rotation right; Close ends the bar. */
+const NAVIGATION: Act[] = ["back", "home", "recents"];
+const HARDWARE: Act[] = ["power", "volume-down", "volume-up"];
+const ROTATION: Act[] = ["rotate-left", "rotate-right"];
+const ACTS: Act[] = [...NAVIGATION, ...HARDWARE, ...ROTATION, "close"];
 
 /** W3C key names for kitty functional key codes and legacy CSI finals. */
 const KITTY_KEYS: Record<number, string> = {
@@ -39,107 +63,224 @@ const LETTER_KEYS: Record<string, string> = {
 };
 /** Lock and modifier keys: modifiers travel with the key they modify. */
 const IGNORED = new Set([57358, 57359, 57360, 57361, 57362, 57363, 57441, 57442, 57443, 57444, 57445, 57446, 57447, 57448, 57449, 57450, 57451, 57452]);
-const PRINTABLE = /^[\x20-\x7e]$/;
+const WHEELS: Wheel[] = ["up", "down", "left", "right"];
 
-type Frame = { data: Buffer; width: number; height: number; rotation: number };
 type Geometry = { cols: number; rows: number; cellWidth: number; cellHeight: number };
+type Rgb = readonly [number, number, number];
+type Slot = { act: Act; from: number; to: number };
 
-const keyEvent = (key: string, type: "down" | "up" | "press") =>
-  new Proto().int(2, type === "down" ? 0 : type === "up" ? 1 : 2).string(4, key);
-const textEvent = (text: string) => new Proto().int(2, 2).string(5, text);
+const mix = (a: Rgb, b: Rgb, amount: number): Rgb => [0, 1, 2].map(i => Math.round(a[i]! + (b[i]! - a[i]!) * amount)) as unknown as Rgb;
+/** An image transmission, split into the protocol's 4096-byte chunks. */
+const graphics = (control: string, data: Buffer) => {
+  const encoded = data.toString("base64");
+  const chunks: string[] = [];
+  for (let offset = 0; offset < encoded.length; offset += 4096) {
+    const more = offset + 4096 < encoded.length ? 1 : 0;
+    chunks.push(`${ESC}_G${offset ? "" : `${control},`}m=${more};${encoded.slice(offset, offset + 4096)}${ESC}\\`);
+  }
+  return chunks.join("");
+};
 
-export async function runDisplay(endpoint: Endpoint): Promise<void> {
+/** Lines of at most `room` columns, broken at spaces where possible. */
+const wrap = (text: string, room: number) => text.split("\n").flatMap(paragraph => {
+  const lines: string[] = [];
+  let line = "";
+  for (const word of paragraph.split(" ")) {
+    if (line && line.length + 1 + word.length > room) { lines.push(line); line = word; } else line = line ? `${line} ${word}` : word;
+  }
+  return [...lines, line];
+});
+
+/** Connects the device while the view shows progress; `progress` names the current step. */
+export type Connect = (progress: (step: string) => void, signal: AbortSignal) => Promise<Device>;
+
+export async function runDisplay(title: string, connect: Connect): Promise<void> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("display needs an interactive terminal with kitty graphics, such as a Tern pane.");
-  const title = endpoint.name ?? endpoint.serial;
-  const label = endpoint.name ? `${endpoint.name} · ${endpoint.serial}` : endpoint.serial;
   const out = (text: string) => { process.stdout.write(text); };
   const decoder = new TextDecoder();
+  let device: Device | undefined;
   let pending = "";
   let flushTimer: Timer | undefined;
   let geometry: Geometry | undefined;
   let kitty = false, kittyKeyboard = false, pixelMouse = false;
+  let foreground: Rgb | undefined, background: Rgb | undefined;
   let answered: (() => void) | undefined;
   let fileTransport = true, framesShown = 0;
   let frame: Frame | undefined, drawn: Frame | undefined, inFlight = false, ackTimer: Timer | undefined;
-  let cancelStream: (() => void) | undefined, streamSize = "";
-  let touching: { x: number; y: number; pinch: boolean } | undefined;
-  let message = `Connecting to ${title}…`;
-  let stopping = false;
+  let streamSize = "";
+  let touching: { u: number; v: number; pinch: boolean } | undefined;
+  /** The step in progress, shown with an animated bar until the first frame; and the latest notice. */
+  let step: string | undefined = `Connecting to ${title}…`, message = "";
+  const started = Date.now();
+  let stopping = false, restored = false;
   const { promise: finished, resolve: finish } = Promise.withResolvers<string | undefined>();
   const directory = mkdtempSync(path.join(os.tmpdir(), "elide-tern-display-"));
   const framePath = path.join(directory, "frame.rgb");
-  // The emulator writes the running device's hardware here; without hw.keyboard the guest has no
-  // keyboard device and silently drops every key event, Back, Home and Power included.
-  let hardware = "";
-  try { if (endpoint.directory) hardware = readFileSync(path.join(endpoint.directory, "hardware-qemu.ini"), "utf8"); } catch {}
-  const keyboard = !/^hw\.keyboard\s*=\s*(false|no)\s*$/m.test(hardware);
-
-  const client = new EmulatorClient(endpoint, error => stop(error ? `Lost the emulator connection: ${error.message}` : undefined));
-  let input: { send(message: Proto): void; end(): void } | undefined = client.publish("streamInputEvent", error => {
-    // Emulators without the ordered input stream still take unary touch, mouse and key events.
-    input = undefined;
-    if (error && !stopping) status(`Input stream unavailable (${error.message}); using single events.`);
-  });
-  const send = (field: 1 | 2 | 3 | 6, event: Proto) => {
-    if (field === 1 && !keyboard) {
-      if (!stopping) status(`No keyboard input: set hw.keyboard = yes for ${title} and restart it.`);
-      return;
-    }
-    if (input) { input.send(new Proto().message(field, event)); return; }
-    const method = field === 1 ? "sendKey" : field === 2 ? "sendTouch" : field === 3 ? "sendMouse" : undefined;
-    if (method) client.unary(method, event).catch(error => status(`Input failed: ${error.message}`));
-  };
 
   function stop(reason?: string): void {
     if (stopping) return;
     stopping = true;
     finish(reason);
   }
-  const alive = () => {
-    try { process.kill(endpoint.pid, 0); return true; } catch { return false; }
-  };
 
   // ── Terminal output ────────────────────────────────────────────────────────────
   const area = () => {
     const g = geometry!;
-    return { width: g.cols * g.cellWidth, height: Math.max(1, g.rows - 1) * g.cellHeight };
+    return { width: g.cols * g.cellWidth, height: Math.max(1, g.rows - BAR_ROWS) * g.cellHeight };
   };
-  /** The bottom row: hardware buttons, then the notice or the device label. */
-  const toolbar = () => {
+  const ink = (): Rgb => foreground ?? [224, 224, 224];
+  const color = (rgb: Rgb | undefined, layer: 38 | 48) => rgb ? `${ESC}[${layer};2;${rgb.join(";")}m` : "";
+  const clip = (text: string, room: number) => text.length > room ? text.slice(0, Math.max(0, room - 1)) + "…" : text;
+
+  // ── Toolbar ────────────────────────────────────────────────────────────────────
+  let slots: Slot[] = [];
+  let note = { from: 1, to: 0 };
+  let hovered: Slot | undefined, pressed: Slot | undefined;
+  const images = new Map<string, Buffer>();
+  /** Pixels per Tern pixel: Tern's cells are about 17 pixels tall at 1×. */
+  const scale = () => geometry!.cellHeight / 17;
+  const box = () => Math.min(BAR_ROWS * geometry!.cellHeight - 2, Math.round(28 * scale()));
+  /** The bar's columns, its separators' first columns, and the columns left free for the note. */
+  let dock = { from: 1, to: 0 }, separators: number[] = [];
+  const separatorWidth = () => Math.max(1, Math.ceil(16 * scale() / geometry!.cellWidth));
+  /**
+   * The bar is as wide as its buttons plus a column each side. Navigation is centered in the
+   * pane, hardware keys left of it, rotation and then Close right, groups set apart by separators.
+   * When narrow, rotation and then the hardware buttons drop out. The note takes the space left
+   * of the bar.
+   */
+  const layout = () => {
     const g = geometry!;
-    const hits: { act: Action; from: number; to: number }[] = [];
-    let line = "", column = 1;
-    for (const button of TOOLBAR) {
-      const text = ` ${button.label} `;
-      if (column + text.length > g.cols + 1) break;
-      hits.push({ act: button.act, from: column, to: column + text.length - 1 });
-      line += `${ESC}[7m${text}${ESC}[0m `;
-      column += text.length + 1;
+    const width = Math.ceil((box() + 4 * scale()) / g.cellWidth), gap = separatorWidth();
+    const center = Math.floor((g.cols - NAVIGATION.length * width) / 2) + 1;
+    const row = (acts: Act[], from: number) => acts.map((act, index) => ({ act, from: from + index * width, to: from + (index + 1) * width - 1 }));
+    for (const level of [2, 1, 0]) {
+      const groups: Act[][] = [...level ? [HARDWARE] : [], NAVIGATION, ...level === 2 ? [ROTATION] : [], ["close"]];
+      const before = level ? HARDWARE.length * width + gap : 0;
+      let column = center - before;
+      const placed: Slot[] = [], gaps: number[] = [];
+      groups.forEach((group, index) => {
+        if (index) { gaps.push(column); column += gap; }
+        placed.push(...row(group, column));
+        column += group.length * width;
+      });
+      dock = { from: center - before - 1, to: column };
+      if (dock.from < 1 || dock.to > g.cols) continue;
+      slots = placed;
+      separators = gaps;
+      note = { from: 2, to: dock.from - 2 };
+      return;
     }
-    const note = ` ${drawn && message ? message : label}`;
-    const room = g.cols - column + 1;
-    if (room > 4) line += `${ESC}[2m${note.length > room ? note.slice(0, room - 1) + "…" : note}${ESC}[0m`;
-    out(`${ESC}7${ESC}[${g.rows};1H${ESC}[2K${line}${ESC}8`);
-    buttons = hits;
+    slots = [];
+    separators = [];
+    dock = { from: 1, to: 0 };
+    note = { from: 2, to: g.cols - 1 };
   };
-  let buttons: { act: Action; from: number; to: number }[] = [];
-  /** Before the first frame the message is centered in the screen area; afterwards it joins the toolbar. */
+  /** One image spanning the bar's rows at `column`, cached by `key`; `z` -1 puts it under the buttons. */
+  const place = (id: number, column: number, key: string, render: (width: number, height: number) => Buffer, columns: number, z = 0) => {
+    const g = geometry!, width = columns * g.cellWidth, height = BAR_ROWS * g.cellHeight;
+    const cacheKey = `${key}:${width}x${height}:${ink().join(",")}`;
+    let pixels = images.get(cacheKey);
+    if (!pixels) images.set(cacheKey, pixels = render(width, height));
+    return `${ESC}[${g.rows - BAR_ROWS + 1};${column}H${graphics(`a=T,f=32,s=${width},v=${height},i=${id},p=1,C=1,z=${z},q=2`, pixels)}`;
+  };
+  const drawSlot = (slot: Slot) => {
+    const s = scale();
+    const state = pressed === slot && hovered === slot ? "pressed" : hovered === slot ? "hover" : "idle";
+    const image = place(ICON_ID + ACTS.indexOf(slot.act), slot.from, `${slot.act}:${state}`, (width, height) => renderButton(slot.act, {
+      width, height, box: box(), radius: Math.round(6 * s), icon: Math.round(16 * s), color: ink(),
+      fill: state === "pressed" ? 0.16 : state === "hover" ? 0.09 : 0, ink: state === "idle" ? 0.72 : 0.95,
+    }), slot.to - slot.from + 1);
+    out(`${ESC}7${image}${ESC}8`);
+  };
+  /** After the first frame: the latest notice, on the bar's middle row left of it. */
+  const drawNote = () => {
+    if (!geometry || restored || !drawn) return;
+    const room = note.to - note.from + 1;
+    if (room < 4) return;
+    const text = clip(message.split("\n")[0]!, room).padEnd(room);
+    out(`${ESC}7${ESC}[${geometry.rows - Math.floor(BAR_ROWS / 2)};${note.from}H${ESC}[2m${text}${ESC}[0m${ESC}8`);
+  };
+  const toolbar = () => {
+    if (!geometry || restored) return;
+    layout();
+    const g = geometry, s = scale();
+    let text = "";
+    for (let row = g.rows - BAR_ROWS + 1; row <= g.rows; row++) text += `${ESC}[${row};1H${ESC}[2K`;
+    if (dock.to > dock.from) {
+      // One translucent panel behind the buttons: fill, outline and separators.
+      const columns = dock.to - dock.from + 1;
+      const centers = separators.map(column => (column - dock.from + separatorWidth() / 2) * g.cellWidth);
+      text += place(PANEL_ID, dock.from, `panel:${separators.join(",")}`, (width, height) => panel(width, height, {
+        radius: Math.round(10 * s), color: ink(), fill: 0.05, stroke: 0.14, line: Math.max(1, Math.round(s)),
+        separators: centers, tall: Math.round(18 * s),
+      }), columns, -1);
+    }
+    out(`${ESC}7${text}${ESC}8`);
+    for (const slot of slots) drawSlot(slot);
+    drawNote();
+  };
+  const hover = (slot: Slot | undefined) => {
+    if (slot === hovered) return;
+    const previous = hovered;
+    hovered = slot;
+    if (previous) drawSlot(previous);
+    if (slot) drawSlot(slot);
+  };
+
+  // ── Progress ───────────────────────────────────────────────────────────────────
+  /** Before the first frame: the device's name, an indeterminate bar with the step, then any notice. */
+  let tick = 0, animation: Timer | undefined;
+  const NOTICE_LINES = 5;
+  const middle = () => Math.max(3, Math.floor((geometry!.rows - BAR_ROWS - NOTICE_LINES) / 2));
+  const progress = () => {
+    if (!geometry || restored || drawn) return;
+    const g = geometry, row = middle();
+    /** A cleared row with `text` centered on it; the cursor must already be on the row. */
+    const centered = (text: string, style = "") =>
+      `${ESC}[2K` + (text ? `${ESC}[${Math.max(1, Math.floor((g.cols - text.length) / 2) + 1)}G${style}${clip(text, g.cols - 2)}${ESC}[0m` : "");
+    let bar = "";
+    if (step) {
+      const width = Math.max(8, Math.min(32, g.cols - 8)), segment = Math.floor(width / 4), travel = width - segment;
+      const position = tick % (2 * travel) < travel ? tick % (2 * travel) : 2 * travel - tick % (2 * travel);
+      const track = background && foreground ? color(mix(background, foreground, 0.12), 38) : ESC + "[2m";
+      bar = `${ESC}[2K${ESC}[${Math.floor((g.cols - width) / 2) + 1}G${track}${"━".repeat(position)}${ESC}[0m${color(foreground, 38)}${"━".repeat(segment)}${ESC}[0m${track}${"━".repeat(travel - position)}${ESC}[0m`;
+    }
+    const seconds = Math.floor((Date.now() - started) / 1000);
+    // Below the bar and step come notices; with nothing in progress they take the bar's place.
+    const notices = message ? wrap(message, Math.max(16, Math.min(72, g.cols - 4))).slice(0, NOTICE_LINES).map((notice, index) => centered(notice, index ? ESC + "[2m" : "")) : [];
+    const below = step ? [bar, centered(""), centered(seconds >= 3 ? `${step} ${seconds}s` : step, ESC + "[2m"), ...notices] : notices;
+    let text = `${ESC}[${row - 2};1H${centered(title, ESC + "[1m")}${ESC}[${row - 1};1H${ESC}[2K`;
+    for (let index = 0; index < 3 + NOTICE_LINES; index++) text += `${ESC}[${row + index};1H${below[index] ?? `${ESC}[2K`}`;
+    out(`${ESC}7${text}${ESC}8`);
+  };
+  const clearProgress = () => {
+    clearInterval(animation);
+    animation = undefined;
+    if (!geometry) return;
+    let rows = "";
+    for (let row = middle() - 2; row <= middle() + 3 + NOTICE_LINES; row++) rows += `${ESC}[${row};1H${ESC}[2K`;
+    out(`${ESC}7${rows}${ESC}8`);
+  };
+  const setStep = (text: string | undefined) => {
+    step = text;
+    if (step && !animation) animation = setInterval(() => { tick++; progress(); }, 80);
+    if (!step) { clearInterval(animation); animation = undefined; }
+    progress();
+  };
   const status = (text: string) => {
     message = text;
-    if (!geometry) return;
-    if (drawn) { toolbar(); return; }
-    const g = geometry;
-    const row = Math.max(1, Math.floor((g.rows - 1) / 2));
-    const clipped = text.length > g.cols ? text.slice(0, g.cols - 1) + "…" : text;
-    out(`${ESC}7${ESC}[${row};1H${ESC}[2K${ESC}[${Math.max(1, Math.floor((g.cols - clipped.length) / 2) + 1)}G${clipped}${ESC}8`);
+    if (drawn) drawNote();
+    else progress();
   };
   const redraw = () => {
     out(`${ESC}_Ga=d,d=A,q=2${ESC}\\${ESC}[2J`);
     drawn = undefined;
     toolbar();
-    status(message);
+    progress();
   };
 
+  // ── Frames ─────────────────────────────────────────────────────────────────────
   const pump = () => {
     if (inFlight || !frame || !geometry || stopping) return;
     const next = frame;
@@ -151,20 +292,16 @@ export async function runDisplay(endpoint: Endpoint): Promise<void> {
     if (fileTransport) {
       writeFileSync(framePath, next.data);
       command = `${ESC}_G${place},t=f;${Buffer.from(framePath).toString("base64")}${ESC}\\`;
-    } else {
-      const encoded = next.data.toString("base64");
-      const chunks: string[] = [];
-      for (let offset = 0; offset < encoded.length; offset += 4096) {
-        const more = offset + 4096 < encoded.length ? 1 : 0;
-        chunks.push(`${ESC}_G${offset ? "" : `${place},`}m=${more};${encoded.slice(offset, offset + 4096)}${ESC}\\`);
-      }
-      command = chunks.join("");
-    }
-    if (!drawn) { message = ""; out(`${ESC}[2J`); }
-    out(`${ESC}7${ESC}[${Math.floor(top / g.cellHeight) + 1};${Math.floor(left / g.cellWidth) + 1}H${command}${ESC}8`);
+    } else command = graphics(place, next.data);
     const first = !drawn;
+    if (first) {
+      clearProgress();
+      step = undefined;
+      if (message === SCREEN_OFF) message = "";
+    }
+    out(`${ESC}7${ESC}[${Math.floor(top / g.cellHeight) + 1};${Math.floor(left / g.cellWidth) + 1}H${command}${ESC}8`);
     drawn = next;
-    if (first) toolbar();
+    if (first) drawNote();
     inFlight = true;
     // The terminal acknowledges each transmission; a silent one must not freeze the view.
     ackTimer = setTimeout(() => { inFlight = false; pump(); }, 1000);
@@ -181,62 +318,42 @@ export async function runDisplay(endpoint: Endpoint): Promise<void> {
     } else status(`Terminal rejected a frame: ${detail}`);
     pump();
   };
-
-  // ── Emulator frames ────────────────────────────────────────────────────────────
   const subscribe = () => {
-    if (!geometry || stopping) return;
+    if (!geometry || stopping || !device) return;
     const box = area();
     const size = `${box.width}x${box.height}`;
     if (size === streamSize) return;
     streamSize = size;
-    cancelStream?.();
-    // RGB888 at the pane's pixel size: the emulator scales, keeping the device aspect ratio.
-    cancelStream = client.subscribe("streamScreenshot", new Proto().int(1, 2).int(3, box.width).int(4, box.height), (image: Fields) => {
-      const format = nested(image, 1);
-      const width = number(format, 3), height = number(format, 4), data = bytes(image, 4);
-      if (!width || !height) { frame = undefined; if (drawn) redraw(); status(`${title}: display is off. Press Power to wake it.`); return; }
-      if (data.length !== width * height * 3) return;
-      frame = { data, width, height, rotation: number(nested(format, 2), 1) };
+    device.stream(box.width, box.height, next => {
+      if (stopping) return;
+      if (!next) {
+        frame = undefined;
+        if (drawn) redraw();
+        setStep(undefined);
+        status(SCREEN_OFF);
+        return;
+      }
+      frame = next;
       pump();
-    }, error => stop(error ? `Screen stream ended: ${error.message}` : undefined));
+    });
   };
 
   // ── Input ──────────────────────────────────────────────────────────────────────
-  /**
-   * Maps a pane pixel to the device's native (portrait) coordinates; points outside the screen are
-   * undefined unless `clamp`, which keeps a drag that leaves the screen on its edge.
-   */
-  const devicePoint = (px: number, py: number, clamp = false) => {
-    if (!drawn || !geometry || !native.width) return undefined;
+  /** A pane pixel as a fraction of the drawn frame; outside it undefined unless `clamp` (a drag that left it). */
+  const framePoint = (px: number, py: number, clamp = false) => {
+    if (!drawn || !geometry) return undefined;
     const box = area();
     const left = Math.max(0, Math.floor((box.width - drawn.width) / 2)), top = Math.max(0, Math.floor((box.height - drawn.height) / 2));
-    let u = (px - left) / drawn.width, v = (py - top) / drawn.height;
+    const u = (px - left) / drawn.width, v = (py - top) / drawn.height;
     if (!clamp && (u < 0 || v < 0 || u >= 1 || v >= 1)) return undefined;
-    u = Math.min(1, Math.max(0, u)); v = Math.min(1, Math.max(0, v));
-    const { width: w, height: h } = native;
-    const r = drawn.rotation;
-    // Frames are rotated into the skin orientation; touches stay in the native display space.
-    const ix = u * (r % 2 ? h : w), iy = v * (r % 2 ? w : h);
-    const [x, y] = r === 1 ? [w - iy, ix] : r === 2 ? [w - ix, h - iy] : r === 3 ? [iy, h - ix] : [ix, iy];
-    return { x: Math.min(w - 1, Math.max(0, Math.round(x))), y: Math.min(h - 1, Math.max(0, Math.round(y))) };
-  };
-  let native = { width: 0, height: 0 };
-  const touch = (x: number, y: number, pressure: number, pinch: boolean) => {
-    const event = new Proto().message(1, new Proto().int(1, x).int(2, y).int(3, 1).int(4, pressure).int(7, 1));
-    if (pinch) event.message(1, new Proto().int(1, native.width - 1 - x).int(2, native.height - 1 - y).int(3, 2).int(4, pressure).int(7, 1));
-    send(2, event);
+    return { u: Math.min(1, Math.max(0, u)), v: Math.min(1, Math.max(0, v)) };
   };
   const releaseTouch = () => {
-    if (touching) { touch(touching.x, touching.y, 0, touching.pinch); touching = undefined; }
+    if (touching) { device?.touch("up", touching.u, touching.v, touching.pinch); touching = undefined; }
   };
-  const toolbarAction = (act: Action) => {
-    if (act === "close") { stop(); return; }
-    const key = HARDWARE[act];
-    if (key) { send(1, keyEvent(key, "press")); return; }
-    const angle = ANGLES[drawn?.rotation ?? 0]! + (act === "rotate-left" ? 90 : -90);
-    const z = angle > 180 ? angle - 360 : angle <= -180 ? angle + 360 : angle;
-    client.unary("setPhysicalModel", new Proto().int(1, 1).message(3, new Proto().floats(1, [0, 0, z])))
-      .catch(error => status(`Rotation failed: ${error.message}`));
+  const act = (button: Act) => {
+    if (button === "close") stop();
+    else device?.press(button);
   };
   const mouse = (code: number, x: number, y: number, release: boolean) => {
     const g = geometry;
@@ -244,58 +361,41 @@ export async function runDisplay(endpoint: Endpoint): Promise<void> {
     // Cell reports (no 1016) address the cell's center.
     const px = pixelMouse ? x - 1 : (x - 0.5) * g.cellWidth, py = pixelMouse ? y - 1 : (y - 0.5) * g.cellHeight;
     const button = code & 3, motion = (code & 32) !== 0, alt = (code & 8) !== 0;
+    const column = Math.floor(px / g.cellWidth) + 1;
+    const slot = !touching && py >= (g.rows - BAR_ROWS) * g.cellHeight ? slots.find(item => column >= item.from && column <= item.to) : undefined;
     if (code & 64) {
-      // Android scrolls under its mouse pointer, so move it there first. 120 = one wheel notch.
-      const at = devicePoint(px, py);
-      if (!at) return;
-      send(3, new Proto().int(1, at.x).int(2, at.y));
-      const [dx, dy] = button === 0 ? [0, 120] : button === 1 ? [0, -120] : button === 2 ? [120, 0] : [-120, 0];
-      send(6, new Proto().int(1, dx!).int(2, dy!));
+      const at = framePoint(px, py);
+      if (at) device?.scroll(at.u, at.v, WHEELS[button]!);
       return;
     }
+    // Toolbar buttons act on release over the button they were pressed on.
+    if (pressed) {
+      if (!release && !motion) return;
+      const target = pressed;
+      if (release) pressed = undefined;
+      if (release && slot === hovered) drawSlot(target);
+      hover(slot);
+      if (release && slot === target) act(target.act);
+      return;
+    }
+    if (motion && button === 3) { hover(slot); return; }
     if (release || motion) {
       if (!touching) return;
-      const at = devicePoint(px, py, true) ?? touching;
-      if (release) { touch(at.x, at.y, 0, touching.pinch); touching = undefined; return; }
-      if (at.x === touching.x && at.y === touching.y) return;
+      const at = framePoint(px, py, true) ?? touching;
       touching = { ...at, pinch: touching.pinch };
-      touch(at.x, at.y, 1, touching.pinch);
+      device?.touch(release ? "up" : "move", at.u, at.v, touching.pinch);
+      if (release) touching = undefined;
       return;
     }
     if (button !== 0 || touching) return;
-    if (py >= (g.rows - 1) * g.cellHeight) {
-      const column = Math.floor(px / g.cellWidth) + 1;
-      const hit = buttons.find(item => column >= item.from && column <= item.to);
-      if (hit) toolbarAction(hit.act);
-      return;
-    }
-    const at = devicePoint(px, py);
-    if (!at) return;
-    // Alt+drag adds a second finger mirrored through the screen's center: pinch and rotate.
+    if (slot) { pressed = slot; if (hovered === slot) drawSlot(slot); else hover(slot); return; }
+    const at = framePoint(px, py);
+    if (!at || !device) return;
+    // Alt+drag is a two-finger pinch or rotate where the device supports it.
     touching = { ...at, pinch: alt };
-    touch(at.x, at.y, 1, alt);
+    device.touch("down", at.u, at.v, alt);
   };
-  /**
-   * Every key goes as a whole press with its modifiers. Terminals that report no releases (Tern
-   * among them) would otherwise leave a key down, which the device auto-repeats.
-   */
-  const pressed = (name: string, ctrl = false, alt = false, shift = false) => {
-    // Characters arrive already shifted and the emulator adds Shift itself; named keys need it.
-    const shifted = shift && name.length > 1;
-    if (ctrl) send(1, keyEvent("Control", "down"));
-    if (alt) send(1, keyEvent("Alt", "down"));
-    if (shifted) send(1, keyEvent("Shift", "down"));
-    send(1, name.length === 1 && !PRINTABLE.test(name) ? textEvent(name) : keyEvent(name, "press"));
-    if (shifted) send(1, keyEvent("Shift", "up"));
-    if (alt) send(1, keyEvent("Alt", "up"));
-    if (ctrl) send(1, keyEvent("Control", "up"));
-  };
-  const paste = (text: string) => {
-    // ClipData carries any Unicode text; Ctrl+V pastes it into the focused field.
-    client.unary("setClipboard", new Proto().string(1, text)).then(() => {
-      send(1, keyEvent("Control", "down")); send(1, keyEvent("v", "press")); send(1, keyEvent("Control", "up"));
-    }, error => status(`Paste failed: ${error.message}`));
-  };
+  const press = (name: string, ctrl = false, alt = false, shift = false) => device?.key(name, { ctrl, alt, shift });
 
   const csi = (body: string, final: string) => {
     // Tern rounds the cell size it reports (CSI 16t) but lays images out in its real, fractional
@@ -319,7 +419,12 @@ export async function runDisplay(endpoint: Endpoint): Promise<void> {
       return;
     }
     if (final === "I" && !body) return;
-    if (final === "O" && !body) { releaseTouch(); return; }
+    if (final === "O" && !body) {
+      releaseTouch();
+      pressed = undefined;
+      hover(undefined);
+      return;
+    }
     const [first = "", second = "", third = ""] = body.split(";");
     const code = Number(first.split(":")[0] || 1);
     const modifiers = Number(second.split(":")[0]) || 1;
@@ -332,7 +437,7 @@ export async function runDisplay(endpoint: Endpoint): Promise<void> {
     } else if (final === "~") name = TILDE_KEYS[code];
     else name = LETTER_KEYS[final];
     if (!name) return;
-    pressed(ctrl ? name : text ?? name, ctrl, alt, shift);
+    press(ctrl ? name : text ?? name, ctrl, alt, shift);
   };
   const apc = (body: string) => {
     const match = /^G([^;]*);(.*)$/s.exec(body);
@@ -341,13 +446,21 @@ export async function runDisplay(endpoint: Endpoint): Promise<void> {
     if (id === QUERY_ID) kitty = match[2] === "OK";
     else if (id === FRAME_ID) acknowledged(match[2] === "OK", match[2]!);
   };
+  /** Foreground (10) and background (11) color reports; the toolbar draws in them. */
+  const osc = (body: string) => {
+    const match = /^1([01]);rgb:([0-9a-f]{1,4})\/([0-9a-f]{1,4})\/([0-9a-f]{1,4})$/i.exec(body);
+    if (!match) return;
+    const color = match.slice(2).map(hex => Math.round(parseInt(hex, 16) / (16 ** hex.length - 1) * 255)) as unknown as Rgb;
+    if (match[1] === "0") foreground = color;
+    else background = color;
+  };
   const legacy = (char: string) => {
-    if (char === "\r" || char === "\n") pressed("Enter");
-    else if (char === "\t") pressed("Tab");
-    else if (char === "\x7f" || char === "\b") pressed("Backspace");
-    else if (char === ESC) pressed("Escape");
-    else if (char < " ") pressed(String.fromCharCode(char.charCodeAt(0) + 96), true);
-    else pressed(char);
+    if (char === "\r" || char === "\n") press("Enter");
+    else if (char === "\t") press("Tab");
+    else if (char === "\x7f" || char === "\b") press("Backspace");
+    else if (char === ESC) press("Escape");
+    else if (char < " ") press(String.fromCharCode(char.charCodeAt(0) + 96), true);
+    else press(char);
   };
   const parse = () => {
     clearTimeout(flushTimer);
@@ -355,7 +468,7 @@ export async function runDisplay(endpoint: Endpoint): Promise<void> {
       if (pending.startsWith(`${ESC}[200~`)) {
         const end = pending.indexOf(`${ESC}[201~`);
         if (end < 0) break;
-        paste(pending.slice(6, end));
+        device?.paste(pending.slice(6, end));
         pending = pending.slice(end + 6);
         continue;
       }
@@ -375,17 +488,18 @@ export async function runDisplay(endpoint: Endpoint): Promise<void> {
           const end = kind === "]" ? pending.search(/\x07|\x1b\\/) : pending.indexOf(`${ESC}\\`);
           if (end < 0) { if (pending.length > 65536) pending = ""; break; }
           if (kind === "_") apc(pending.slice(2, end));
+          else osc(pending.slice(2, end));
           pending = pending.slice(end + (pending[end] === "\x07" ? 1 : 2));
         } else if (kind === "O") {
           if (pending.length < 3) break;
           const name = LETTER_KEYS[pending[2]!] ?? (pending[2] === "R" ? "F3" : undefined);
-          if (name) pressed(name);
+          if (name) press(name);
           pending = pending.slice(3);
         } else {
           // ESC + character: Alt held in a legacy terminal.
           const char = String.fromCodePoint(pending.codePointAt(1)!);
           pending = pending.slice(1 + char.length);
-          pressed(char, false, true);
+          press(char, false, true);
         }
         continue;
       }
@@ -402,6 +516,7 @@ export async function runDisplay(endpoint: Endpoint): Promise<void> {
     setTimeout(() => {
       if (!geometry || stopping) return;
       geometry = { ...geometry, cols: process.stdout.columns, rows: process.stdout.rows };
+      hovered = pressed = undefined;
       redraw();
       subscribe();
     }, 80);
@@ -412,65 +527,77 @@ export async function runDisplay(endpoint: Endpoint): Promise<void> {
   process.stdin.on("data", onData);
   process.stdin.resume();
   // Alternate screen, hidden cursor, window title; then the queries this view depends on.
-  out(`${ESC}[?1049h${ESC}[?25l${ESC}]2;${label}\x07`);
+  out(`${ESC}[?1049h${ESC}[?25l${ESC}]2;${title}\x07`);
   const { promise: queried, resolve: queriesDone } = Promise.withResolvers<void>();
   answered = queriesDone;
-  out(`${ESC}_Gi=${QUERY_ID},s=1,v=1,a=q,t=d,f=24;AAAA${ESC}\\${ESC}[?1016$p${ESC}[?u${ESC}[16t${ESC}[14t${ESC}[c`);
+  out(`${ESC}_Gi=${QUERY_ID},s=1,v=1,a=q,t=d,f=24;AAAA${ESC}\\${ESC}[?1016$p${ESC}[?u${ESC}[16t${ESC}[14t${ESC}]10;?${ESC}\\${ESC}]11;?${ESC}\\${ESC}[c`);
   const timeout = setTimeout(queriesDone, 2000);
-  let failure: string | undefined;
+  let failure: string | undefined, gone: string | undefined;
   try {
     await queried;
     clearTimeout(timeout);
     answered = undefined;
     if (!kitty) throw new Error("This terminal does not support the kitty graphics protocol. Open the device from Tern, or use kitty, Ghostty or WezTerm.");
     if (!geometry) throw new Error("This terminal does not report its pixel size (CSI 14t/16t).");
-    // Mouse: button-event tracking, SGR encoding, pixel coordinates, focus; keyboard: kitty flags
-    // 1|8|16 (disambiguate, every key, associated text); bracketed paste.
-    out(`${ESC}[?1002h${ESC}[?1006h${pixelMouse ? `${ESC}[?1016h` : ""}${ESC}[?1004h${ESC}[?2004h${kittyKeyboard ? `${ESC}[>25u` : ""}`);
+    // Mouse: any-event tracking (hover), SGR encoding, pixel coordinates, focus; keyboard: kitty
+    // flags 1|8|16 (disambiguate, every key, associated text); bracketed paste.
+    out(`${ESC}[?1003h${ESC}[?1006h${pixelMouse ? `${ESC}[?1016h` : ""}${ESC}[?1004h${ESC}[?2004h${kittyKeyboard ? `${ESC}[>25u` : ""}`);
     process.on("SIGWINCH", onResize);
     for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(signal, onSignal);
     redraw();
-    // DisplayConfigurations.displays; display 0 omits its id field.
-    const configurations = await client.unary("getDisplayConfigurations");
-    const primary = (configurations.get(1) ?? []).flatMap(value => Buffer.isBuffer(value) ? [decode(value)] : [])
-      .find(fields => number(fields, 5) === 0);
-    if (primary) native = { width: number(primary, 1), height: number(primary, 2) };
-    if (!native.width || !native.height) throw new Error("The emulator reported no display size.");
-    status(`Waiting for ${title}'s screen…`);
-    subscribe();
-    failure = await finished;
-    if (failure && !hungUp) {
-      // A stopping emulator drops gRPC before its process exits, which may first save a snapshot.
-      status(`${title} disconnected. Waiting for it to exit…`);
-      for (const deadline = Date.now() + 15_000; alive() && !hungUp && Date.now() < deadline;) await Bun.sleep(200);
+    setStep(step);
+    // Closing the view while connecting cancels it; a started emulator is stopped again.
+    const abort = new AbortController();
+    const connecting = connect(text => { if (!stopping) setStep(text); }, abort.signal);
+    const connected = await Promise.race([connecting, finished.then(() => undefined)]).catch((error: unknown) => {
+      // A failed connection stays on screen until the view is closed.
+      setStep(undefined);
+      status(`Could not open ${title}.\n${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    });
+    if (connected === undefined) {
+      abort.abort();
+      device = await connecting.catch(() => undefined);
+    } else if (connected === null) {
+      await finished;
+    } else {
+      device = connected;
+      out(`${ESC}]2;${device.label}\x07`);
+      await device.open({ status: text => { if (!stopping) status(text); }, stop });
+      setStep("Waiting for the screen…");
+      subscribe();
+      failure = await finished;
+      if (failure && !hungUp) {
+        status(failure);
+        gone = await device.ended(() => !hungUp);
+      }
     }
   } catch (error) {
     failure = error instanceof Error ? error.message : String(error);
+    gone = await device?.ended(() => false).catch(() => undefined);
   } finally {
     stopping = true;
     releaseTouch();
-    cancelStream?.();
-    input?.end();
     clearTimeout(ackTimer);
     clearTimeout(flushTimer);
+    clearInterval(animation);
     process.removeListener("SIGWINCH", onResize);
     for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.removeListener(signal, onSignal);
     process.stdin.removeListener("data", onData);
     // Reports the terminal sent before it saw the reset (a Close click's release) must not reach the shell.
     const drain = () => {};
     process.stdin.on("data", drain);
-    out(`${ESC}_Ga=d,d=A,q=2${ESC}\\${kittyKeyboard ? `${ESC}[<u` : ""}${ESC}[?2004l${ESC}[?1004l${ESC}[?1016l${ESC}[?1006l${ESC}[?1002l${ESC}[?25h${ESC}[?1049l`);
-    // Also lets pending input reach the emulator before the connection closes.
-    await Bun.sleep(100);
+    restored = true;
+    out(`${ESC}_Ga=d,d=A,q=2${ESC}\\${kittyKeyboard ? `${ESC}[<u` : ""}${ESC}[?2004l${ESC}[?1004l${ESC}[?1016l${ESC}[?1006l${ESC}[?1003l${ESC}[?25h${ESC}[?1049l`);
+    await Promise.all([device?.close(), Bun.sleep(100)]);
     process.stdin.removeListener("data", drain);
     process.stdin.setRawMode(false);
     process.stdin.pause();
-    client.close();
     rmSync(directory, { recursive: true, force: true });
   }
   if (failure) {
-    // The emulator stopping is the normal end of a view, not an error.
-    if (alive()) throw new Error(failure);
-    console.log(`${title} stopped.`);
+    // The device stopping or leaving is the normal end of a view, not an error.
+    if (!gone) throw new Error(failure);
+    console.log(gone);
   }
 }

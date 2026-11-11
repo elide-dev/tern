@@ -4,18 +4,30 @@ import { mkdtemp, open, readFile, readdir, stat, writeFile } from "node:fs/promi
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { adbExecutable, killProcessTree, parseAdbDevices } from "@elide/ide-core";
+import { adbExecutable, killProcessTree, parseAdbDevices, type AndroidDevice } from "@elide/ide-core";
 import { errorMessage, executable, run } from "./process";
 
 export type Avd = { name: string; serial?: string; state: string };
+/** An attached non-emulator device; `name` is read from the device once it accepts commands. */
+export type Physical = { serial: string; state: string; name?: string };
 type Running = { name?: string; serial: string; state: string; error?: string };
-export type Snapshot = { avds: Avd[]; running: Running[]; warnings: string[] };
+export type Snapshot = { avds: Avd[]; devices: Physical[]; running: Running[]; warnings: string[] };
 
 export function validateName(name: string): string {
   if (!/^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$/.test(name)) {
-    throw new Error("Invalid AVD name. Use 1–128 letters, digits, underscores, dots or hyphens, beginning with a letter, digit or underscore.");
+    throw new Error("Invalid device name. Use 1–128 letters, digits, underscores, dots or hyphens, beginning with a letter, digit or underscore.");
   }
   return name;
+}
+
+/** Shell command whose first two output lines `productName` reads. */
+export const PRODUCT = "getprop ro.product.manufacturer; getprop ro.product.model";
+
+/** "Manufacturer Model", without repeating a manufacturer the model already starts with. */
+export function productName([manufacturer = "", model = ""]: string[]): string | undefined {
+  manufacturer = manufacturer.trim(); model = model.trim();
+  if (!model) return undefined;
+  return !manufacturer || model.toLowerCase().startsWith(manufacturer.toLowerCase()) ? model : `${manufacturer} ${model}`;
 }
 
 export class AndroidSdk {
@@ -50,9 +62,13 @@ export class AndroidSdk {
     return [...new Set(text.split(/\r?\n/).map(line => line.trim()).filter(line => /^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$/.test(line)))];
   }
 
-  async running(): Promise<Running[]> {
+  private async attached(): Promise<AndroidDevice[]> {
+    return parseAdbDevices(await run(await this.tool("adb"), ["devices"], { env: this.env, timeout: 10_000 }));
+  }
+
+  async running(attached?: AndroidDevice[]): Promise<Running[]> {
     const adb = await this.tool("adb");
-    const devices = parseAdbDevices(await run(adb, ["devices"], { env: this.env, timeout: 10_000 })).filter(device => device.emulator);
+    const devices = (attached ?? await this.attached()).filter(device => device.emulator);
     const running: Running[] = [];
     for (const device of devices) {
       try {
@@ -68,9 +84,19 @@ export class AndroidSdk {
     return running;
   }
 
+  private async physical(attached: AndroidDevice[]): Promise<Physical[]> {
+    const adb = await this.tool("adb");
+    return Promise.all(attached.filter(device => !device.emulator).map(async ({ serial, state, ready }): Promise<Physical> => {
+      if (!ready) return { serial, state };
+      const name = productName((await run(adb, ["-s", serial, "shell", PRODUCT], { env: this.env, timeout: 5_000 }).catch(() => "")).split(/\r?\n/));
+      return { serial, state, ...(name ? { name } : {}) };
+    }));
+  }
+
   async snapshot(): Promise<Snapshot> {
     const names = await this.names();
-    const running = await this.running();
+    const attached = await this.attached();
+    const running = await this.running(attached);
     const avds: Avd[] = [];
     const unidentified = running.some(device => !device.name);
     for (const name of new Set([...names, ...running.flatMap(device => device.name ? [device.name] : [])])) {
@@ -78,7 +104,10 @@ export class AndroidSdk {
       if (!matches.length) avds.push({ name, state: unidentified ? "unknown" : "stopped" });
       else for (const device of matches) avds.push({ name, serial: device.serial, state: device.state });
     }
-    return { avds, running, warnings: running.filter(device => !device.name).map(device => `Cannot identify AVD for ${device.serial} (${device.state}): ${device.error}`) };
+    return {
+      avds, devices: await this.physical(attached), running,
+      warnings: running.filter(device => !device.name).map(device => `Cannot identify the virtual device on ${device.serial} (${device.state}): ${device.error}`),
+    };
   }
 
   async images(): Promise<{ id: string }[]> {
@@ -118,7 +147,7 @@ export class AndroidSdk {
   async create(name: string, image: string, device: string): Promise<void> {
     validateName(name);
     if (!/^system-images;[^;\/\\]+;[^;\/\\]+;[^;\/\\]+$/.test(image)) throw new Error("--image must be an installed system-images;android-API;VARIANT;ABI package ID.");
-    if ((await this.names()).includes(name)) throw new Error(`AVD ${name} already exists; it will not be overwritten.`);
+    if ((await this.names()).includes(name)) throw new Error(`A virtual device named ${name} already exists; it will not be overwritten.`);
     if (!(await this.images()).some(candidate => candidate.id === image)) throw new Error(`System image ${image} is not installed in ${this.root}. Install it in Android Studio first; no SDK packages or licenses are accepted automatically.`);
     if (!(await this.profiles()).some(profile => profile.id === device)) throw new Error(`Unknown hardware profile ${device}. Run profiles to list available IDs.`);
     await run(await this.manager(), ["create", "avd", "--name", name, "--package", image, "--device", device], { env: this.env, input: "no\n", timeout: 120_000 });
@@ -139,7 +168,7 @@ export class AndroidSdk {
     if (!matches.length) throw new Error(`No running emulator matches ${serial ?? name}. Nothing was stopped.`);
     if (matches.length !== 1) throw new Error(`Multiple emulators run ${name}. Select one explicitly with --serial: ${matches.map(device => device.serial).join(", ")}`);
     const selected = matches[0]!;
-    if (name && selected.name !== name) throw new Error(`Cannot confirm ${selected.serial} runs ${name}; its AVD is ${selected.name ?? "unidentified"}. Nothing was stopped.`);
+    if (name && selected.name !== name) throw new Error(`Cannot confirm ${selected.serial} runs ${name}; it runs ${selected.name ?? "an unidentified device"}. Nothing was stopped.`);
     const adb = await this.tool("adb");
     await run(adb, ["-s", selected.serial, "emu", "kill"], { env: this.env, timeout: 10_000 });
     const deadline = Date.now() + 20_000;
@@ -148,7 +177,7 @@ export class AndroidSdk {
       if (!devices.some(device => device.serial === selected.serial)) return { serial: selected.serial, name: selected.name };
       await delay(300);
     }
-    throw new Error(`Stop was requested for ${selected.serial}, but it is still attached. Wait for it to exit before deleting its AVD.`);
+    throw new Error(`Stop was requested for ${selected.serial}, but it is still attached. Wait for it to exit before deleting it.`);
   }
 
   /** The AVD's content directory, as registered in its NAME.ini. */
@@ -171,29 +200,31 @@ export class AndroidSdk {
     // multiinstance.lock is a persistent advisory-lock file, not a running-instance marker.
     // The emulator leaves it behind on a clean exit. Transient .lock files/directories are different.
     if (entries.some(entry => entry !== "multiinstance.lock" && entry.endsWith(".lock"))) {
-      throw new Error(`AVD ${name} has emulator lock files in ${directory}. Close its emulator first; if it crashed, confirm no emulator is running before removing stale locks.`);
+      throw new Error(`${name} has emulator lock files in ${directory}. Close its emulator first; if it crashed, confirm no emulator is running before removing stale locks.`);
     }
   }
 
   async delete(name: string): Promise<void> {
     validateName(name);
     const snapshot = await this.snapshot();
-    if (!snapshot.avds.some(avd => avd.name === name)) throw new Error(`AVD ${name} does not exist.`);
-    if (snapshot.running.some(device => device.name === name)) throw new Error(`AVD ${name} is running. Stop it before deleting it.`);
-    if (snapshot.running.some(device => !device.name)) throw new Error(`Cannot safely delete an AVD while an emulator cannot be identified. Stop or reconnect it first.\n${snapshot.warnings.join("\n")}`);
+    if (!snapshot.avds.some(avd => avd.name === name)) throw new Error(`Virtual device ${name} does not exist.`);
+    if (snapshot.running.some(device => device.name === name)) throw new Error(`${name} is running. Stop it before deleting it.`);
+    if (snapshot.running.some(device => !device.name)) throw new Error(`Cannot safely delete a virtual device while an emulator cannot be identified. Stop or reconnect it first.\n${snapshot.warnings.join("\n")}`);
     await this.assertUnlocked(name);
     await run(await this.manager(), ["delete", "avd", "--name", name], { env: this.env });
     if ((await this.names()).includes(name)) throw new Error(`avdmanager completed but ${name} is still registered. Check its output and Android AVD home.`);
   }
 
-  async start(name: string): Promise<{ serial: string; state: string; log?: string }> {
+  /** Starts `name` unless it runs; `signal` cancels a start in progress, stopping its emulator. */
+  async start(name: string, signal?: AbortSignal): Promise<{ serial: string; state: string; log?: string }> {
     validateName(name);
     const snapshot = await this.snapshot();
     const existing = snapshot.running.filter(device => device.name === name);
     if (existing.length > 1) throw new Error(`Multiple emulators already run ${name}: ${existing.map(device => device.serial).join(", ")}`);
     if (existing.length === 1) return { serial: existing[0]!.serial, state: existing[0]!.state };
-    if (!snapshot.avds.some(avd => avd.name === name)) throw new Error(`AVD ${name} does not exist. Create it first (create --root for the configured AVD, or create --name NAME --image PACKAGE --device PROFILE).`);
-    if (snapshot.running.some(device => !device.name)) throw new Error(`Cannot safely start another emulator while a running AVD cannot be identified.\n${snapshot.warnings.join("\n")}`);
+    if (!snapshot.avds.some(avd => avd.name === name)) throw new Error(`Virtual device ${name} does not exist. Create it first (create --root for the configured AVD, or create --name NAME --image PACKAGE --device PROFILE).`);
+    if (snapshot.running.some(device => !device.name)) throw new Error(`Cannot safely start another emulator while a running one cannot be identified.\n${snapshot.warnings.join("\n")}`);
+    if (signal?.aborted) throw new Error("Start cancelled.");
     await this.assertUnlocked(name);
     const emulator = await this.tool("emulator");
     const directory = await mkdtemp(path.join(os.tmpdir(), "elide-tern-android-"));
@@ -211,6 +242,7 @@ export class AndroidSdk {
     const started = Date.now();
     try {
       while (Date.now() - started < 60_000) {
+        if (signal?.aborted) throw new Error("Start cancelled.");
         if (failure) throw new Error(failure);
         const matching = (await this.running()).filter(device => device.name === name);
         if (failure) throw new Error(failure);

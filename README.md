@@ -172,21 +172,25 @@ Layout inspection, arbitrary-composable agent rendering, MCP and prewarming are 
 provided. Galleries allow 32 cards, 8 MiB per PNG, 32 MiB in total and 4096 pixels per side.
 No embedded SDK is required for Compose itself.
 
-### Android Virtual Devices
+### Android devices
 
-Choose **Manage Android Virtual Devices** from the palette, even outside an Elide
-project. The native manager lists AVDs and running emulator serials, with **Create**,
-**Start**, **Show**, **Stop** and **Delete** actions, shown only when applicable. Separate
-create/start/show/stop/delete palette commands work without a project too. **Refresh**
-reads changes made by Android Studio or other terminals. Deletion asks for confirmation and
-refuses running or locked devices; creation never overwrites an existing AVD.
+Choose **Show device manager** from the palette, even outside an Elide project. The
+native manager lists virtual devices (AVDs) with their running emulator serials, then
+attached physical devices; an icon marks each row as virtual or physical. Icon buttons
+create and refresh in the header, and start, show, stop and delete on each row, shown only
+when applicable; their tooltips name them. Palette commands create, start, stop and delete
+virtual devices, and **Show Android device** picks any running emulator or connected
+device; they work without a project too. **Refresh** reads changes made by Android Studio
+or other terminals; its tooltip names the SDK. A line under the list counts virtual devices
+and connected physical devices. Deletion asks for confirmation and refuses running or locked
+devices; creation never overwrites an existing device.
 
-The project menu and workspace toolbar offer **Manage project Android devices**.
+The project menu and workspace toolbar offer **Show device manager** for the project.
 This evaluates the project's Android configuration using the configured Elide runtime;
-workspaces with multiple Android members show a member picker. **Create <configured name>**
-uses Elide's `android-avd` target and configured device settings. Custom creation selects
-an installed system image, hardware profile and name. Non-Android projects report a
-configuration error; use the standalone manager instead.
+workspaces with multiple Android members show a member picker. A header button creates the
+project's configured device with Elide's `android-avd` target and configured settings.
+Custom creation selects an installed system image, hardware profile and name. Non-Android
+projects report a configuration error; use the standalone manager instead.
 
 Requires a local Android SDK with Emulator, Platform-Tools, Command-line Tools and a
 JDK for `avdmanager`. Install system images with Android Studio or `sdkmanager` first:
@@ -198,23 +202,44 @@ Optional `plugin/config.json` settings:
 - `android`: helper executable; defaults to `../dist/elide-tern-android`.
 - `android_sdk`: SDK directory override, distinct from the embedded Elide `sdk` setting.
 
-**Start** launches the emulator without an OS window and opens the device in a Tern pane
-beside the manager; **Show** focuses that pane, or opens it again after it was closed. The
-pane draws the screen with the kitty graphics protocol from the emulator's gRPC screenshot
-stream and updates whenever the screen changes. Clicks and drags are touches, Alt+drag is a
-two-finger pinch or rotate, and the wheel scrolls. Keys and pasted text go to the device.
-The bottom row holds Back, Home, Recents, Power, volume, rotation and Close.
+**Start** opens the device pane at once and starts the emulator there, without an OS
+window: the pane shows the device's name, an animated bar and the current step (starting,
+connecting, waiting for the screen) with the elapsed time, then the screen. A failed start
+stays on screen with its error until the pane is closed; closing the pane before the
+emulator registers stops it again. **Show** opens a running device. The device pane takes
+the place of an open Compose preview, else of the manager; the manager closes either way.
+Showing a device that already has a pane moves that pane there. The pane draws the screen
+with the kitty graphics protocol from the emulator's gRPC screenshot stream and updates
+whenever the screen changes. Clicks and drags are touches, Alt+drag is a two-finger pinch or
+rotate, and the wheel scrolls. Keys and pasted text go to the device. A rounded, outlined,
+translucent bar below the screen, only as wide as its buttons, holds quiet icon buttons in
+Tern's style, highlighted on hover and press: Back, Home and Recent apps in the pane's center,
+Power and the volume keys to their left, the rotation buttons and Close to their right, each
+group set off by a separator. Notices show left of the bar. Narrow panes drop the rotation
+buttons first, then Power and the volume keys.
 
 Typing and the hardware buttons need the AVD's keyboard input (`hw.keyboard = yes` in its
 `config.ini`). **Create** enables it, as Android Studio does; for other AVDs the pane names
 the setting when it drops a key. Touches land on the center of the terminal cell under the
 pointer, because Tern rounds the cell size it reports.
 
-Closing a device pane leaves the emulator running. Only **Stop** terminates a device, and
-only the selected emulator; its pane then closes. Emulators started elsewhere (for example
-by Android Studio) expose no token-authenticated gRPC endpoint and cannot be shown: stop
-them, then start them from Tern. Audio plays on the host. On macOS, start uses host GPU
-rendering (`-gpu host`).
+**Show** on a physical device (connected over USB or Wi-Fi, with USB debugging allowed)
+mirrors it in the same kind of pane, over adb alone: nothing is installed on the device.
+Frames come from `screenrecord`, sized to the pane and sent only when the screen changes;
+the pane follows the device's rotation. Each touch is sent when the button is released: a
+click is a tap, a held click a long press, a drag one swipe from its start to its end, so the
+device shows the drag only afterwards. Alt+drag sends one finger. Typing covers ASCII text
+and named keys; modifier shortcuts and the wheel need Android 13 or later (older releases
+scroll with a short swipe). The rotation buttons lock the orientation, turning auto-rotate
+off on the device. Unauthorized or offline devices are listed without **Show**.
+
+When an emulator's pane closes, through its Close button or Tern's, Tern asks whether to
+stop the emulator too, unless it already stopped; **Keep it running** or Escape leaves it
+running. **Stop** terminates only the selected emulator; its pane then closes, as does a
+mirror whose device disconnects.
+Emulators started elsewhere (for example by Android Studio) expose no token-authenticated
+gRPC endpoint and cannot be shown: stop them, then start them from Tern. Audio plays on the
+host. On macOS, start uses host GPU rendering (`-gpu host`).
 
 The compiled helper also works directly from any terminal, with no Tern, Bun, sibling
 checkout or Elide runtime required unless `--root` is supplied:
@@ -227,6 +252,8 @@ dist/elide-tern-android create --name demo \
   --image 'system-images;android-36;default;arm64-v8a' --device pixel_6
 dist/elide-tern-android start --name demo              # no OS window
 dist/elide-tern-android display --name demo            # in a kitty-graphics terminal
+dist/elide-tern-android display --name demo --start    # start it there, showing progress
+dist/elide-tern-android display --serial R5CT1234ABC   # mirror a physical device
 dist/elide-tern-android stop --name demo               # or --serial emulator-5554
 dist/elide-tern-android delete --name demo --yes
 dist/elide-tern-android create --root /path/to/android-project --runtime elide

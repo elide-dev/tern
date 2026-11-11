@@ -746,7 +746,7 @@ local function project_menu(context, cx)
     { label = "Open debugger", value = "debug", icon = "bug" },
     { label = "Open Elide source…", value = "source", icon = "file" },
     { label = "Open Compose preview", value = "compose", icon = "file" },
-    { label = "Manage project Android devices", value = "android", icon = "list" },
+    { label = "Show device manager", value = "android", icon = "smartphone" },
     { label = "Open REPL", value = "repl", icon = "terminal" },
     { label = "Serve static files", value = "static", icon = "server" },
     { label = "Serve a script…", value = "script", icon = "server" },
