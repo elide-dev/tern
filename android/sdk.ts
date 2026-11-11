@@ -206,6 +206,19 @@ export class AndroidSdk {
     throw new Error(`Stop was requested for ${selected.serial}, but it is still attached. Wait for it to exit before deleting it.`);
   }
 
+  /**
+   * The live process holding AVD `name`: a running emulator keeps its pid in the AVD's
+   * `hardware-qemu.ini.lock` from its first second, well before adb lists it. Elide's `--emulator`
+   * adopts that emulator rather than booting a second copy. A lock whose process is gone was
+   * left by a crash and holds nothing.
+   */
+  private async holder(name: string): Promise<number | undefined> {
+    const text = await readFile(path.join(await this.directory(name), "hardware-qemu.ini.lock"), "utf8").catch(() => "");
+    const pid = Number.parseInt(text.replace(/\0/g, "").trim(), 10);
+    if (!Number.isInteger(pid) || pid <= 0) return undefined;
+    try { process.kill(pid, 0); return pid; } catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM" ? pid : undefined; }
+  }
+
   /** The AVD's content directory, as registered in its NAME.ini. */
   private async directory(name: string): Promise<string> {
     const userHome = process.env.ANDROID_USER_HOME ?? path.join(os.homedir(), ".android");
@@ -241,14 +254,27 @@ export class AndroidSdk {
     if ((await this.names()).includes(name)) throw new Error(`avdmanager completed but ${name} is still registered. Check its output and Android AVD home.`);
   }
 
-  /** Starts `name` unless it runs; `signal` cancels a start in progress, stopping its emulator. */
-  async start(name: string, signal?: AbortSignal): Promise<{ serial: string; state: string; log?: string }> {
+  /**
+   * Starts `name` unless it runs; `signal` cancels a start in progress, stopping its emulator.
+   * With `held`, returns as soon as the emulator holds the AVD, without a serial: the emulator
+   * registers with adb seconds later, and Elide's `--emulator` adopts it in between. An AVD held
+   * by an emulator adb does not list yet, one starting or one stopping, is waited for: until adb
+   * lists it, or until it lets go and a new emulator can start.
+   */
+  async start(name: string, signal?: AbortSignal, held = false): Promise<{ serial?: string; state: string; log?: string }> {
     validateName(name);
     const snapshot = await this.snapshot();
     const existing = snapshot.running.filter(device => device.name === name);
     if (existing.length > 1) throw new Error(`Multiple emulators already run ${name}: ${existing.map(device => device.serial).join(", ")}`);
     if (existing.length === 1) return { serial: existing[0]!.serial, state: existing[0]!.state };
     if (!snapshot.avds.some(avd => avd.name === name)) throw new Error(`Virtual device ${name} does not exist. Create it first (create --root for the configured AVD, or create --name NAME --image PACKAGE --device PROFILE).`);
+    for (const deadline = Date.now() + 60_000; await this.holder(name);) {
+      if (signal?.aborted) throw new Error("Start cancelled.");
+      const listed = (await this.running()).filter(device => device.name === name);
+      if (listed.length === 1) return { serial: listed[0]!.serial, state: listed[0]!.state };
+      if (Date.now() >= deadline) throw new Error(`${name} is held by an emulator adb does not list. Stop it, then start ${name} again.`);
+      await delay(300);
+    }
     if (snapshot.running.some(device => !device.name)) throw new Error(`Cannot safely start another emulator while a running one cannot be identified.\n${snapshot.warnings.join("\n")}`);
     if (signal?.aborted) throw new Error("Start cancelled.");
     await this.assertUnlocked(name);
@@ -270,6 +296,10 @@ export class AndroidSdk {
       while (Date.now() - started < 60_000) {
         if (signal?.aborted) throw new Error("Start cancelled.");
         if (failure) throw new Error(failure);
+        if (held && await this.holder(name)) {
+          child.unref();
+          return { state: "starting", log };
+        }
         const matching = (await this.running()).filter(device => device.name === name);
         if (failure) throw new Error(failure);
         if (matching.length > 1) throw new Error(`Multiple emulators started for ${name}; choose a serial explicitly.`);

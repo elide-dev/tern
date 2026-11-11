@@ -273,8 +273,10 @@ chosen in; showing a device that already has a pane swaps that pane into the pla
 `display --name NAME --start` (with the manager's `--sdk`, `--root` and `--runtime`), so the
 pane appears before the emulator does. Run opens its page first: `android.run_device` plans
 the device (`--emulator` for the project's AVD, which Elide adopts and waits for; a stopped one
-is started with `start` first, which returns once the emulator registers with adb, so Elide
-never finds the AVD missing and boots its own copy; `--device=SERIAL` after `wait` otherwise).
+is started with `start --held` first, which returns once the emulator holds the AVD's
+`hardware-qemu.ini.lock`, about a second and well before adb lists it: Elide adopts an emulator
+holding the AVD rather than booting its own copy, and the device pane finds it by name;
+`--device=SERIAL` after `wait` otherwise).
 `android.follow` records the pane ids before the page's split; the page's pane (or its
 `pane_created`, when the split aborted the hook) is then polled every 500 ms with
 `cx.session:surface`. The Run page keys its progress bar `program` (`main.activity.program`)

@@ -610,14 +610,16 @@ function M.run_device(cx, context, done)
       done(current, false)
     end
   end
-  -- Reports the plan for `device`; `start` starts the project's AVD first. The run waits for its
-  -- emulator to register (a few seconds): Elide, finding no emulator, would start its own.
+  -- Reports the plan for `device`; `start` starts the project's AVD first. The page opens as soon
+  -- as the emulator holds the AVD, before adb lists it: Elide's `--emulator` adopts an emulator
+  -- holding the AVD rather than booting its own, and the device pane, which finds it by name,
+  -- opens once the build is done.
   local function embed(current, device, root, project_avd, start)
     local plan = { root = root, context = state.context }
     if start then
       current:toast("info", "Starting " .. device.name .. "…")
-      request(current, state, "start", { "--name", device.name }, function(fresh, value)
-        plan.args, plan.display = { "--emulator" }, { name = device.name, serial = value.serial }
+      request(current, state, "start", { "--name", device.name, "--held" }, function(fresh)
+        plan.args, plan.display = { "--emulator" }, { name = device.name, start = true }
         done(fresh, plan)
       end, fail)
       return

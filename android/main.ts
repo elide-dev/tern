@@ -13,7 +13,8 @@ Commands:
   images     List installed system-image package IDs (no downloads)
   profiles   List hardware profile IDs and names
   create     Create a new AVD; never overwrite an existing AVD
-  start      Start an existing AVD without an emulator window
+  start      Start an existing AVD without an emulator window (with --held, return as soon as
+             its emulator holds the AVD, before adb lists it; Elide's --emulator adopts it)
   stop       Stop only the selected emulator
   delete     Delete a stopped AVD (requires --yes)
   display    Show and control a running emulator or attached device in this terminal until closed
@@ -30,6 +31,7 @@ Options:
   --device PROFILE    Hardware profile ID (create; list with profiles)
   --serial SERIAL     Exact emulator-PORT to stop; emulator or device serial to display
   --start             display: start the --name AVD unless it runs, showing progress
+  --held              start: return once the emulator holds the AVD, without waiting for adb
   --yes               Confirm deletion; never accepts SDK licenses
   --help              Show this help
 
@@ -48,7 +50,7 @@ const SERIAL = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 
 type Command = "list" | "images" | "profiles" | "create" | "start" | "stop" | "delete" | "display" | "wait";
 type Args = {
-  command: Command; json: boolean; yes: boolean; start: boolean;
+  command: Command; json: boolean; yes: boolean; start: boolean; held: boolean;
   sdk?: string; root?: string; runtime?: string; name?: string; image?: string; device?: string; serial?: string;
 };
 
@@ -56,7 +58,7 @@ function parseArgs(argv: string[]): Args {
   const commands: Record<string, true> = { list: true, images: true, profiles: true, create: true, start: true, stop: true, delete: true, display: true, wait: true };
   const command = argv[0];
   if (!command || !Object.hasOwn(commands, command)) throw new Error(`Expected a command.\n${USAGE}`);
-  const args: Args = { command: command as Command, json: false, yes: false, start: false };
+  const args: Args = { command: command as Command, json: false, yes: false, start: false, held: false };
   const seen = new Set<string>();
   const strings: Record<string, true> = { sdk: true, root: true, runtime: true, name: true, image: true, device: true, serial: true };
   for (let i = 1; i < argv.length; i++) {
@@ -64,7 +66,7 @@ function parseArgs(argv: string[]): Args {
     const key = flag.slice(2);
     if (!flag.startsWith("--") || seen.has(key)) throw new Error(`Invalid or repeated argument ${flag}. Use --help.`);
     seen.add(key);
-    if (key === "json" || key === "yes" || key === "start") args[key] = true;
+    if (key === "json" || key === "yes" || key === "start" || key === "held") args[key] = true;
     else if (Object.hasOwn(strings, key)) {
       const value = argv[++i];
       if (!value || value.startsWith("--")) throw new Error(`Missing value for ${flag}.`);
@@ -80,6 +82,7 @@ function parseArgs(argv: string[]): Args {
   only("serial", ["stop", "display", "wait"]);
   only("yes", ["delete"]);
   only("start", ["display"]);
+  only("held", ["start"]);
   only("json", ["list", "images", "profiles", "create", "start", "stop", "delete", "wait"]);
   if (args.runtime && !args.root) throw new Error("--runtime is only needed with --root; omit it for standalone commands.");
   if (args.command === "display" && args.start) {
@@ -158,7 +161,8 @@ async function main(args: Args): Promise<void> {
     }
     case "start": {
       const avd = selectedName();
-      result = { message: `${avd} is running.`, name: avd, ...await sdk.start(avd) };
+      const started = await sdk.start(avd, undefined, args.held);
+      result = { message: started.serial ? `${avd} is running.` : `${avd} is starting.`, name: avd, ...started };
       break;
     }
     case "stop": {
