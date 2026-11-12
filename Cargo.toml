@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/broker", "third_party/studio-embed"]
+members = ["crates/broker"]
 default-members = ["crates/broker"]
 resolver = "3"
 

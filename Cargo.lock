@@ -45,8 +45,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 
 [[package]]
+name = "elide-embed-host"
+version = "1.6.4"
+dependencies = [
+ "capnp",
+ "capnpc",
+ "libc",
+ "libloading",
+]
+
+[[package]]
 name = "elide-project-session"
-version = "1.6.3"
+version = "1.6.4"
 dependencies = [
  "nix",
  "serde",
@@ -60,12 +70,12 @@ name = "elide-tern-broker"
 version = "0.1.0"
 dependencies = [
  "capnp",
+ "elide-embed-host",
  "elide-project-session",
  "fs2",
  "libc",
  "serde",
  "serde_json",
- "studio-embed",
 ]
 
 [[package]]
@@ -160,9 +170,9 @@ checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
 name = "libloading"
-version = "0.8.9"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
+checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
 dependencies = [
  "cfg-if",
  "windows-link",
@@ -295,17 +305,6 @@ name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
-
-[[package]]
-name = "studio-embed"
-version = "0.1.4"
-dependencies = [
- "capnp",
- "capnpc",
- "libc",
- "libloading",
- "serde_json",
-]
 
 [[package]]
 name = "syn"

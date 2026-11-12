@@ -465,13 +465,12 @@ must not silently run a remote pane's code locally.
 
 ## Shared implementation
 
-`third_party/studio-embed` is a pinned snapshot of Studio's standalone embedding
-crate, with the small process-group lifecycle adaptation recorded alongside it.
-This avoids a second C ABI implementation or importing Studio's Tauri/editor
-layers. The long-term shared seam should be an independently versioned embedding
-host crate consumed by both applications. SDK archive verification, updates and
-release packaging belong above that crate; this repository initially consumes
-an explicitly selected, complete SDK directory.
+The broker links the runtime's `elide-embed-host` crate (the supervised embedding
+worker, frame protocol and generated Cap'n Proto bindings, shared with Studio) and
+`elide-project-session` from a sibling `../elide` checkout of `elide-dev/runtime`.
+No runtime source is vendored, so building the broker needs access to the runtime
+repository. SDK archive verification, updates and release packaging belong above
+that crate; this repository consumes an explicitly selected, complete SDK directory.
 
 Published Tern contracts: [blocks](https://docs.stencil.so/tern/guides/blocks.html),
 [process API](https://docs.stencil.so/tern/reference/api-shared.html),
