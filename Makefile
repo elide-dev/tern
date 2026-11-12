@@ -1,22 +1,24 @@
 ELIDE_SOURCE ?= ../elide
 ELIDE_VSCODE_SOURCE ?= ../elide-vscode
 
-.PHONY: build test fmt check types smoke link repl test-surface compose test-compose android test-android
-build: compose android
+.PHONY: build test fmt check types smoke link repl test-surface android test-android
+build: android
 	cargo build --release -p elide-tern-broker
 	mkdir -p dist
 	cp target/release/elide-tern-broker dist/.elide-tern-broker.new
 	mv dist/.elide-tern-broker.new dist/elide-tern-broker
 	cp target/release/elide-tern-worker dist/.elide-tern-worker.new
 	mv dist/.elide-tern-worker.new dist/elide-tern-worker
-compose:
-	ELIDE_VSCODE_SOURCE="$(ELIDE_VSCODE_SOURCE)" bun scripts/build-compose.ts
 android:
 	ELIDE_VSCODE_SOURCE="$(ELIDE_VSCODE_SOURCE)" bun scripts/build-android.ts
 test-android: android
 	python3 tests/android.py --image "$(ANDROID_IMAGE)" $(if $(ANDROID_SDK),--sdk "$(ANDROID_SDK)")
-test-compose:
-	ELIDE_VSCODE_SOURCE="$(ELIDE_VSCODE_SOURCE)" bun test --preload ./tests/compose-preload.ts tests/compose-clock.test.ts tests/compose-changes.test.ts tests/compose-server.test.ts
+.PHONY: previewing
+previewing:
+	$(MAKE) -C "$(ELIDE_SOURCE)" build-compose-preview
+	mkdir -p dist
+	cp "$(ELIDE_SOURCE)/target/debug/examples/compose_preview" dist/.elide-tern-compose.new
+	mv dist/.elide-tern-compose.new dist/elide-tern-compose
 test: build
 	cargo test --workspace
 	python3 tests/broker.py
