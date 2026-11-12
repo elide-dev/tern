@@ -36,8 +36,7 @@ the project's Android SDK/dependencies, a JDK 17+ and a Komodo editor bundle set
 `compose_komodo`; layoutlib downloads on first use. Bun and VSCode are not required. See [Compose previews](../README.md#compose-previews)
 for requirements and configuration.
 
-Android device management also requires `dist/elide-tern-android` and its `.LICENSE`
-notice, plus a separately installed Android SDK (Emulator, Platform-Tools, Command-line
+Android device management also requires `dist/elide-tern-android`, plus a separately installed Android SDK (Emulator, Platform-Tools, Command-line
 Tools and system images) and JDK. **Show device manager** works without a
 project; the project menu and workspace toolbar resolve Android project configuration.
 **Start** shows the emulator in a Tern pane, with no separate emulator window. See

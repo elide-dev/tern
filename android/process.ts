@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, realpath, stat } from "node:fs/promises";
 import path from "node:path";
-import { killProcessTree, whichExecutable } from "@elide/ide-core";
+import { killProcessTree, whichExecutable } from "./elide";
 
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

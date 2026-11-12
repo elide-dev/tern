@@ -4,7 +4,7 @@ import { mkdtemp, open, readFile, readdir, stat, writeFile } from "node:fs/promi
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { adbExecutable, killProcessTree, parseAdbDevices, type AndroidDevice } from "@elide/ide-core";
+import { adbExecutable, killProcessTree, parseAdbDevices, type AndroidDevice } from "./elide";
 import { errorMessage, executable, run } from "./process";
 
 export type Avd = { name: string; serial?: string; state: string };

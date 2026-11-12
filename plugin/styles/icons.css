@@ -1,4 +1,4 @@
-/* The monochrome Elide mark (`assets/elide-{light,dark}.svg`, elide-vscode's `media/elide.svg`) in place of Tern's
+/* The monochrome Elide mark (`assets/elide-{light,dark}.svg`, `media/elide.svg` of elide-dev/vscode) in place of Tern's
    stock icon where the element is ours: `elide` program faces on tabs, pane rows and parked cards
    (`tern.chrome.program_icon` gives them `bolt`), the project and Workspace status segments, the Files Project
    button and the workspace toolbar. Tern's style sheets load plugin images only as backgrounds (an
