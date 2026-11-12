@@ -12,7 +12,7 @@ remain follow-up work.
 
 ## Install the preview
 
-macOS Apple Silicon users with repository access can install the self-contained
+macOS Apple Silicon users can install the self-contained
 [preview release](https://github.com/elide-dev/tern/releases), including its matched
 runtime and SDK. See [installation instructions](docs/manual-install.md).
 
@@ -460,3 +460,8 @@ This bridge uses Tern's callable exports and local IPC. It does not claim WebSoc
 MCP or automatic attachment to other agent harnesses. `make test-project` exercises
 actual Carly Lua exports against native Elide and verifies visible results and retry
 deduplication without invoking a model.
+
+## License
+
+MIT; see [LICENSE](LICENSE). The broker links the Apache-2.0 runtime crates named in
+[`third_party/README.md`](third_party/README.md).

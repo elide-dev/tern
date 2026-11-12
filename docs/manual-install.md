@@ -5,7 +5,6 @@ Native surfaces are hosted by the bundled runtime through `elide tern`. It requi
 Tern with its `tern` command available, and macOS on Apple Silicon. No source checkout,
 Rust compiler or separate Elide installation is needed.
 
-The repository currently has Internal visibility, so downloading requires repository access.
 Download the macOS archive and `SHA256SUMS` from the GitHub release, then verify and unpack:
 
 ```sh
