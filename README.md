@@ -395,7 +395,7 @@ row per ecosystem with its packages and how many came from the cache, a bar per 
 the resolved Maven graph as a tree. **Install dependencies**, in the project menu and the
 palette, opens the full Install page in a new tab. After a typed `elide install` the status bar
 reads, for example, "Installed · 12 packages, 3 downloaded". Run
-`make installing && make test-installing RUNTIME=/path/to/elide` for the Install page in an
+`make test-installing RUNTIME=/path/to/elide` for the Install page in an
 isolated window (it needs network access to Maven Central).
 
 The workspace's Run button opens the full Run page (`elide run --surface=screen`) at the bottom,
@@ -419,7 +419,7 @@ preview closes. A failed build shows no device pane. The project's AVD deploys w
 `--emulator`, so Elide waits for the emulator Tern started; any other device with
 `--device=<serial>`. Elide never opens an emulator window of its own. Runtimes without the Run
 page show the device pane a few seconds after their output starts. Run
-`make running && make test-running RUNTIME=/path/to/elide` for the Run page in an isolated
+`make test-running RUNTIME=/path/to/elide` for the Run page in an isolated
 window.
 A typed `elide run` in an Android project gets its device pane too: every new shell names the
 plugin's helper in `ELIDE_ANDROID_EMULATOR_LAUNCHER`, so any Elide command there that boots an

@@ -70,7 +70,7 @@ test-serve: serve
 	python3 tests/serve.py $(if $(RUNTIME),--runtime "$(RUNTIME)")
 
 .PHONY: test-telemetry
-test-telemetry:
+test-telemetry: serve
 	python3 tests/telemetry.py --runtime "$(RUNTIME)"
 
 .PHONY: testing test-testing
@@ -80,7 +80,7 @@ testing:
 	cp "$(ELIDE_SOURCE)/target/debug/examples/test_surface" dist/.elide-tern-test.new
 	mv dist/.elide-tern-test.new dist/elide-tern-test
 
-test-testing:
+test-testing: testing
 	python3 tests/testing.py --runtime "$(RUNTIME)"
 
 .PHONY: test-project
@@ -98,7 +98,7 @@ test-sessions: build project
 	python3 tests/sessions.py $(if $(RUNTIME),--runtime "$(RUNTIME)")
 
 .PHONY: test-coverage
-test-coverage: build
+test-coverage: build project
 	python3 -u tests/coverage.py $(if $(RUNTIME),--runtime "$(RUNTIME)")
 
 .PHONY: debugging test-debug
@@ -118,7 +118,7 @@ building:
 	cp "$(ELIDE_SOURCE)/target/debug/examples/build_surface" dist/.elide-tern-build.new
 	mv dist/.elide-tern-build.new dist/elide-tern-build
 
-test-building:
+test-building: building
 	python3 -u tests/build.py --runtime "$(RUNTIME)"
 
 .PHONY: running test-running
@@ -128,7 +128,7 @@ running:
 	cp "$(ELIDE_SOURCE)/target/debug/examples/run_surface" dist/.elide-tern-run.new
 	mv dist/.elide-tern-run.new dist/elide-tern-run
 
-test-running:
+test-running: running
 	python3 -u tests/run.py --runtime "$(RUNTIME)"
 
 .PHONY: installing test-installing
@@ -138,7 +138,7 @@ installing:
 	cp "$(ELIDE_SOURCE)/target/debug/examples/install_surface" dist/.elide-tern-install.new
 	mv dist/.elide-tern-install.new dist/elide-tern-install
 
-test-installing:
+test-installing: installing
 	python3 -u tests/install_surface.py --runtime "$(RUNTIME)"
 
 .PHONY: help test-help
@@ -148,7 +148,7 @@ help:
 	cp "$(ELIDE_SOURCE)/target/debug/examples/help_surface" dist/.elide-tern-help.new
 	mv dist/.elide-tern-help.new dist/elide-tern-help
 
-test-help:
+test-help: help
 	python3 tests/help.py --runtime "$(RUNTIME)"
 
 .PHONY: test-workspace
