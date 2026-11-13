@@ -51,12 +51,16 @@ fn main() {
 fn run() -> Result<(), String> {
   let args: Vec<_> = std::env::args_os().skip(1).collect();
   if args.len() != 2 {
-    return Err("Usage: elide-tern-broker <request|serve|project-root> <state-directory>".into());
+    return Err("Usage: elide-tern-broker <request|serve|socket|project-root> <state-directory>".into());
   }
   let path = Path::new(&args[1]);
   match args[0].to_str() {
     Some("project-root") => {
       println!("{}", project::discover(path)?);
+      Ok(())
+    }
+    Some("socket") => {
+      println!("{}", socket(&private_dir(path)?)?.display());
       Ok(())
     }
     Some("serve") => serve(&private_dir(path)?),
@@ -102,11 +106,12 @@ fn private_dir(path: &Path) -> Result<PathBuf, String> {
   if !meta.is_dir() || meta.uid() != unsafe { libc::geteuid() } || meta.mode() & 0o077 != 0 {
     return Err("Broker state must be an owned, non-symlink directory with mode 0700".into());
   }
-  let path = path.canonicalize().map_err(err)?;
-  if path.join("broker.sock").as_os_str().as_encoded_bytes().len() >= 100 {
-    return Err("Broker state path is too long for a portable Unix socket; choose a shorter directory".into());
-  }
-  Ok(path)
+  path.canonicalize().map_err(err)
+}
+
+/// The socket lives outside `state` (see `elide_project_session::client::socket`).
+fn socket(state: &Path) -> Result<PathBuf, String> {
+  elide_project_session::client::socket(state).map_err(|e| format!("Broker socket for state {}: {e}", state.display()))
 }
 
 fn lock(path: &Path) -> Result<File, String> {
@@ -122,7 +127,7 @@ fn lock(path: &Path) -> Result<File, String> {
 }
 
 fn connect(state: &Path) -> Result<UnixStream, String> {
-  let socket = state.join("broker.sock");
+  let socket = socket(state)?;
   if let Ok(stream) = UnixStream::connect(&socket) {
     return Ok(stream);
   }
@@ -165,7 +170,7 @@ fn connect(state: &Path) -> Result<UnixStream, String> {
 fn serve(state: &Path) -> Result<(), String> {
   let lifetime = lock(&state.join("broker.lock"))?;
   lifetime.try_lock_exclusive().map_err(|_| "Broker already running")?;
-  let socket = state.join("broker.sock");
+  let socket = socket(state)?;
   if socket.exists() {
     fs::remove_file(&socket).map_err(err)?;
   }

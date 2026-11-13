@@ -45,8 +45,10 @@ def main():
       invalid = subprocess.run([str(BINARY), 'request', str(state)], input='{"op":"ping","unknown":1}',
                                text=True, capture_output=True)
       assert invalid.returncode != 0
+      broker_socket = subprocess.run([str(BINARY), 'socket', str(state)], text=True, capture_output=True,
+                                     check=True).stdout.strip()
       with socket.socket(socket.AF_UNIX) as connection:
-        connection.connect(str(state / 'broker.sock'))
+        connection.connect(broker_socket)
         connection.sendall(struct.pack('<I', 4 * 1024 * 1024 + 1))
         size = struct.unpack('<I', connection.recv(4))[0]
         result = json.loads(connection.recv(size))
@@ -56,6 +58,13 @@ def main():
       result = subprocess.run([str(BINARY), 'request', str(insecure)], input='{"op":"ping"}',
                               text=True, capture_output=True)
       assert result.returncode != 0 and '0700' in result.stderr
+      # A state directory as long as Tern's per-project plugin data still gets a broker.
+      deep = Path(directory) / 'Library/Application Support/tern/plugin-data/elide/p' / ('k' * 32) / 'broker'
+      assert len(str(deep / 'broker.sock').encode()) > 104
+      result = subprocess.run([str(BINARY), 'request', str(deep)], input='{"op":"ping"}', text=True,
+                              capture_output=True, timeout=20)
+      assert result.returncode == 0, result.stderr
+      os.kill(json.loads(result.stdout)['result']['pid'], signal.SIGTERM)
       if args.sdk:
         session = success(op='open', sdk=str(Path(args.sdk).resolve()))['session']
         capabilities = success(op='discover', session=session)

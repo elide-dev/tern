@@ -37,7 +37,9 @@ Tern's process API captures a process result and closes stdin after writing. It 
 not an interactive native FFI or persistent pipe API. A short-lived request
 client lets Luau use the existing asynchronous process API while the broker owns
 persistent runtime state. Requests never interpolate guest code into a shell.
-The socket is local, in an owned 0700 directory, and has no network listener.
+The socket is local and has no network listener. It lives in `/tmp/elide-tern-<uid>/`, an owned
+0700 directory, named by a hash of the state directory, so long state paths still fit the Unix
+socket path limit.
 Same-user applications are inside the trust boundary.
 
 The broker starts on the first request. Startup and lifetime locks prevent

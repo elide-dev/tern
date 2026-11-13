@@ -361,7 +361,7 @@ come from the text evaluated by Truffle. These panels show measured source versi
 they do not claim live buffer freshness or install native editor gutters.
 
 Build the development shim with `make project` (`make link` includes it). `config.project`
-can override the launcher and `config.project_state` selects a short private host
+can override the launcher and `config.project_state` selects a private host
 directory. Development builds currently consume the shared `elide-project-session`
 crate from the sibling Elide checkout, alongside the existing surface build dependency.
 
