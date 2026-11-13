@@ -18,7 +18,9 @@ with tempfile.TemporaryDirectory(prefix='tern-install-') as temporary:
         path = bundle / relative
         path.write_text('#!/bin/sh\nexit 0\n')
         path.chmod(0o755)
-    for relative in ['sdk/embedder.json', 'sdk/lib/libelide_embed.dylib', 'plugin/plugin.toml']:
+    for relative in ['sdk/embedder.json', 'sdk/lib/libelide_embed.dylib', 'plugin/plugin.toml',
+                     'plugin/syntaxes/Pkl.sublime-syntax']:
+        (bundle / relative).parent.mkdir(parents=True, exist_ok=True)
         (bundle / relative).touch()
     commands = root / 'commands'
     commands.mkdir()
@@ -29,7 +31,9 @@ with tempfile.TemporaryDirectory(prefix='tern-install-') as temporary:
     tern.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$TERN_INSTALL_ARGS"\n')
     tern.chmod(0o755)
     arguments = root / 'arguments'
-    environment = {**os.environ, 'PATH': str(commands) + ':/usr/bin:/bin', 'TERN_INSTALL_ARGS': str(arguments)}
+    syntaxes = root / 'config/syntaxes'
+    environment = {**os.environ, 'PATH': str(commands) + ':/usr/bin:/bin', 'TERN_INSTALL_ARGS': str(arguments),
+                   'TERN_CONFIG_DIR': str(root / 'config')}
 
     def run():
         return subprocess.run(['/bin/sh', str(bundle / 'install.sh')], env=environment,
@@ -38,6 +42,12 @@ with tempfile.TemporaryDirectory(prefix='tern-install-') as temporary:
     result = run()
     assert result.returncode == 0, result.stderr
     assert arguments.read_text().splitlines() == ['plugin', 'link', str(bundle / 'plugin')]
+    grammar = syntaxes / 'Pkl.sublime-syntax'
+    assert grammar.is_symlink() and grammar.resolve() == bundle / 'plugin/syntaxes/Pkl.sublime-syntax'
+    grammar.unlink()
+    grammar.write_text('own grammar\n')
+    assert run().returncode == 0
+    assert not grammar.is_symlink() and grammar.read_text() == 'own grammar\n'
     config = bundle / 'plugin/config.json'
     assert json.loads(config.read_text()) == {
         'sdk': '../sdk', 'broker': '../dist/elide-tern-broker', 'runtime': '../runtime/bin/elide'}
@@ -53,4 +63,4 @@ with tempfile.TemporaryDirectory(prefix='tern-install-') as temporary:
     result = run()
     assert result.returncode != 0 and 'Apple Silicon' in result.stderr
     assert not arguments.exists()
-print('PASS: release paths, configuration preservation, incomplete bundles, and platform checks')
+print('PASS: release paths, configuration preservation, grammar link, incomplete bundles, and platform checks')
