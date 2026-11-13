@@ -963,9 +963,20 @@ local function write(state, cx)
   return true
 end
 
--- ⌘S: asks before overwriting a file that changed on disk since it was loaded or saved.
+-- ⌘S: asks before overwriting a file that changed on disk since it was loaded or saved, or that
+-- can no longer be read (it grew past the size this editor reads, or stopped being UTF-8 text):
+-- the editor never showed what saving would replace.
 local function save(state, cx)
-  local current = read(state.path)
+  local current, problem = read(state.path)
+  if problem and tern.fs.exists(state.path) then
+    state.confirm = {
+      kind = "overwrite",
+      title = state.name .. " can't be read any more",
+      text = problem.title .. " on disk: " .. problem.text .. " Saving replaces it with your text.",
+      action = "Overwrite",
+    }
+    return
+  end
   if current and current ~= state.disk then
     state.confirm = {
       kind = "overwrite",
@@ -2221,6 +2232,21 @@ local function status_bar(state)
         priority = 7,
       })
     )
+    -- Only drafts up to MAX_DRAFT survive a plugin reload or a daemon restart (see `save` below).
+    if buffer.bytes(buf) > MAX_DRAFT then
+      table.insert(
+        segs,
+        ui.node("seg", {
+          key = "unkept",
+          role = "source-unkept",
+          side = "right",
+          text = "Not kept until saved",
+          title = "Unsaved changes over " .. (MAX_DRAFT // 1024) .. " KiB are lost if Tern or the plugin restarts.",
+          tone = "warning",
+          priority = 6,
+        })
+      )
+    end
   end
   return ui.node("status", { key = "bar", role = "source-status" }, segs)
 end

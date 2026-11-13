@@ -140,6 +140,13 @@ check("dirty after undo past save", buffer.dirty(b), true)
 buffer.redo(b)
 check("clean after redo to save", buffer.dirty(b), false)
 
+-- A file is written back with the ending most of its lines use.
+check("crlf file", buffer.disk(buffer.new("a\r\nb\r\nc")), "a\r\nb\r\nc")
+check("lf file", buffer.disk(buffer.new("a\nb\nc")), "a\nb\nc")
+check("mostly lf keeps lf", buffer.disk(buffer.new("a\nb\nc\r\nd")), "a\nb\nc\nd")
+check("mostly crlf keeps crlf", buffer.disk(buffer.new("a\r\nb\r\nc\nd")), "a\r\nb\r\nc\r\nd")
+check("bytes", buffer.bytes(buffer.new("λ\nab")), 5)
+
 local e = buffer.new("x\n😀y")
 check("edit len guard", buffer.apply(e, { from = 0, to = 0, text = "q", cursor = 1, len = 99 }), nil)
 buffer.apply(e, { from = 2, to = 4, text = "", cursor = 2, len = 5 })

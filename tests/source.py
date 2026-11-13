@@ -475,6 +475,26 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         check('toolbar height unchanged when deleted on disk', toolbar_height() == toolbar_clean, [toolbar_clean, toolbar_height()])
         aside.rename(source)
         wait(lambda: 'Deleted on disk' not in tree('.sf-main .sf-badge'), 15)
+        # The file stops being text on disk under unsaved edits: ⌘S asks before replacing what the
+        # editor never showed, and Cancel leaves the disk alone.
+        kept = source.read_bytes()
+        click('[data-role~="source-editor"]')
+        go_line(1)
+        ctl('key', 'End')
+        ctl('type', ' // mine')
+        wait(lambda: nodes('[data-role="source-modified"]'), 10)
+        binary = b'\x00\x01\x02 not text \xff\xfe'
+        source.write_bytes(binary)
+        time.sleep(3)
+        ctl('key', 'Meta+s')
+        check('save over an unreadable file asks', wait(lambda: "can't be read any more"
+              in tree('[data-role="source-confirm-strip"]'), 10), tree('.sf-dock'))
+        ctl('key', 'Escape')
+        time.sleep(1)
+        check('unreadable file left alone', source.read_bytes() == binary, source.read_bytes()[:40])
+        source.write_bytes(kept)
+        ctl('key', 'Meta+z')
+        wait(lambda: not nodes('[data-role="source-modified"]'), 15)
 
         # Find marks matches and selects the next one; go to line moves the caret.
         ctl('key', 'Control+f')

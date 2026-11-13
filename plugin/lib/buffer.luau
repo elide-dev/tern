@@ -83,11 +83,17 @@ local function equal(a, b)
   return a.l == b.l and a.c == b.c
 end
 
--- `text` with "\r\n" endings normalized to "\n"; also says which ending the file used.
+-- `text` with "\r\n" endings normalized to "\n"; also says which ending the file mostly used, the
+-- one it is written back with. A file with mixed endings keeps its majority (CRLF on a tie goes
+-- to LF): only its minority lines change on save.
 function M.new(text)
   local ending = "\n"
-  if string.find(text, "\r\n", 1, true) then
-    ending = "\r\n"
+  local _, crlf = string.gsub(text, "\r\n", "")
+  if crlf > 0 then
+    local _, lf = string.gsub(text, "\n", "")
+    if crlf > lf - crlf then
+      ending = "\r\n"
+    end
     text = string.gsub(text, "\r\n", "\n")
   end
   local buf = {
@@ -122,6 +128,15 @@ function M.length(buf)
   local n = #buf.lines - 1
   for _, len in ipairs(buf.lens) do
     n = n + len
+  end
+  return n
+end
+
+-- Bytes of the text (lines joined by "\n").
+function M.bytes(buf)
+  local n = #buf.lines - 1
+  for _, line in ipairs(buf.lines) do
+    n = n + #line
   end
   return n
 end
