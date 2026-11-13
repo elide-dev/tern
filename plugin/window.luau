@@ -697,7 +697,10 @@ local function prompt_compose(cx, context)
 end
 
 workspace.install({
-  debug = launch_debug,
+  -- The fifth argument is the project terminal (Run's), not a file: Debug takes the editor's.
+  debug = function(cx, context, target, opened)
+    return launch_debug(cx, context, target, opened)
+  end,
   android = function(cx, context, target)
     return android.open(cx, context, target)
   end,
