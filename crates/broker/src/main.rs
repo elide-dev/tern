@@ -182,11 +182,15 @@ fn serve(state: &Path) -> Result<(), String> {
   let serial = Arc::new(AtomicUsize::new(1));
   let mut last = Instant::now();
   loop {
+    let mut idle = false;
     match listener.accept() {
-      Ok((stream, _)) => {
+      Ok((mut stream, _)) => {
         last = Instant::now();
         if active.load(Ordering::SeqCst) >= 16 {
-          drop(stream);
+          // Said, not just dropped: the client reports why instead of a lost connection.
+          let _ = stream.set_nonblocking(false);
+          let _ = stream.set_write_timeout(Some(Duration::from_millis(200)));
+          let _ = write_frame(&mut stream, br#"{"ok":false,"error":"Broker busy; try again"}"#);
           continue;
         }
         active.fetch_add(1, Ordering::SeqCst);
@@ -197,8 +201,12 @@ fn serve(state: &Path) -> Result<(), String> {
           active.fetch_sub(1, Ordering::SeqCst);
         });
       }
-      Err(e) if e.kind() == io::ErrorKind::WouldBlock => (),
-      Err(e) => return Err(err(e)),
+      Err(e) if e.kind() == io::ErrorKind::WouldBlock => idle = true,
+      // Out of descriptors and the like pass; one failed accept must not end the broker.
+      Err(e) => {
+        eprintln!("elide-tern: accept failed: {e}");
+        idle = true;
+      }
     }
     sessions
       .lock()
@@ -212,7 +220,10 @@ fn serve(state: &Path) -> Result<(), String> {
     {
       break;
     }
-    thread::sleep(Duration::from_millis(25));
+    // Waiting connections are taken at once; only an idle broker sleeps between polls.
+    if idle {
+      thread::sleep(Duration::from_millis(25));
+    }
   }
   fs::remove_file(socket).map_err(err)
 }
