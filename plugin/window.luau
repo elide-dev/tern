@@ -1274,7 +1274,14 @@ start_preview = function(cx, file, root, target, page)
       local decoded, response = pcall(tern.json.decode, result.stdout or "")
       response = decoded and type(response) == "table" and response or {}
       local url, session_root = live_url(response.url), links.absolute(response.root)
-      if not url or url ~= response.url or not session_root or not links.within(file, session_root) then
+      -- The service resolves symlinks: its root holds its form of the file (a project under
+      -- `/tmp` is `/private/tmp` to it). Older runtimes answer no file.
+      local resolved = links.absolute(response.file) or file
+      if not url or url ~= response.url or not session_root or not links.within(resolved, session_root) then
+        -- A session that opened but is not used would outlive the page nobody shows.
+        if url and url == response.url then
+          loopback.request(url .. "close", "", 5000, function() end)
+        end
         local message = type(response.error) == "string" and response.error ~= "" and response.error
           or (
             "The runtime could not start Compose previews (exit "
