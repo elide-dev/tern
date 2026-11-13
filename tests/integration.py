@@ -29,6 +29,7 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
         'test("adds", () => { assert.strictEqual(1 + 1, 2); });\n'
         'test("fails", () => { assert.strictEqual(1 + 1, 3); });\n')
     (tapp / 'two.js').write_text('one\ntwo\nthree\n')
+    (tapp / 'notes.md').write_text('# Notes\n')
     (tapp / 'wait.mjs').write_text('setTimeout(() => {}, 60000);\n')
     (tapp / 'nested').mkdir()
     outside = base / 'outside.txt'; outside.write_text('outside\n')
@@ -171,8 +172,9 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
         check('source link opens', source_block('three'), tree('[data-role~="source-editor"]'))
         ctl('open-url', 'elide://source?root=' + str(tapp) + '&path=' + str(tapp / 'sample.test.mjs') + '&line=3')
         check('source link with root opens', source_block('strictEqual'), tree('[data-role~="source-editor"]'))
-        ctl('open-url', 'elide://source?root=' + str(tapp) + '&path=' + str(tapp / 'elide.pkl'))
-        check('non-source link opens the editor', opened(tapp / 'elide.pkl'), ctl('state').get('file_blocks'))
+        # Pkl opens in the source block too (since d80f9c4); Markdown is not a source.
+        ctl('open-url', 'elide://source?root=' + str(tapp) + '&path=' + str(tapp / 'notes.md'))
+        check('non-source link opens the editor', opened(tapp / 'notes.md'), ctl('state').get('file_blocks'))
         def none_open(path):
             return not any(Path(b['path']).resolve() == path.resolve() for b in ctl('state').get('file_blocks', []))
         check('outside root rejected', toast_after('elide://source?root=' + str(tapp) + '&path=' + str(outside), 'malformed') and none_open(outside), tree('.toast'))
