@@ -235,7 +235,7 @@ scroll with a short swipe). The rotation buttons lock the orientation, turning a
 off on the device. Unauthorized or offline devices are listed without **Show**.
 
 When an emulator's pane closes, through its Close button or Tern's, Tern asks whether to
-stop the emulator too, unless it already stopped; **Keep it running** or Escape leaves it
+stop the emulator too, unless it already stopped; **Keep the emulator running** or Escape leaves it
 running. **Stop** terminates only the selected emulator; its pane then closes, as does a
 mirror whose device disconnects.
 Emulators started elsewhere (for example by Android Studio) expose no token-authenticated

@@ -424,11 +424,12 @@ local function offer_stop(cx, name)
     end
     current
       :pick({
-        placeholder = name .. " is still running",
+        -- An AVD is often named after its app: the prompt says it is the emulator.
+        placeholder = "Emulator " .. name .. " is still running",
         icon = "smartphone",
         items = {
-          { label = "Stop " .. name, value = "stop", icon = "stop" },
-          { label = "Keep it running", value = "keep", icon = "play" },
+          { label = "Stop emulator " .. name, value = "stop", icon = "stop" },
+          { label = "Keep the emulator running", value = "keep", icon = "play" },
         },
       })
       :next(function(item, err, fresh)
