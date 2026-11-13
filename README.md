@@ -19,7 +19,8 @@ runtime and SDK. See [installation instructions](docs/manual-install.md).
 ## Development
 
 Requires Rust via rustup (this checkout pins the nightly required by `../elide`), Cap'n Proto
-(capnp compiler), Python 3, Tern, Bun, and StyLua 2.5.2 (`mise install`). Native SDK execution
+(capnp compiler), Python 3, Tern, Bun, StyLua 2.5.2 and Lua 5.4 (`mise install` provides both).
+Native SDK execution
 supports macOS arm64 and Linux amd64, subject to the selected SDK's deployment requirements.
 The configured runtime must support `elide tern`; `make link` builds the helpers and links the plugin. The broker links
 the runtime crates `elide-embed-host` and `elide-project-session` from a sibling `../elide`
@@ -34,7 +35,7 @@ display) into `dist/elide-tern-android`; releases also require this executable.
 
 ```sh
 make build
-make test
+make test-unit   # Lua, Bun and Rust unit tests, broker and release-installer checks (also `make test`)
 make check
 cp plugin/config.example.json plugin/config.json
 # Set sdk to a complete extracted embedded SDK directory.

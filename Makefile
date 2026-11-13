@@ -1,7 +1,10 @@
 ELIDE_SOURCE ?= ../elide
+# Lua 5.4 from mise (`.mise.toml`) when the shell has not activated it.
+LUA ?= $(or $(shell command -v lua 2>/dev/null),mise exec -- lua)
 
-.PHONY: build test fmt check types smoke link repl test-surface android test-android test-android-unit
-build: android
+.PHONY: build broker test test-unit fmt check types smoke link repl test-surface android test-android test-android-unit
+build: android broker
+broker:
 	cargo build --release -p elide-tern-broker
 	mkdir -p dist
 	cp target/release/elide-tern-broker dist/.elide-tern-broker.new
@@ -23,9 +26,15 @@ previewing:
 	mkdir -p dist
 	cp "$(ELIDE_SOURCE)/target/debug/examples/compose_preview" dist/.elide-tern-compose.new
 	mv dist/.elide-tern-compose.new dist/elide-tern-compose
-test: build
+test: test-unit
+test-unit: broker
+	$(LUA) tests/links.lua
+	$(LUA) tests/source.lua
+	$(LUA) tests/diagnostics.lua
+	bun test tests/android-elide.test.ts
 	cargo test --workspace
 	python3 tests/broker.py
+	python3 tests/install.py
 fmt:
 	cargo fmt -p elide-tern-broker
 	stylua plugin/host.luau plugin/window.luau plugin/lib
