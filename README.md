@@ -397,7 +397,8 @@ output and fold when the program writes its first line; the log takes the height
 left and scrolls inside it, so the page itself stays put. An Android run's output, the app's
 logcat, is drawn as records: time, thread, level, tag and the message in the level's colour,
 wrapped to the pane; a narrow pane puts the message under its tag. Runtimes without the
-page print plain `elide run` output instead. A typed `elide run` stays plain, keeping stdin.
+page print plain `elide run` output instead. A typed `elide run` in a project draws inline too,
+on a terminal of its own, so the program keeps stdin.
 In an Android project, Run first picks the device: the only attached one; with none, the
 project's AVD, started headless (created from the project when missing; the Run page opens
 as soon as the emulator holds the AVD, about a second, and Elide adopts it); with several, the project's AVD if it runs,

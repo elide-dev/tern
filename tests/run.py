@@ -1,7 +1,7 @@
 """Exercise the native Run surface in real Tern: program output, the task timeline folding once
 the program writes, logcat output as records that wrap in a narrow pane, the log sized to the
 pane, a failing exit status, Stop ending the child, compile errors as cards, the full page, the
-inline block and the opt-in `--surface` flag."""
+inline block, and a bare run on a terminal of its own: typed input, a TTY and Ctrl-C."""
 import argparse
 import json
 import shlex
@@ -40,6 +40,19 @@ fun main() {
     println("11-11 18:33:01.200  4233  4233 E AndroidRuntime: \\tat android.app.Activity.performCreate(Activity.java:8595)")
 }
 '''.replace('SLOW', SLOW)
+
+# Elide keeps a terminal stdin open after `rl.close()`, so the script exits on its own.
+PROMPT = '''import { createInterface } from "node:readline";
+console.log("one");
+console.log("two");
+const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: false });
+rl.question("Name: ", (name) => {
+  console.log(`Hello ${name}! tty=${process.stdout.isTTY === true}`);
+  rl.close();
+  process.exit(0);
+});
+'''
+WAIT = 'for (let i = 0; i < 5; i++) console.log(`tick ${i}`);\nsetInterval(() => {}, 1000);\n'
 
 with tempfile.TemporaryDirectory(prefix='run-') as temporary:
     state = Path(temporary)
@@ -97,6 +110,14 @@ with tempfile.TemporaryDirectory(prefix='run-') as temporary:
         def child_running():
             rows = subprocess.check_output(['ps', '-axo', 'command'], text=True)
             return any('--progress=json' in row and runtime in row for row in rows.splitlines())
+
+        def running(marker):
+            rows = subprocess.check_output(['ps', '-axo', 'command'], text=True)
+            return any(marker in row for row in rows.splitlines())
+
+        # Earlier inline blocks stay in scrollback, so a new block is told apart by count.
+        def blocks(role, text):
+            return sum(text in node.get('text', '') for node in nodes(f'[data-role="{role}"]'))
 
         def run(*extra):
             ctl('run', 'cd ' + shlex.quote(str(project)) + ' && ' + shlex.join([str(host), runtime, *extra]))
@@ -188,11 +209,32 @@ with tempfile.TemporaryDirectory(prefix='run-') as temporary:
             assert not nodes('[data-role="run-rerun"]'), 'inline has no run again'
             ctl('appearance', 'light')
             ctl('shot', 'run-inline-light')
-            # Without the flag the host refuses: the surface is opt-in for run.
-            plain = subprocess.run([str(host), runtime], cwd=project, capture_output=True, text=True, timeout=60)
-            assert plain.returncode != 0 and 'no --surface=MODE' in plain.stderr, (plain.returncode, plain.stderr[-2000:])
-            # A runtime that advertises --surface accepts it on a plain run outside Tern.
+            # A bare run is hosted on a terminal of its own: the prompt shows before the answer, what
+            # is typed reaches the program, its output is a terminal, and Ctrl-C interrupts it.
             usage = subprocess.run([runtime, 'run', '--help'], capture_output=True, text=True, timeout=120).stdout
+            launchers = [[str(host), runtime]]
+            # Help wraps its text to the terminal's width.
+            if 'inline (the default)' in ' '.join(usage.split()):
+                launchers.append([runtime, 'run'])
+            (project / 'prompt.mjs').write_text(PROMPT)
+            (project / 'wait.mjs').write_text(WAIT)
+            for launcher in launchers:
+                marker = shlex.join(launcher) + ' '
+                bare = lambda script: ctl('run', 'cd ' + shlex.quote(str(project)) + ' && ' + shlex.join([*launcher, script]))
+                bare('prompt.mjs')
+                wait(lambda: blocks('run-output', '3 lines') == 1)
+                ctl('type', 'Ada')
+                ctl('key', 'Enter')
+                wait(lambda: not running(marker))
+                assert 'Name: Ada\nHello Ada! tty=true' in latest_log(), latest_log()
+                ticking, stopped = blocks('run-output', '5 lines'), blocks('run-status', 'Stopped')
+                bare('wait.mjs')
+                wait(lambda: blocks('run-output', '5 lines') == ticking + 1)
+                ctl('key', 'ctrl+c')
+                wait(lambda: not running(marker) and not child_running())
+                assert blocks('run-status', 'Stopped') == stopped + 1, tree('[data-role="run-status"]')
+                assert 'tick 4' in latest_log(), latest_log()
+            # A runtime that advertises --surface accepts it on a plain run outside Tern.
             if '--surface' in usage:
                 plain = subprocess.run([runtime, 'run', '--surface=screen'], cwd=project, capture_output=True, text=True, timeout=300)
                 assert 'unexpected argument' not in plain.stderr and plain.returncode == 0, plain.stderr[-2000:]
@@ -200,7 +242,7 @@ with tempfile.TemporaryDirectory(prefix='run-') as temporary:
                 flag = 'plain run accepts --surface'
             else:
                 flag = 'runtime predates --surface; plain-run check skipped'
-            print(f'PASS: output, task table, logcat records, wrapping, log height, task fold, output.log, exit status, Stop, compile error cards, page, inline block, opt-in ({flag})')
+            print(f'PASS: output, task table, logcat records, wrapping, log height, task fold, output.log, exit status, Stop, compile error cards, page, inline block, bare run on a terminal ({flag})')
             print('Shots:', *(str(out / 'serve' / f'{name}.png') for name in ['run-screen-light', 'run-screen-dark', 'run-logcat-light', 'run-logcat-dark', 'run-logcat-narrow-light', 'run-logcat-narrow-dark', 'run-inline-light']))
         finally:
             server.terminate()
