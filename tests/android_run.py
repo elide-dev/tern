@@ -11,6 +11,7 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
+from tern_config import config_dir
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--runtime', required=True)
@@ -51,7 +52,7 @@ with tempfile.TemporaryDirectory(prefix='tar-', dir='/tmp') as temporary:
     (fixture_root / 'goldens').mkdir(parents=True)
     socket = state / 'control.sock'
     environment = {**os.environ, 'STENCIL_FIXTURE_ROOT': str(fixture_root),
-                   'TERN_DAEMON_SOCKET': str(state / 'daemon.sock'), 'TERN_CONFIG_DIR': str(state / 'config')}
+                   'TERN_DAEMON_SOCKET': str(state / 'daemon.sock'), 'TERN_CONFIG_DIR': config_dir(state / 'config')}
     with (out / 'tern.log').open('w') as log:
         subprocess.run([tern, 'plugin', 'link', str(package)], env=environment, check=True, stdout=log, stderr=log)
         daemon = subprocess.Popen([tern, 'daemon', '--socket', str(state / 'daemon.sock')], env=environment,

@@ -2,6 +2,7 @@
 project chrome and command_finished. Usage: python3 tests/integration.py --runtime /path/to/elide"""
 import argparse, json, os, shlex, shutil, subprocess, sys, tempfile, time, uuid
 from pathlib import Path
+from tern_config import config_dir
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
@@ -39,7 +40,7 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
     (package / 'config.json').write_text(json.dumps({'runtime': runtime, 'broker': str(ROOT / 'dist/elide-tern-broker')}))
     (state / 'crates/tern/goldens').mkdir(parents=True)
     env = {**os.environ, 'STENCIL_FIXTURE_ROOT': str(state / 'crates/tern'), 'TERN_PLUGIN_DATA': str(state / 'data'),
-           'TERN_DAEMON_SOCKET': str(state / 'daemon.sock'), 'TERN_CONFIG_DIR': str(state / 'config')}
+           'TERN_DAEMON_SOCKET': str(state / 'daemon.sock'), 'TERN_CONFIG_DIR': config_dir(state / 'config')}
     out = base / 'out'; out.mkdir(); log = (out / 'tern.log').open('w')
     subprocess.run(['tern', 'plugin', 'link', str(package)], env=env, check=True, stdout=log, stderr=log)
     daemon = subprocess.Popen(['tern', 'daemon', '--socket', str(state / 'daemon.sock')], stdout=log, stderr=log, env=env)
@@ -93,14 +94,14 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
     try:
         wait(sock.exists)
         time.sleep(4)
-        ctl('status-bar', 'on')
+        ctl('widgets', 'classic')
         plugins = subprocess.run(['tern', 'plugin', 'list', '--json'], env=env, capture_output=True, text=True).stdout
         check('plugin loads', 'elide' in plugins, plugins)
         bindir = str(Path(runtime).parent)
         run('export PATH=' + shlex.quote(bindir) + ':$PATH')
 
         # Chrome: from tapp/nested the default title would be "nested"; the project names it "tapp".
-        check('status segment', wait(lambda: 'tapp' in tree('.sl-plugin')), tree('.sl-plugin'))
+        check('status segment', wait(lambda: 'tapp' in tree('.wg-status-chip')), tree('.wg-status-chip'))
         ctl('plugins', 'run', 'plugin.elide.project')
         menu = wait(lambda: (lambda t: t if 'Run tests' in t else None)(tree('#pick')), 30) or tree('#pick')
         check('menu hides test runs before any run', 'Run tests' in menu and 'View test runs' not in menu, menu)
@@ -125,19 +126,19 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
         tap = wait(lambda: (lambda t: t if 'not ok' in t else None)(block_text(before)), 30) or block_text(before)
         check('tap lens summary', '1 passed' in tap and '1 failed' in tap, tap)
         check('tap lens rows', 'adds' in tap and 'fails' in tap and 'strictly equal' in tap, tap)
-        check('outcome segment', wait(lambda: 'Tests failed' in tree('.sl-plugin'), 10), tree('.sl-plugin'))
+        check('outcome segment', wait(lambda: 'Tests failed' in tree('.wg-status-chip'), 10), tree('.wg-status-chip'))
 
         # An interrupted run (status 128 and up) is neither a pass nor a failure.
         run('elide run wait.mjs')
         time.sleep(4)
         ctl('key', 'Control+c')
-        check('interrupted segment', wait(lambda: 'Run interrupted' in tree('.sl-plugin'), 20), tree('.sl-plugin'))
+        check('interrupted segment', wait(lambda: 'Run interrupted' in tree('.wg-status-chip'), 20), tree('.wg-status-chip'))
 
         # Build lens on a Java compile error.
         before = len(ctl('tree', '.sf-block').get('nodes', []))
         run('cd ' + shlex.quote(str(build)))
         run('elide build')
-        check('build segment', wait(lambda: 'Build failed' in tree('.sl-plugin'), 280), tree('.sl-plugin'))
+        check('build segment', wait(lambda: 'Build failed' in tree('.wg-status-chip'), 280), tree('.wg-status-chip'))
         # Runtimes with the native Build surface draw it inline under Tern; older ones print plain
         # output, which the build lens reads. Either way the error, its location and excerpt show.
         def build_view():
@@ -148,7 +149,7 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
         check('build excerpt shown', 'System.out.println' in built, built)
         ctl('shot', 'lenses')
         run('cd ' + shlex.quote(str(tapp)))
-        wait(lambda: 'tapp' in tree('.sl-plugin'), 30)
+        wait(lambda: 'tapp' in tree('.wg-status-chip'), 30)
 
         # elide:// links as the system hands them to Tern (tern.route.link).
         def opened(path):

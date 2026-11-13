@@ -3,6 +3,7 @@ block marks covered and uncovered lines, and the Debug overlay sets a breakpoint
 shows the stop marker. Usage: python3 tests/source.py --runtime /path/to/elide [--sdk /path/to/embedder]"""
 import argparse, json, os, re, shutil, struct, subprocess, sys, tempfile, time, uuid, zlib
 from pathlib import Path
+from tern_config import config_dir
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
@@ -54,7 +55,7 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
     (package / 'config.json').write_text(json.dumps(config))
     (state / 'crates/tern/goldens').mkdir(parents=True)
     env = {**os.environ, 'STENCIL_FIXTURE_ROOT': str(state / 'crates/tern'), 'TERN_PLUGIN_DATA': str(state / 'data'),
-           'TERN_DAEMON_SOCKET': str(state / 'daemon.sock'), 'TERN_CONFIG_DIR': str(state / 'config')}
+           'TERN_DAEMON_SOCKET': str(state / 'daemon.sock'), 'TERN_CONFIG_DIR': config_dir(state / 'config')}
     out = base / 'out'; out.mkdir(); log = (out / 'tern.log').open('w')
     subprocess.run(['tern', 'plugin', 'link', str(package)], env=env, check=True, stdout=log, stderr=log)
     daemon = subprocess.Popen(['tern', 'daemon', '--socket', str(state / 'daemon.sock')], stdout=log, stderr=log, env=env)
