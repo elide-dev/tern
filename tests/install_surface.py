@@ -70,7 +70,8 @@ with tempfile.TemporaryDirectory(prefix='install-') as temporary:
             raise AssertionError(tree())
 
         def status(value):
-            return value in tree('[data-role="install-status"]')
+            # The newest surface only: an inline block's badge stays in scrollback after it exits.
+            return value in json.dumps(nodes('[data-role="install-status"]')[-1:], ensure_ascii=False)
 
         def reports():
             return sorted(project.glob('.dev/reports/install/tern/run-*/install.json'), key=lambda p: p.stat().st_mtime)
@@ -81,6 +82,8 @@ with tempfile.TemporaryDirectory(prefix='install-') as temporary:
 
         def run(*extra):
             ctl('run', 'cd ' + shlex.quote(str(project)) + ' && ' + shlex.join([str(host), runtime, *extra]))
+            if '--surface=screen' in extra:
+                wait(lambda: nodes('.sf-dock'))
 
         def quit_page():
             ctl('key', 'q')
@@ -188,8 +191,10 @@ with tempfile.TemporaryDirectory(prefix='install-') as temporary:
                 assert any(r['type'] == 'dependencies' and r.get('ecosystem') == 'npm' and r.get('phase') == 'done'
                            for r in stream), streamed.stderr[-4000:]
                 (project / 'package.json').write_text(PACKAGE_JSON)
+                before = reports()[-1:]
                 run('--surface=screen', '--ecosystems=maven,npm')
                 wait(lambda: status('Installed') or status('Up to date'), timeout=300)
+                wait(lambda: reports()[-1:] != before)
                 lanes = tree('[data-role="install-ecosystems"]')
                 assert 'Maven' in lanes and 'npm' in lanes, lanes
                 shot('install-npm-light')
