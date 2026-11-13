@@ -158,6 +158,16 @@ with tempfile.TemporaryDirectory(prefix='install-') as temporary:
             shot('install-inline-dark')
             ctl('appearance', 'light')
 
+            # Ctrl-C stops an inline install; its block stays in scrollback drawn as cancelled, with
+            # no Cancel left to press.
+            run('--fresh')
+            wait(lambda: status('Starting') or status('Installing'), timeout=60)
+            ctl('key', 'Control+c')
+            wait(lambda: not host_running(), timeout=60)
+            time.sleep(1)
+            assert status('Cancelled'), tree()
+            assert not nodes('[data-role="install-cancel"]'), tree()
+
             # A package that does not exist fails the install with a problem naming it.
             manifest.write_text(MANIFEST % 'com.example.missing:nope:0.0.1')
             run('--surface=screen')
