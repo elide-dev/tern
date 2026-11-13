@@ -1046,8 +1046,12 @@ local function build_counts(pane)
   return report and diagnostics.phrase(report.errors, report.warnings, report.notes) or nil
 end
 
-tern.on("command_started", function(ev)
-  if elide_command(ev.line) ~= "build" then
+tern.on("command_started", function(ev, cx)
+  local command = elide_command(ev.line)
+  if command == "run" then
+    android.typed_run(cx, ev.pane)
+  end
+  if command ~= "build" then
     return
   end
   local root = project.root_of(ev.pane)
@@ -1059,6 +1063,7 @@ tern.on("pane_closed", function(ev)
 end)
 
 tern.on("command_finished", function(ev, cx)
+  android.typed_run_ended(ev.pane)
   local command, subject = elide_command(ev.line)
   if not command then
     return

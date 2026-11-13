@@ -412,6 +412,13 @@ preview closes. A failed build shows no device pane. The project's AVD deploys w
 page show the device pane a few seconds after their output starts. Run
 `make running && make test-running RUNTIME=/path/to/elide` for the Run page in an isolated
 window.
+A typed `elide run` in an Android project gets its device pane too: every new shell names the
+plugin's helper in `ELIDE_ANDROID_EMULATOR_LAUNCHER`, so any Elide command there that boots an
+emulator starts it without a window; once the run's block names its device, that device's pane
+opens beside the terminal and takes focus. Shells opened before the plugin loaded keep Elide's
+own emulator window. Run `make test-android-run RUNTIME=/path/to/elide
+ANDROID_PROJECT=/path/to/android-project` for this in an isolated window (a Tern window, not
+`tern serve`, whose shells run no `spawn` hook and raise no `command_started`).
 
 `elide://source`, `elide://debug`, `elide://tests` and `elide://help` links open a source line (in the
 [source editor](#source-editor) for project sources), the debugger, project test runs or a help topic. Elide prints them; any program can, as OSC 8 hyperlinks.
