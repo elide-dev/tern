@@ -377,7 +377,7 @@ navigation, editing, reruns and paged agent reads in an isolated desktop window.
 
 Inside a detected project, tabs take the project's name (names you give a tab win)
 and the status bar shows the project, **Workspace**, and how the pane's last
-`elide test`, `build` or `run` ended. Click the project segment for the project menu.
+`elide test`, `build`, `run` or `install` ended. Click the project segment for the project menu.
 A failing `elide test` typed in a terminal toasts "Tests failed". Choosing `elide.pkl`
 from the palette opens that project's workspace.
 
@@ -388,6 +388,14 @@ each location; `elide test --reporter=tap` shows a pass/fail summary with a tabl
 Both fall back to the raw output when nothing parses or the output is very large. After a
 typed `elide build`, the status bar reads, for example, "Build failed · 3 errors, 1 warning",
 and the workspace's Build button opens the full Build page when the runtime has one.
+
+`elide install` in a Tern terminal draws Elide's Install surface on runtimes that have one: a
+row per ecosystem with its packages and how many came from the cache, a bar per download, and
+the resolved Maven graph as a tree. **Install dependencies**, in the project menu and the
+palette, opens the full Install page in a new tab. After a typed `elide install` the status bar
+reads, for example, "Installed · 12 packages, 3 downloaded". Run
+`make installing && make test-installing RUNTIME=/path/to/elide` for the Install page in an
+isolated window (it needs network access to Maven Central).
 
 The workspace's Run button opens the full Run page (`elide run --surface=screen`) at the bottom,
 beside the project terminal (beside the editor once that terminal is closed): status,
