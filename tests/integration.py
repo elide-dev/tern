@@ -128,6 +128,11 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
         check('tap lens summary', '1 passed' in tap and '1 failed' in tap, tap)
         check('tap lens rows', 'adds' in tap and 'fails' in tap and 'strictly equal' in tap, tap)
         check('outcome segment', wait(lambda: 'Tests failed' in tree('.wg-status-chip'), 10), tree('.wg-status-chip'))
+        # The lens also takes `--reporter tap` and a global option before `test` (M21).
+        before = len(ctl('tree', '.sf-block').get('nodes', []))
+        run('elide --no-color test --reporter tap sample.test.mjs')
+        tap = wait(lambda: (lambda t: t if '1 passed' in t else None)(block_text(before)), 240) or block_text(before)
+        check('tap lens after a global option, space form', '1 passed' in tap and '1 failed' in tap, tap)
 
         # An interrupted run (status 128 and up) is neither a pass nor a failure.
         run('elide run wait.mjs')
