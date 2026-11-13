@@ -332,7 +332,14 @@ local function show(cx, device, replace, context, target, previews)
   replace = replace and cx.session:pane(replace) and replace
   local tab = previews and target and cx.session:pane(target) and cx.session:tab_of(target) or nil
   local place = (if previews then (tab and compose_pane(cx, tab)) else compose_pane(cx)) or replace
-  local closing = { place, replace ~= place and replace or nil }
+  -- A list without holes: entries are appended below.
+  local closing = {}
+  if place then
+    table.insert(closing, place)
+  end
+  if replace and replace ~= place then
+    table.insert(closing, replace)
+  end
   if previews then
     for _, info in cx.session:panes() do
       if is_preview(info) then
@@ -351,6 +358,15 @@ local function show(cx, device, replace, context, target, previews)
         pane = candidate.pane
         break
       end
+    end
+  end
+  -- A view that could not open its device says so in its title (android/display.ts): a new one
+  -- takes its place.
+  local label = if device.physical then device.serial else device.name
+  for _, candidate in (if label then cx.session:panes() else {}) do
+    if candidate.kind == "agent" and candidate.title == label .. " (failed)" then
+      place = place or candidate.pane
+      table.insert(closing, candidate.pane)
     end
   end
   if pane then

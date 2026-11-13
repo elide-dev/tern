@@ -14,7 +14,7 @@ broker:
 android:
 	bun scripts/build-android.ts
 test-android-unit:
-	bun test tests/android-elide.test.ts
+	bun test tests/android-elide.test.ts tests/android-sdk.test.ts
 test-android: android
 	python3 tests/android.py --image "$(ANDROID_IMAGE)" $(if $(ANDROID_SDK),--sdk "$(ANDROID_SDK)")
 .PHONY: test-android-run
@@ -32,7 +32,7 @@ test-unit: broker
 	$(LUA) tests/source.lua
 	$(LUA) tests/diagnostics.lua
 	$(LUA) tests/shell.lua
-	bun test tests/android-elide.test.ts
+	$(MAKE) test-android-unit
 	cargo test --workspace
 	python3 tests/broker.py
 	python3 tests/install.py

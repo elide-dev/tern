@@ -33,6 +33,8 @@ export interface Device {
 }
 
 const ESC = "\x1b";
+/** Appended to the view's title when it could not open its device (the window half matches it). */
+const FAILED_TITLE = " (failed)";
 const FRAME_ID = 1;
 const QUERY_ID = 31;
 /** Toolbar images: buttons from ICON_ID (by their index in ACTS), then the panel behind them. */
@@ -584,8 +586,10 @@ export async function runDisplay(title: string, connect: Connect): Promise<void>
     const abort = new AbortController();
     const connecting = connect(text => { if (!stopping) setStep(text); }, abort.signal);
     const connected = await Promise.race([connecting, finished.then(() => undefined)]).catch((error: unknown) => {
-      // A failed connection stays on screen until the view is closed.
+      // A failed connection stays on screen until the view is closed. Its title says it failed,
+      // so Show and Start open a fresh view in its place instead of focusing this one.
       setStep(undefined);
+      out(`${ESC}]2;${title}${FAILED_TITLE}\x07`);
       status(`Could not open ${title}.\n${error instanceof Error ? error.message : String(error)}`);
       return null;
     });
