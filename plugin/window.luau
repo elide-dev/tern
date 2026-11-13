@@ -5,6 +5,7 @@ local source = require("./lib/source")
 local workspace = require("./lib/workspace")
 local android = require("./lib/android")
 local loopback = require("./lib/loopback")
+local shell = require("./lib/shell")
 
 local function path(value)
   if string.sub(value, 1, 1) == "/" then
@@ -985,38 +986,6 @@ if tern.chrome.program_icon then
   tern.chrome.program_icon("elide", "bolt")
 end
 
--- `elide test|build|run|install …` as a shell reported it: the subcommand and its subject words.
--- Leading `VAR=value` assignments are skipped; quoting is not interpreted.
-local function elide_command(line)
-  local words = {}
-  for word in string.gmatch(line, "%S+") do
-    table.insert(words, word)
-  end
-  local index = 1
-  while words[index] and string.find(words[index], "^[%a_][%w_]*=") do
-    index += 1
-  end
-  local program = words[index] and string.match(words[index], "([^/]+)$")
-  if program ~= "elide" then
-    return nil
-  end
-  local command, subject = nil, {}
-  for position = index + 1, #words do
-    local word = words[position]
-    if string.sub(word, 1, 1) ~= "-" then
-      if command then
-        table.insert(subject, word)
-      else
-        command = word
-      end
-    end
-  end
-  if command ~= "test" and command ~= "build" and command ~= "run" and command ~= "install" then
-    return nil
-  end
-  return command, if #subject > 0 then table.concat(subject, " ") else nil
-end
-
 -- No process starts here: window event handlers share a 50 ms budget.
 -- Report runs (`run-*` under the project's `.dev/reports/<kind>/tern`) present when an
 -- `elide build|install` line started in a pane; the one new run with a report when it finishes
@@ -1065,15 +1034,30 @@ local function fresh_report(pane)
   return ok and decoded or nil
 end
 
--- "3 errors, 1 warning" from the report the build in `pane` wrote, or nil.
-local function build_counts(pane)
-  local report = diagnostics.report(fresh_report(pane))
-  return report and diagnostics.phrase(report.errors, report.warnings, report.notes) or nil
+-- The shell status the report the command in `pane` wrote stands for, or nil without one: what
+-- the command itself did, which past a pipe or `;` the shell's `status` does not say.
+local function report_status(report, status, compound)
+  if type(report) ~= "table" or type(report.outcome) ~= "string" then
+    return nil
+  end
+  if report.outcome == "success" or report.outcome == "up-to-date" then
+    return 0
+  end
+  if not compound and status ~= 0 then
+    return status
+  end
+  local code = report.exit_code
+  return if type(code) == "number" and code ~= 0 then code else 1
 end
 
--- "12 packages, 3 downloaded" from the report the install in `pane` wrote, or nil.
-local function install_detail(pane)
-  local report = fresh_report(pane)
+-- "3 errors, 1 warning" from a build's report, or nil.
+local function build_counts(report)
+  local counts = diagnostics.report(report)
+  return counts and diagnostics.phrase(counts.errors, counts.warnings, counts.notes) or nil
+end
+
+-- "12 packages, 3 downloaded" from an install's report, or nil.
+local function install_detail(report)
   local packages = type(report) == "table" and report.packages or nil
   if type(packages) ~= "number" or packages <= 0 then
     return nil
@@ -1086,7 +1070,7 @@ local function install_detail(pane)
 end
 
 tern.on("command_started", function(ev, cx)
-  local command = elide_command(ev.line)
+  local command = shell.elide(ev.line)
   if command == "run" then
     android.typed_run(cx, ev.pane)
   end
@@ -1103,20 +1087,32 @@ end)
 
 tern.on("command_finished", function(ev, cx)
   android.typed_run_ended(ev.pane)
-  local command, subject = elide_command(ev.line)
+  local command, subject, compound = shell.elide(ev.line)
   if not command then
     return
   end
+  local report = if REPORTS[command] then fresh_report(ev.pane) else nil
+  local status = report_status(report, ev.status, compound)
+  if not status then
+    if compound then
+      -- `elide build | cat`, `elide test; echo`, `elide run &`: the status is not the command's,
+      -- and no report says how it ended.
+      project.finished(ev.pane, nil)
+      tern.chrome.refresh()
+      return
+    end
+    status = ev.status
+  end
   local detail = nil
   if command == "build" then
-    detail = build_counts(ev.pane)
+    detail = build_counts(report)
   elseif command == "install" then
-    detail = install_detail(ev.pane)
+    detail = install_detail(report)
   end
-  project.finished(ev.pane, command, ev.status, detail)
+  project.finished(ev.pane, command, status, detail)
   tern.chrome.refresh()
   -- Statuses from 128 up are signals (an interrupt), not failing tests.
-  if command == "test" and ev.status ~= 0 and ev.status < 128 then
+  if command == "test" and status ~= 0 and status < 128 then
     if not subject then
       local pane = cx.session:pane(ev.pane)
       subject = pane and pane.cwd ~= "" and pane.cwd or nil

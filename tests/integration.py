@@ -151,6 +151,13 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
         run('cd ' + shlex.quote(str(tapp)))
         wait(lambda: 'tapp' in tree('.wg-status-chip'), 30)
 
+        # Issue #3: past a pipe the shell's status is `cat`'s. Failing tests piped through `cat`
+        # end with status 0, and no report says otherwise: the last outcome goes, none is claimed.
+        run('elide test --reporter=tap sample.test.mjs | cat')
+        cleared = wait(lambda: 'Build failed' not in tree('.wg-status-chip'), 240)
+        check('piped command claims no outcome', cleared and 'Tests passed' not in tree('.wg-status-chip'),
+              tree('.wg-status-chip'))
+
         # elide:// links as the system hands them to Tern (tern.route.link).
         def opened(path):
             return wait(lambda: any(Path(b['path']).resolve() == path.resolve() for b in ctl('state').get('file_blocks', [])), 15)

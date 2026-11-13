@@ -93,8 +93,9 @@ end
 
 -- Records how an `elide <command>` line ended in `pane`; the caller refreshes the chrome.
 -- `detail`, when given, follows the outcome after a middle dot ("Build failed · 3 errors").
+-- A nil `command` forgets the last outcome: the line's end said nothing about it.
 function M.finished(pane, command, status, detail)
-  results[pane] = { command = command, status = status, detail = detail }
+  results[pane] = if command then { command = command, status = status, detail = detail } else nil
 end
 
 -- The root of the project detected for `pane`, or nil.
