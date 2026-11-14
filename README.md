@@ -14,7 +14,10 @@ remain follow-up work.
 
 macOS Apple Silicon users can install the self-contained
 [preview release](https://github.com/elide-dev/tern/releases), including its matched
-runtime and SDK. See [installation instructions](docs/manual-install.md).
+runtime and SDK. See [installation instructions](docs/manual-install.md). To pack one:
+`make build`, then `scripts/package-release.py --runtime <elide distribution> --sdk <embedded
+SDK> --out <dir> --runtime-revision <elide commit>` writes the archive and its `SHA256SUMS`
+(`tests/install.py` installs what it packs).
 
 ## Development
 
