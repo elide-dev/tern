@@ -493,8 +493,15 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         time.sleep(1)
         check('unreadable file left alone', source.read_bytes() == binary, source.read_bytes()[:40])
         source.write_bytes(kept)
-        ctl('key', 'Meta+z')
-        wait(lambda: not nodes('[data-role="source-modified"]'), 15)
+        # Undo groups typing by word: undo until the buffer is back at the text on disk, so the
+        # coverage run below starts without a "Save and run" confirm.
+        for _ in range(8):
+            if not nodes('[data-role="source-modified"]'):
+                break
+            ctl('key', 'Meta+z')
+            time.sleep(.3)
+        check('undo back to the disk text is clean', wait(lambda: not nodes('[data-role="source-modified"]'), 15),
+              tree('.sf-dock'))
 
         # Find marks matches and selects the next one; go to line moves the caret.
         ctl('key', 'Control+f')
