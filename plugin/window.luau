@@ -120,7 +120,13 @@ end
 -- it. Enter closes the pane; a clean exit closes it at once, as usual.
 local HOLD = '"$@"; status=$?; [ "$status" -eq 0 ] && exit 0; '
   .. 'printf "\\n\\033[2mExited with status %d. Press Enter to close.\\033[0m" "$status"; read -r _; exit 0'
+-- Keeps an action's pane open whatever the exit, so its plain output can be read (issue #1).
+local HOLD_ALWAYS = '"$@"; status=$?; if [ "$status" -eq 0 ]; then note=Done; '
+  .. 'else note="Exited with status $status"; fi; '
+  .. 'printf "\\n\\033[2m%s. Press Enter to close.\\033[0m" "$note"; read -r _; exit 0'
 
+-- Opens `argv` in a terminal beside `target` (else a new tab). `hold`: true keeps the pane after a
+-- failure, "always" after any exit.
 local function terminal(cx, argv, cwd, target, hold, dir)
   local command = {}
   for _, value in argv do
@@ -128,7 +134,7 @@ local function terminal(cx, argv, cwd, target, hold, dir)
   end
   local line = table.concat(command, " ")
   if hold then
-    line = "/bin/sh -c " .. quote(HOLD) .. " elide " .. line
+    line = "/bin/sh -c " .. quote(if hold == "always" then HOLD_ALWAYS else HOLD) .. " elide " .. line
   end
   local spec = { cwd = cwd, command = "exec " .. line }
   local pane
@@ -340,7 +346,9 @@ local function runtime_action(cx, context, command, target, opened, options)
     for _, value in options.args or {} do
       table.insert(argv, value)
     end
-    local pane = terminal(current, argv, options.cwd or context.root, target)
+    -- A full page stays until it is closed; plain output (an older runtime) would close with
+    -- its program, so its pane waits for Enter.
+    local pane = terminal(current, argv, options.cwd or context.root, target, if screen then nil else "always")
     if later and opened then
       opened(current, pane)
     end
