@@ -625,6 +625,13 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
             time.sleep(.8)
             rects.append(first_text_rect())
         check('overlay switches move no text', rects[0] and all(r and r[:2] == rects[0][:2] for r in rects), rects)
+        # ⌥1–⌥4 pick an overlay. On a macOS US layout Option+digit arrives as the composed
+        # character (⌥3 is £, ⌥1 is ¡), which is what Tern names in the key event (U12).
+        click('[data-role~="source-editor"]')
+        ctl('key', 'Alt+£')
+        check('⌥3 (£) shows the Debug overlay', wait(lambda: nodes('[data-role="source-btn-debug-launch"]'), 10), tree('[data-role="source-toolbar"]'))
+        ctl('key', 'Alt+¡')
+        check('⌥1 (¡) leaves it', wait(lambda: not nodes('[data-role="source-btn-debug-launch"]'), 10), tree('[data-role="source-toolbar"]'))
 
         # Debug: F9 on two lines, F5 launches; the target pauses at the call first, then in the function.
         overlay('debug')
