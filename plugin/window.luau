@@ -1211,10 +1211,28 @@ local function publish_sessions()
   tern.kv.set(SESSIONS, all)
 end
 
+-- What each page of this window previews, by session URL, kept in kv: after a plugin reload a page
+-- whose service has stopped is taken over from it, so its buttons still work.
+local function pages_key()
+  return "compose:pages:" .. tostring(this_window)
+end
+
+local function remember_pages()
+  if not this_window then
+    return
+  end
+  local saved = {}
+  for url, page in live_pages do
+    saved[url] = { root = page.root, path = page.path }
+  end
+  tern.kv.set(pages_key(), if next(saved) then saved else nil)
+end
+
 local function forget_page(url)
   live_pages[url] = nil
   native_sessions[url] = nil
   publish_sessions()
+  remember_pages()
 end
 
 -- Ends the preview: its session, and its pane.
@@ -1239,27 +1257,50 @@ local poll_page, watch_stopped
 
 -- Takes over the page `block` showing session `url` of workspace `root` (previewing `file`):
 -- its workspace bounds the native editors posted to it, and its requests are carried out here.
-local function adopt(cx, url, block, root, file)
+-- `asked`: the newest pane action already carried out (a page taken over after a reload).
+local function adopt(cx, url, block, root, file, asked)
   native_sessions[url] = { url = url, pane = block, root = root }
   local page = {
     url = url,
     pane = block,
     root = root,
     path = if file and links.within(file, root) then file else nil,
-    asked = 0,
+    asked = if type(asked) == "number" then asked else 0,
   }
   live_pages[url] = page
   publish_sessions()
+  remember_pages()
   poll_native(cx)
   native_tick(cx)
   poll_page(page)
 end
 
+-- A stopped page whose Start failed: its address says so (`#failed-<n>`, a fragment change, so the
+-- page stays), which the page reads to offer Start again; its buttons are read again.
+local function restart_failed(cx, page)
+  page.starting = nil
+  if cx.session:pane(page.pane) then
+    cx.browser:call({ op = "goto", block = page.pane, url = page.url .. "#failed-" .. os.time() })
+  end
+  watch_stopped(page)
+end
+
 -- Starts a session previewing `file` and shows its page: in `page`'s pane when given (a stopped
 -- preview starting again), else beside `target`.
 start_preview = function(cx, file, root, target, page)
+  -- One start per stopped page: a second would retire the first's session, and its 410 would close
+  -- the pane both share.
+  if page then
+    if page.starting then
+      return
+    end
+    page.starting = true
+  end
   local config = configuration(cx)
   if not config then
+    if page then
+      restart_failed(cx, page)
+    end
     return
   end
   local keep_alive = if type(config.compose_keep_alive_minutes) == "number"
@@ -1299,6 +1340,9 @@ start_preview = function(cx, file, root, target, page)
   -- native editors follow through `poll_native`.
   local ok, problem = pcall(function()
     tern.process.run(argv, { cwd = root, stdin = '{"documents":[]}', timeout_ms = 30000 }, function(result, current)
+      if page then
+        page.starting = nil
+      end
       if not current then
         return
       end
@@ -1321,7 +1365,7 @@ start_preview = function(cx, file, root, target, page)
           )
         current:toast("error", "Could not start Compose previews.", string.sub(message, 1, 8192))
         if page then
-          watch_stopped(page)
+          restart_failed(current, page)
         end
         return
       end
@@ -1357,6 +1401,9 @@ start_preview = function(cx, file, root, target, page)
   end)
   if not ok then
     cx:toast("error", "Could not start Compose previews.", tostring(problem))
+    if page then
+      restart_failed(cx, page)
+    end
   end
 end
 
@@ -1372,8 +1419,11 @@ end
 -- `#close-<n>`, a fresh `n` per click), the service being gone; it is read every second until the
 -- pane closes or starts again.
 watch_stopped = function(page)
+  -- One loop per page: a newer call ends the one before.
+  local loop = {}
+  page.watch = loop
   tern.timer(1000, function(cx)
-    if not cx or live_pages[page.url] ~= page then
+    if not cx or live_pages[page.url] ~= page or page.watch ~= loop then
       return
     end
     if not cx.session:pane(page.pane) then
@@ -1432,6 +1482,7 @@ poll_page = function(page)
           local file = links.absolute(value.file)
           if file and links.within(file, page.root) and source.extension(file) == "kt" then
             page.path = file
+            remember_pages()
           end
         end
       end
@@ -1475,16 +1526,30 @@ tern.timer(0, function(cx)
       local url = type(block) == "table" and live_url(block.url)
       if url and type(block.block) == "number" and not live_pages[url] then
         loopback.request(url .. "info", nil, 5000, function(status, body, latest)
+          if not latest or not latest.session:pane(block.block) or live_pages[url] then
+            return
+          end
           local decoded, info = pcall(tern.json.decode, body)
           local root = status == 200 and decoded and type(info) == "table" and links.absolute(info.root)
-          if
-            latest
-            and root
-            and not string.find(root, "%c")
-            and latest.session:pane(block.block)
-            and not live_pages[url]
-          then
-            adopt(latest, url, block.block, root, links.absolute(info.file))
+          if root and not string.find(root, "%c") then
+            adopt(latest, url, block.block, root, links.absolute(info.file), info.action)
+            return
+          end
+          -- Its service is gone: the page shows it stopped, and what it previewed is remembered.
+          local saved = tern.kv.get(pages_key())
+          local was = type(saved) == "table" and saved[url]
+          local was_root = type(was) == "table" and links.absolute(was.root)
+          if was_root then
+            local page = {
+              url = url,
+              pane = block.block,
+              root = was_root,
+              path = links.absolute(was.path),
+              asked = 0,
+              stopped = true,
+            }
+            live_pages[url] = page
+            watch_stopped(page)
           end
         end)
       end
