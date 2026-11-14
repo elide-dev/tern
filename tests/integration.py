@@ -156,12 +156,14 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
         ctl('shot', 'lenses')
         run('cd ' + shlex.quote(str(tapp)))
         wait(lambda: 'tapp' in tree('.wg-status-chip'), 30)
+        check('outcome stays with its project', 'Build failed' not in tree('.wg-status-chip'), tree('.wg-status-chip'))
 
         # Issue #3: past a pipe the shell's status is `cat`'s. Failing tests piped through `cat`
-        # end with status 0, and no report says otherwise: the last outcome goes, none is claimed.
-        run('elide test --reporter=tap sample.test.mjs | cat')
-        cleared = wait(lambda: 'Build failed' not in tree('.wg-status-chip'), 240)
-        check('piped command claims no outcome', cleared and 'Tests passed' not in tree('.wg-status-chip'),
+        # end with status 0, and no report says otherwise: none is claimed.
+        piped = 'elide test --reporter=tap sample.test.mjs | cat'
+        run(piped)
+        finished = wait(lambda: piped in json.dumps((ctl('state').get('focused') or {}).get('last')), 240)
+        check('piped command claims no outcome', finished and 'Tests' not in tree('.wg-status-chip'),
               tree('.wg-status-chip'))
 
         # elide:// links as the system hands them to Tern (tern.route.link).

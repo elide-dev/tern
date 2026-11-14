@@ -291,15 +291,18 @@ appears. Other text shows only for warnings and errors.
 
 ## Window integration points
 
-The window half also plugs into Tern's chrome, events and routes. None of these
-handlers start a process: formatters have a 4 ms budget and event and route handlers
-50 ms, so they read only state the asynchronous project probe already cached.
+The window half also plugs into Tern's chrome, events and routes. Formatters have a 4 ms budget
+and event and route handlers 50 ms, so they read only state the asynchronous project probe already
+cached. The probe itself (`<broker> project-root <path>`) starts on `focus`, `cwd` and
+`command_finished`, at most once per pane and path every 30 s; after a command a "no project"
+answer is asked again (the command may have created `elide.pkl`). Without a configured broker on
+disk no probe starts; palette commands then say what is missing.
 
 - **Chrome.** `tern.chrome.tab_title` names a tab after the detected project of its
   focused pane, unless the user named the tab. `tern.chrome.program_icon("elide",
   "bolt")` gives `elide` panes their own icon. The status segment opens the project
   menu on click (`plugin.elide.project`) and is followed by the last `elide test`,
-  `build` or `run` outcome in that pane.
+  `build` or `run` outcome in that pane, while the pane is still in the project it ran in.
 - **Events.** `command_finished` recognises `elide test|build|run` lines (leading
   `VAR=value` words skipped, quoting not interpreted), records the outcome and calls
   `tern.chrome.refresh()`. A failing `elide test` (status 1 to 127) toasts "Tests

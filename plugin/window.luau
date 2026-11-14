@@ -54,8 +54,9 @@ local function launcher(config, kind)
   return { runtime_path(config), "--ignore-version", "tern", kind }
 end
 
--- Whether a runtime executable supports `elide tern`, by path. An older runtime would
--- otherwise resolve `tern` as a project script and run something unrelated.
+-- Runtime executables known to support `elide tern`, by path. An older runtime would otherwise
+-- resolve `tern` as a project script and run something unrelated. Only a yes is kept: a runtime
+-- updated in place is asked again.
 local supports_tern = {}
 
 -- Runs `open(cx, argv)` once the runtime is known to host surfaces. Explicit launcher
@@ -65,24 +66,29 @@ local function host(cx, config, kind, argv, open, opened)
     return open(cx, argv)
   end
   local runtime = argv[1]
-  local known = supports_tern[runtime]
-  if known == true then
+  if supports_tern[runtime] then
     return open(cx, argv)
-  elseif known == false then
-    cx:toast("error", "The configured runtime has no `elide tern`; update it or set a launcher in plugin/config.json.")
-    return nil
   end
   local ok, problem = pcall(function()
     tern.process.run(
       { runtime, "--ignore-version", "--no-color", "--help-all" },
       { timeout_ms = 15000 },
       function(result, current)
-        -- Cache only a clean exit; a timeout (status -1) or crash is probed again next time.
-        if result.status == 0 then
-          supports_tern[runtime] = string.find(result.stdout or "", "[\r\n]%s+tern%s+") ~= nil
+        -- A clean exit answers; a timeout (status -1) or crash says nothing about support.
+        local answered = result.status == 0
+        if answered and string.find(result.stdout or "", "[\r\n]%s+tern%s+") ~= nil then
+          supports_tern[runtime] = true
         end
-        if current and supports_tern[runtime] == nil then
-          current:toast("error", "Could not probe the runtime; try again.", runtime)
+        if current and not supports_tern[runtime] then
+          if answered then
+            current:toast(
+              "error",
+              "The configured runtime doesn't support `elide tern`; update it or set a launcher in plugin/config.json.",
+              runtime
+            )
+          else
+            current:toast("error", "Could not probe the runtime; try again.", runtime)
+          end
           if opened then
             opened(current, nil)
           end
@@ -126,12 +132,10 @@ local function terminal(cx, argv, cwd, target, hold, dir)
   end
   local spec = { cwd = cwd, command = "exec " .. line }
   local pane
-  if target then
-    if not cx.session:pane(target) then
-      return nil
-    end
+  if target and cx.session:pane(target) then
     pane = cx.layout:split(target, dir or "right", spec, { focus = true })
   else
+    -- The pane it was asked beside closed while the launch got ready: a tab of its own instead.
     pane = cx.layout:new_tab(spec)
   end
   if not pane then
@@ -179,8 +183,9 @@ local function launch(cx, language, context, target, opened)
   end, opened)
 end
 
--- Whether `<runtime> <command>` takes `--surface=inline|screen|auto`, by runtime and command:
--- `elide test|build|run --help` list the option on runtimes that have it.
+-- Runtimes and commands known to take `--surface=inline|screen|auto`: `elide test|build|run --help`
+-- list the option on runtimes that have it. Only a yes is kept: a runtime updated in place is asked
+-- again.
 local surface_support = {}
 
 -- Runs `run(cx, supported, later)` once `<runtime> <command> --surface` support is known;
@@ -188,8 +193,8 @@ local surface_support = {}
 -- called from the probe's callback, where its result reaches no caller.
 local function with_surface(cx, runtime, command, run)
   local key = runtime .. "\0" .. command
-  if surface_support[key] ~= nil then
-    return run(cx, surface_support[key])
+  if surface_support[key] then
+    return run(cx, true)
   end
   local ok = pcall(function()
     tern.process.run(
@@ -199,9 +204,8 @@ local function with_surface(cx, runtime, command, run)
         local text = "\n" .. (result.stdout or "") .. "\n" .. (result.stderr or "")
         -- An option line (`  --surface <MODE>  …`), not a mention in prose.
         local supported = result.status == 0 and string.find(text, "\n%s+%-%-surface[%s=<%[]") ~= nil
-        -- Only a clean exit answers for good; a timeout or crash is asked again next time.
-        if result.status == 0 then
-          surface_support[key] = supported
+        if supported then
+          surface_support[key] = true
         end
         if current then
           run(current, supported, true)
@@ -865,14 +869,29 @@ local function project_menu(context, cx)
   end)
 end
 
-local function detect(cx, callback, explicit)
+-- Detects the project of the focused pane (or `explicit`) and calls `callback` with it. Without a
+-- callback (focus, cwd, a finished command) it stays quiet and reuses a recent answer for the same
+-- path; `recheck` asks again after a "no project" answer, since a command may have created one.
+local function detect(cx, callback, explicit, recheck)
   local context = explicit or project.context(cx)
-  local config = configuration()
-  if context and config then
-    project.probe(context, path(config.broker or "../dist/elide-tern-broker"), callback)
-  elseif callback then
-    cx:toast("info", "Open a local project directory first.")
+  local config = configuration(if callback then cx else nil)
+  if not config then
+    return
   end
+  if not context then
+    if callback then
+      cx:toast("info", "Open a local project directory first.")
+    end
+    return
+  end
+  local broker = path(config.broker or "../dist/elide-tern-broker")
+  if not tern.fs.exists(broker) then
+    if callback then
+      cx:toast("error", "No broker at the `broker` path in plugin/config.json; run `make build`.", broker)
+    end
+    return
+  end
+  project.probe(context, broker, callback, recheck)
 end
 
 tern.command({
@@ -1566,11 +1585,14 @@ end)
 tern.on("window_start", function(cx)
   detect(cx)
 end)
-for _, event in { "focus", "cwd", "command_finished" } do
+for _, event in { "focus", "cwd" } do
   tern.on(event, function(_, cx)
     detect(cx)
   end)
 end
+tern.on("command_finished", function(_, cx)
+  detect(cx, nil, nil, true)
+end)
 tern.on("pane_closed", function(ev)
   project.remove(ev.pane)
 end)

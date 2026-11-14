@@ -1,8 +1,11 @@
 local records = {}
--- The last `elide test|build|run` each pane finished, for the status line.
+-- The last `elide test|build|run|install` each pane finished, with the project it ran in, for the
+-- status line.
 local results = {}
 local local_host = false
 local M = {}
+-- How long an answered probe stands for detection nobody asked for (focus and cwd changes).
+local FRESH_MS = 30000
 
 function M.context(cx)
   local_host = cx.hosts:current().kind == "local"
@@ -38,10 +41,16 @@ function M.cached(cx)
   return local_host and record and record.project or nil
 end
 
-function M.probe(context, broker, callback)
+-- Asks the broker which project `context.path` lies in. Detection nobody asked for (no `callback`)
+-- skips a path whose probe runs, or was answered under `FRESH_MS` ago (`recheck`: unless the answer
+-- was "no project"), so focus and shell activity do not spawn a process each time.
+function M.probe(context, broker, callback, recheck)
   local previous = records[context.pane]
-  if previous and previous.path == context.path and previous.pending and not callback then
-    return
+  if previous and previous.path == context.path and not callback then
+    local fresh = previous.answered and tern.now() - previous.answered < FRESH_MS
+    if previous.pending or (fresh and not (recheck and not previous.project)) then
+      return
+    end
   end
   local record = {
     path = context.path,
@@ -55,6 +64,7 @@ function M.probe(context, broker, callback)
         return
       end
       record.pending = false
+      record.answered = tern.now()
       record.project = nil
       if result.status == 0 then
         local decoded, project = pcall(tern.json.decode, result.stdout)
@@ -91,11 +101,14 @@ function M.roots()
   return roots
 end
 
--- Records how an `elide <command>` line ended in `pane`; the caller refreshes the chrome.
--- `detail`, when given, follows the outcome after a middle dot ("Build failed · 3 errors").
--- A nil `command` forgets the last outcome: the line's end said nothing about it.
+-- Records how an `elide <command>` line ended in `pane`, in the project the pane is in; the
+-- caller refreshes the chrome. `detail`, when given, follows the outcome after a middle dot
+-- ("Build failed · 3 errors"). A nil `command` forgets the last outcome: the line's end said
+-- nothing about it.
 function M.finished(pane, command, status, detail)
-  results[pane] = if command then { command = command, status = status, detail = detail } else nil
+  results[pane] = if command
+    then { command = command, status = status, detail = detail, root = M.root_of(pane) }
+    else nil
 end
 
 -- The root of the project detected for `pane`, or nil.
@@ -121,9 +134,11 @@ local OUTCOMES = {
   },
 }
 
-local function outcome(pane)
+-- The last outcome in `pane`, when it ran in project `root`: after a `cd` into another project
+-- the bar does not show the old project's outcome under the new one's name.
+local function outcome(pane, root)
   local result = results[pane]
-  local labels = result and OUTCOMES[result.command]
+  local labels = result and result.root == root and OUTCOMES[result.command]
   if not labels then
     return nil
   end
@@ -151,7 +166,7 @@ function M.status(pane)
       { text = record.project.name or "Project", icon = "folder", command = "plugin.elide.project" },
       { text = "Workspace", icon = "folder", command = "plugin.elide.workspace" },
     }
-    local last = outcome(pane.pane)
+    local last = outcome(pane.pane, record.project.root)
     if last then
       table.insert(segments, last)
     end
