@@ -395,6 +395,34 @@ local function run_project(cx, context, target, opened, bottom)
   return false
 end
 
+-- The page each project's Build, Run and Install opened from the project menu or the palette, by
+-- root and command (`true` while it opens): asking again focuses it while it is open, instead of
+-- starting a second, concurrent one.
+local action_panes = {}
+
+local function project_action(cx, context, command)
+  local key = context.root .. "\0" .. command
+  local pane = action_panes[key]
+  if pane == true then
+    return
+  end
+  local info = type(pane) == "number" and cx.session:pane(pane)
+  if info and info.exited == nil then
+    cx.layout:focus(pane)
+    return
+  end
+  action_panes[key] = true
+  local function opened(_, page)
+    action_panes[key] = page or nil
+  end
+  local result = if command == "run"
+    then run_project(cx, context, nil, opened)
+    else runtime_action(cx, context, command, nil, opened)
+  if result ~= false then
+    action_panes[key] = result or nil
+  end
+end
+
 -- Opens the `elide.source` block on `path` (absolute, inside `root`), beside `target` or the
 -- focused pane. Returns its pane, or nil with a toast.
 local function open_source(cx, path, root, line, target)
@@ -825,6 +853,8 @@ local function project_menu(context, cx)
     return
   end
   local items = {
+    { label = "Build project", value = "build", icon = "wrench" },
+    { label = "Run project", value = "run", icon = "run" },
     { label = "Run tests", value = "test", icon = "play" },
     { label = "Install dependencies", value = "install", icon = "download" },
     { label = "Open debugger", value = "debug", icon = "bug" },
@@ -850,8 +880,8 @@ local function project_menu(context, cx)
     elseif current and item then
       if item.value == "test" then
         launch_job(current, "test", context.root, context.root)
-      elseif item.value == "install" then
-        runtime_action(current, context, "install")
+      elseif item.value == "build" or item.value == "run" or item.value == "install" then
+        project_action(current, context, item.value)
       elseif item.value == "debug" then
         launch_debug(current, context)
       elseif item.value == "source" then
@@ -967,13 +997,29 @@ tern.command({
   run = function(cx)
     detect(cx, function(context, current)
       if context then
-        runtime_action(current, context, "install")
+        project_action(current, context, "install")
       else
         current:toast("info", "Open a local project directory first.")
       end
     end)
   end,
 })
+for _, action in { { "build", "Build project", "wrench" }, { "run", "Run project", "run" } } do
+  tern.command({
+    id = action[1],
+    title = action[2],
+    icon = action[3],
+    run = function(cx)
+      detect(cx, function(context, current)
+        if context then
+          project_action(current, context, action[1])
+        else
+          current:toast("info", "Open a local project directory first.")
+        end
+      end)
+    end,
+  })
+end
 tern.command({
   id = "debug",
   title = "Debug project source",

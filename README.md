@@ -392,7 +392,10 @@ compiler's errors and warnings as cards grouped by file, with counts and an **Op
 each location; `elide test --reporter=tap` shows a pass/fail summary with a table of results.
 Both fall back to the raw output when nothing parses or the output is very large. After a
 typed `elide build`, the status bar reads, for example, "Build failed · 3 errors, 1 warning",
-and the workspace's Build button opens the full Build page when the runtime has one.
+and the workspace's Build button opens the full Build page when the runtime has one, as do
+**Build project** and **Run project** in the project menu and the palette. Choosing Build, Run or
+Install dependencies again while its page for that project is open focuses that page instead of
+starting another. On a runtime without these pages the plain output stays until Enter.
 
 `elide install` in a Tern terminal draws Elide's Install surface on runtimes that have one: a
 row per ecosystem with its packages and how many came from the cache, a bar per download, and

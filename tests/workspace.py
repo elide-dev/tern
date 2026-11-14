@@ -306,6 +306,21 @@ sleep 300
             ctl('click', '[data-role="project-run"]')
             assert wait(lambda: launched(str(fake_runtime) + ' --ignore-version run --surface=screen'))
             print('PASS: Run opens the full Run page', flush=True)
+            # Build from the palette, twice: the second focuses the first one's page instead of
+            # starting another build.
+            build_page = str(fake_runtime) + ' --ignore-version build --surface=screen'
+            def count(prefix):
+                listing = subprocess.run(['ps', '-axo', 'args'], capture_output=True, text=True).stdout
+                return sum(prefix in line for line in listing.splitlines())
+            builds = count(build_page)
+            lua('cx.layout:focus(' + str(other_editor) + ')')
+            ctl('plugins', 'run', 'plugin.elide.build')
+            wait(lambda: count(build_page) == builds + 1)
+            time.sleep(2)
+            ctl('plugins', 'run', 'plugin.elide.build')
+            time.sleep(4)
+            assert count(build_page) == builds + 1, 'a second Build started another build'
+            print('PASS: Build from the palette, twice, opens one page', flush=True)
             # The toolbar sits above the editor. When the editor closes it takes the editor's rows, then
             # shrinks back under its height cap; it closes with the tab's last other pane.
             lua('cx.docs:open(' + json.dumps(str(third / 'elide.pkl')) + ', {how="tab"})')
