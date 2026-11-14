@@ -2479,6 +2479,10 @@ end
 
 -- Keys --------------------------------------------------------------------------------------------
 
+-- What Option+1…4 types on a macOS US layout: Tern names the composed character, not the digit
+-- (as Option+Z arrives as Ω), so the overlay shortcuts match these too.
+local OPTION_DIGITS = { ["¡"] = 1, ["™"] = 2, ["£"] = 3, ["¢"] = 4 }
+
 local function field_keys(state, cx, key)
   local name = key.name
   local field = state.focus == "find" and state.find or state.go
@@ -2658,9 +2662,9 @@ local function key_handler(state, key, cx)
     focus(state, cx, "go")
   elseif key.alt and not key.meta and (name == "z" or name == "Ω") then
     state.wrap = not state.wrap
-  elseif key.alt and not key.meta and string.find(name, "^[1-4]$") then
+  elseif key.alt and not key.meta and (string.find(name, "^[1-4]$") or OPTION_DIGITS[name]) then
     local modes = overlay_modes(state)
-    set_mode(state, cx, modes[tonumber(name)] or state.mode)
+    set_mode(state, cx, modes[OPTION_DIGITS[name] or tonumber(name)] or state.mode)
   elseif (cmd and name == "z" and not key.shift) and state.focus == "editor" then
     edited(state, buffer.undo(state.buf))
   elseif ((cmd and name == "z" and key.shift) or (key.ctrl and name == "y")) and state.focus == "editor" then
