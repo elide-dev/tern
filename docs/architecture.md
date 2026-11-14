@@ -306,8 +306,8 @@ disk no probe starts; palette commands then say what is missing.
   focused pane, unless the user named the tab. `tern.chrome.program_icon("elide",
   "bolt")` gives `elide` panes their own icon. The status segment opens the project
   menu on click (`plugin.elide.project`) and is followed by the last `elide test`,
-  `build` or `run` outcome in that pane, while the pane is still in the project it ran in.
-- **Events.** `command_finished` recognises `elide test|build|run` lines (leading
+  `build`, `run` or `install` outcome in that pane, while the pane is still in the project it ran in.
+- **Events.** `command_finished` recognises `elide test|build|run|install` lines (leading
   `VAR=value` words skipped, quoting not interpreted), records the outcome and calls
   `tern.chrome.refresh()`. A failing `elide test` (status 1 to 127) toasts "Tests
   failed" with the subject words, or the pane's directory when there are none;
@@ -471,8 +471,8 @@ Offsets are UTF-16 code units.
   checks row 1 sits half a row pitch below the editor's top). The block's line height is about 13%
   over Tern's (`--sf-lh: calc(1em * 1.35)` on this editor, 17.55 px against 15.5 px at 13 px);
   `maxLines` counts lines of that height, so the block divides the rows it has by 1.35 / 1.192 and keeps half a line for the top padding, and
-  the harness checks every gutter row sits on its code row. ⌥1 to ⌥3 pick an available overlay (in the desktop harness they did not
-  reach the block, presumably taken by window bindings, so the harness uses the switch).
+  the harness checks every gutter row sits on its code row. ⌥1 to ⌥4 pick an available overlay. macOS delivers
+  Option+digit as the character the layout composes (¡ ™ £ ¢ on a US layout), which the block matches too.
 - **Stylesheet.** `plugin/styles/source.css` (the manifest's `styles`) is scoped to
   `[data-surface="plugin.elide.source"]` and colored only with Tern's tokens; it is the design
   guide's sanctioned escape hatch where no prop exists. Tern's stylesheet op rejects what it does not
@@ -541,7 +541,7 @@ Offsets are UTF-16 code units.
   `coverage: true`) and polls each second until it finishes; F6 refreshes the marks, keeping the
   text the run was anchored to. Tints stay when newer test runs push their run out of the broker's
   last four (the tooltip says so); incomplete coverage reads "N% · incomplete".
-- **Debug.** While active the block polls `project_debug_snapshot` (`compact`) every 500 ms and
+- **Debug.** While the Debug overlay is open and attached, with or without a target, the block polls `project_debug_snapshot` (`compact`) every 500 ms and
   re-renders only when the revision, pending flag, controller or error changes; a failed poll shows
   "Debugger error" until the next one answers, a command's error until the next stop. The stop is a `▶`
   `accent` sign, its line number in `accent`, the line's `accent` band and a ` paused` note; a
@@ -590,7 +590,7 @@ always full-screen. Outside one it is `<runtime> test --surface=screen <subject>
 when the runtime takes `--surface`; an older runtime gets no flag.
 
 The window half reads `<runtime> --ignore-version --no-color <command> --help` once per runtime
-and command (`test`, `build`) and passes `--surface=screen` only when an option line lists
+and command (`test`, `build`, `run`, `install`) and passes `--surface=screen` only when an option line lists
 `--surface`; the answer is cached for the window. Runtimes built before the option existed
 print no such line and get no flag.
 
