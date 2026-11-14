@@ -488,7 +488,7 @@ local function fail(state, cx, problem)
   cx:render()
 end
 
-local load_coverage, poll_debug, overlay_modes
+local load_coverage, poll_debug, overlay_modes, edited
 
 local function enter(state, cx)
   if state.attach ~= "ready" then
@@ -700,7 +700,12 @@ function load_coverage(state, cx, force)
   end
   local run = coverage_run(state)
   if not run then
-    coverage.state, coverage.run = "missing", nil
+    -- Newer test runs pushed the measured run out of the snapshot: tints already drawn stay.
+    if coverage.state == "ready" then
+      coverage.evicted = true
+    else
+      coverage.state, coverage.run = "missing", nil
+    end
     return
   end
   local summary = type(run.coverage) == "table" and run.coverage or {}
@@ -717,7 +722,11 @@ function load_coverage(state, cx, force)
   if not force and coverage.run == run.id and (coverage.state == "ready" or coverage.state == "loading") then
     return
   end
+  -- Refreshing the run already shown keeps the text it was anchored to: the disk may have changed
+  -- since, and re-anchoring would move its tints onto other lines.
+  local anchored = coverage.lines_run == run.id
   coverage.state, coverage.run, coverage.error, coverage.stale = "loading", run.id, nil, false
+  coverage.evicted = false
   local token = {}
   coverage.token = token
   local function current()
@@ -751,13 +760,15 @@ function load_coverage(state, cx, force)
         return
       end
       coverage.marks, coverage.covered, coverage.total = source.coverage(found)
-      coverage.complete = page.complete ~= false
+      coverage.complete = page.complete ~= false and summary.state ~= "incomplete"
       coverage.state = "ready"
-      -- Measured against the file on disk. Marks follow later edits by line; lines whose text
-      -- differs from the measured text (unsaved edits included) draw dimmed.
-      coverage.lines = buffer.new(state.disk).lines
-      -- Anchored to the disk text it measured; a dirty buffer's lines map through what changed.
-      state.buf.maps.coverage = source.line_map(coverage.lines, state.buf.lines)
+      if not anchored then
+        -- Measured against the file on disk. Marks follow later edits by line; lines whose text
+        -- differs from the measured text (unsaved edits included) draw dimmed.
+        coverage.lines, coverage.lines_run = buffer.new(state.disk).lines, run.id
+        -- Anchored to the disk text it measured; a dirty buffer's lines map through what changed.
+        state.buf.maps.coverage = source.line_map(coverage.lines, state.buf.lines)
+      end
       check_identity(state, cx, file.sourceDigest, token)
       cx:render()
     end)
@@ -875,6 +886,9 @@ local function absorb_debug(state, cx, snap)
     return
   end
   local target = snap.debug
+  if target.generation ~= debug.generation or target.stop_epoch ~= debug.epoch then
+    debug.error = nil
+  end
   if target.generation ~= debug.generation then
     -- A target launched elsewhere ran the file on disk; anchor its lines there, through any unsaved
     -- edits.
@@ -941,13 +955,17 @@ function poll_debug(state, cx)
       end
       local before = debug.signature
       if err then
-        debug.error = tostring(err)
+        -- A failed poll says so until the next one answers; command errors stay until the stop
+        -- they were sent at is over.
+        debug.poll_error = tostring(err)
       else
+        debug.poll_error = nil
         absorb_debug(state, cx, snap)
       end
       local target = debug.snap and debug.snap.debug
       debug.signature = table.concat({
         tostring(debug.error),
+        tostring(debug.poll_error),
         target and tostring(target.revision) or "-",
         target and tostring(target.pending) or "-",
         debug.snap and tostring(debug.snap.controller) or "-",
@@ -1126,13 +1144,11 @@ local function reload(state, text)
   -- Only the changed middle is replaced, so breakpoints and overlay marks above and below it keep
   -- their lines.
   local edit = buffer.reload(buf, text)
-  if edit then
-    state.breakpoints = buffer.remap(state.breakpoints, edit)
-  end
   buf.cursor = buffer.clamp(buf, cursor)
   state.disk = text
   buffer.mark_saved(buf)
-  compose.document(state.pane, state.path, nil)
+  -- As any edit: breakpoints follow it, and find results and cached views of the text refresh.
+  edited(state, edit)
 end
 
 -- Diagnostics ---------------------------------------------------------------------------------
@@ -1611,7 +1627,7 @@ local function go_to(state, cx)
 end
 
 -- After an edit: breakpoints follow their lines, find results follow the text.
-local function edited(state, edit)
+function edited(state, edit)
   -- Every edit, undo and redo passes here; cached views of the text key on this. (Not
   -- `state.revision`: that is the project snapshot revision the lease renewal sends.)
   state.edits = (state.edits or 0) + 1
@@ -1731,6 +1747,10 @@ local function lines_view(state, starts)
         if point and not point.verified and active(debug) then
           glyph, tone, number = "○", "warning", "warning"
           note = { ui.span(" " .. (type(point.message) == "string" and point.message or "unverified"), "muted") }
+        elseif not point and active(debug) then
+          -- Set here only: the running target was launched without it and will not stop there.
+          glyph, tone, number = "○", "muted", "muted"
+          note = { ui.span(" not in the running target", "muted") }
         else
           glyph, tone, number, tint = "●", "error", "error", "error"
         end
@@ -1841,9 +1861,15 @@ local function overlay_state(state)
           "muted",
           "The file changed since this run measured it; its tints are muted."
       end
-      return percent .. "% covered",
-        coverage_tone(percent),
-        coverage.covered .. " of " .. coverage.total .. " measured lines"
+      local detail = coverage.covered .. " of " .. coverage.total .. " measured lines"
+      if coverage.evicted then
+        detail ..= ". Newer test runs replaced the run these tints came from; run coverage again to refresh them."
+      end
+      if not coverage.complete then
+        -- Part of the run's coverage was not collected.
+        return percent .. "% · incomplete", "warning", detail .. ". The run's coverage is incomplete."
+      end
+      return percent .. "% covered", coverage_tone(percent), detail
     elseif s == "running" then
       return "Running tests…", "accent"
     elseif s == "loading" or s == "idle" then
@@ -1862,8 +1888,8 @@ local function overlay_state(state)
     return nil
   end
   local debug = state.debug
-  if debug.error then
-    return "Debugger error", "error", debug.error
+  if debug.error or debug.poll_error then
+    return "Debugger error", "error", debug.error or debug.poll_error
   elseif debug.launching then
     return "Launching…", "accent", "Launching " .. tostring(state.relative)
   elseif debug.elsewhere then

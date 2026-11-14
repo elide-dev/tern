@@ -590,12 +590,26 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         untinted = lambda line: not any(tinted(t, line) for t in ['success', 'error', 'warning', 'muted', 'success.sf-t-dim'])
         check('coverage refreshed while dirty follows the inserted line', wait(lambda: tinted('error', 6)
               and untinted(2), 30), tree('.sf-editor .sf-t-mark'))
-        for _ in range(12):
-            if not nodes('[data-role="source-modified"]'):
+        # Refreshing the same run after the edits are saved keeps its tints on the lines it measured
+        # (muted when the artifact's digest shows the file changed), rather than re-anchoring them to
+        # the new disk text, which would put measured line 2's tint on the inserted line 2.
+        ctl('key', 'Meta+s')
+        wait(lambda: not nodes('[data-role="source-modified"]'), 10)
+        ctl('key', 'F6')
+        time.sleep(2)
+        check('refresh after a save keeps the measured lines', wait(lambda: untinted(2) and not untinted(6), 30),
+              tree('.sf-editor .sf-t-mark'))
+        # Undo groups typing by word, so '/* a */ ' takes several steps; back to the measured text.
+        def measured_text():
+            text = editor_text()
+            return '/*' not in text and '// above' not in text
+        for _ in range(16):
+            if measured_text():
                 break
             ctl('key', 'Meta+z')
             time.sleep(.3)
-        check('undo back to the saved text', wait(lambda: '/* a */' not in editor_text() and not nodes('[data-role="source-modified"]'), 10), editor_text())
+        ctl('key', 'Meta+s')
+        check('undo back to the saved text', wait(lambda: measured_text() and not nodes('[data-role="source-modified"]'), 10), editor_text())
         # Edits must not disturb the project lease: the next renewal (every 30 s) must still succeed.
         # A counter that once shared its name with the snapshot revision broke it after an edit.
         time.sleep(35)
