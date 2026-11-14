@@ -592,17 +592,16 @@ function M.declared(root)
   return false
 end
 
--- The Run whose device pane waits for its page's build: `{ plan, before = pane ids before the
--- page's split, expires, page?, plain? }`, `plain` being when a page still without a surface
--- counts as plain output.
+-- The Run whose device pane is armed but whose page has not opened yet: `{ plan, before = pane ids
+-- before the page's split, expires }`. Once its page opens, the follow watches that page on its own
+-- (`page`, and `plain`: when a page still without a surface counts as plain output), and another
+-- Run can arm meanwhile.
 local following
 
--- Opens the waiting Run's device pane in the place of a Compose preview in the editor's tab
+-- Opens `follow`'s device pane in the place of a Compose preview in the editor's tab
 -- (`plan.beside`, set by the Run), closing every other one, else right of the editor; without
 -- one, right of the page.
-local function reveal(cx)
-  local follow = following
-  following = nil
+local function reveal(cx, follow)
   local plan = follow.plan
   if plan.display and cx.session:pane(follow.page) then
     local beside = plan.beside and cx.session:pane(plan.beside) and plan.beside or follow.page
@@ -786,33 +785,30 @@ local function shown(cx, pane, id)
   return type(cx.session:surface(pane, { root = id, depth = 0 })) == "table"
 end
 
--- Polls the waiting Run's page until its build is done: the Run page keys its bar `program` past
--- a finished build, the program (an Android deploy) running. A page that shows a summary instead
--- ended without one, and so did a pane that closed or exited; neither gets the device pane. A
--- runtime without the page prints plain output, with nothing to wait for.
-local function watch(cx)
-  local follow = following
+-- Polls a Run's page until its build is done: the Run page keys its bar `program` past a finished
+-- build, the program (an Android deploy) running. A page that shows a summary instead ended
+-- without one, and so did a pane that closed or exited; neither gets the device pane. A runtime
+-- without the page prints plain output, with nothing to wait for.
+local function watch(cx, follow)
   local info = cx.session:pane(follow.page)
   if not info or info.exited ~= nil then
-    following = nil
     return
   end
   local read = cx.session:read(follow.page, { lines = 1, max_chars = 1 })
   if type(read) == "table" and read.surface then
     if shown(cx, follow.page, "main.activity.program") then
-      reveal(cx)
+      reveal(cx, follow)
       return
     elseif shown(cx, follow.page, "main.activity.summary") then
-      following = nil
       return
     end
   elseif os.clock() >= follow.plain then
-    reveal(cx)
+    reveal(cx, follow)
     return
   end
   tern.timer(500, function(current)
-    if current and following == follow then
-      watch(current)
+    if current then
+      watch(current, follow)
     end
   end)
 end
@@ -821,16 +817,16 @@ end
 -- open) disarms it.
 function M.followed(cx, pane)
   local follow = following
-  if not follow or follow.page or (pane and follow.before[pane]) then
+  if not follow or (pane and follow.before[pane]) then
     return
   end
+  following = nil
   if not pane or os.clock() >= follow.expires then
-    following = nil
     return
   end
   -- The Run page opens its surface as it starts; a pane still without one is plain output.
   follow.page, follow.plain = pane, os.clock() + 3
-  watch(cx)
+  watch(cx, follow)
 end
 
 -- Markers the helper leaves when an Elide command boots an emulator through the launcher the
