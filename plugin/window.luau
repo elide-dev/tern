@@ -1078,15 +1078,20 @@ local function build_counts(report)
   return counts and diagnostics.phrase(counts.errors, counts.warnings, counts.notes) or nil
 end
 
--- "12 packages, 3 downloaded" from an install's report, or nil.
+-- "12 packages, 3 downloaded" from an install's report, or nil. Downloads count packages, as the
+-- page does; a runtime without `downloaded_packages` reports files only.
 local function install_detail(report)
   local packages = type(report) == "table" and report.packages or nil
   if type(packages) ~= "number" or packages <= 0 then
     return nil
   end
   local text = packages .. " package" .. (if packages == 1 then "" else "s")
-  if type(report.downloads) == "number" and report.downloads > 0 then
-    text ..= ", " .. report.downloads .. " downloaded"
+  local downloaded = report.downloaded_packages
+  if type(downloaded) ~= "number" then
+    downloaded = report.downloads
+  end
+  if type(downloaded) == "number" and downloaded > 0 then
+    text ..= ", " .. downloaded .. " downloaded"
   end
   return text
 end
