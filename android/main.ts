@@ -165,7 +165,7 @@ async function main(args: Args): Promise<void> {
     case "start": {
       const avd = selectedName();
       const started = await sdk.start(avd, undefined, args.held);
-      if (args.announce) await announceStart(args.announce, avd, process.env.TERN_PANE);
+      if (args.announce) await announceStart(args.announce, avd, process.env.TERN_PANE, root);
       result = { message: started.serial ? `${avd} is running.` : `${avd} is starting.`, name: avd, ...started };
       break;
     }

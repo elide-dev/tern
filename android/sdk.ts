@@ -335,17 +335,18 @@ export async function lockHolder(lock: string): Promise<number | undefined> {
 }
 
 /**
- * Leaves a marker in `directory` saying AVD `name` was started for Tern pane `pane` (the
- * `TERN_PANE` of the command that asked): the window showing that pane opens the device pane
- * beside it (`plugin/lib/android.luau`), however the command was typed, wrapped or re-run. No
- * pane, no marker. Returns the marker's path. `time` is in Unix seconds.
+ * Leaves a marker in `directory` saying AVD `name` was started from SDK `sdk` for Tern pane
+ * `pane` (the `TERN_PANE` of the command that asked): the window showing that pane opens the
+ * device pane beside it (`plugin/lib/android.luau`), however the command was typed, wrapped or
+ * re-run, and lists devices through the same SDK. No pane, no marker. Returns the marker's path.
+ * `time` is in Unix seconds.
  */
-export async function announceStart(directory: string, name: string, pane: string | undefined, now = Date.now()): Promise<string | undefined> {
+export async function announceStart(directory: string, name: string, pane: string | undefined, sdk: string, now = Date.now()): Promise<string | undefined> {
   if (!pane || !/^[1-9]\d{0,15}$/.test(pane)) return undefined;
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const marker = path.join(directory, `${now}-${process.pid}-${validateName(name)}.json`);
   // Written aside and renamed, so a reader never sees half a marker.
-  await writeFile(`${marker}.tmp`, JSON.stringify({ name, pane: Number(pane), time: Math.floor(now / 1000) }), { mode: 0o600 });
+  await writeFile(`${marker}.tmp`, JSON.stringify({ name, pane: Number(pane), sdk, time: Math.floor(now / 1000) }), { mode: 0o600 });
   await rename(`${marker}.tmp`, marker);
   return marker;
 }

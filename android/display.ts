@@ -354,11 +354,12 @@ export async function runDisplay(title: string, connect: Connect): Promise<void>
     } else status(`Terminal rejected a frame: ${detail}`);
     pump();
   };
+  // Streams frames at the current box size; false when that size already streams.
   const subscribe = () => {
-    if (!geometry || stopping || !device) return;
+    if (!geometry || stopping || !device) return false;
     const box = area();
     const size = `${box.width}x${box.height}`;
-    if (size === streamSize) return;
+    if (size === streamSize) return false;
     streamSize = size;
     device.stream(box.width, box.height, next => {
       if (stopping) return;
@@ -372,6 +373,7 @@ export async function runDisplay(title: string, connect: Connect): Promise<void>
       frame = next;
       pump();
     });
+    return true;
   };
 
   // ── Input ──────────────────────────────────────────────────────────────────────
@@ -547,14 +549,24 @@ export async function runDisplay(title: string, connect: Connect): Promise<void>
   const onData = (chunk: Buffer) => { pending += decoder.decode(chunk, { stream: true }); parse(); };
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────────
+  let resizing: Timer | undefined;
   const onResize = () => {
     out(`${ESC}[16t`);
-    setTimeout(() => {
+    // Dragging a divider sends a burst of resizes: redraw once, after the last.
+    clearTimeout(resizing);
+    resizing = setTimeout(() => {
+      resizing = undefined;
       if (!geometry || stopping) return;
       geometry = { ...geometry, cols: process.stdout.columns, rows: process.stdout.rows };
       hovered = pressed = undefined;
+      const last = drawn;
       redraw();
-      subscribe();
+      // The same box size streams on and sends nothing until the screen changes: draw the last
+      // frame again rather than leave the pane blank.
+      if (!subscribe() && last) {
+        frame ??= last;
+        pump();
+      }
     }, 80);
   };
   let hungUp = false;

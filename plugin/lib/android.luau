@@ -2,6 +2,7 @@ local ui = tern.ui
 local M = {}
 local entries = {}
 -- Device panes by serial: `{pane, name, physical}`, kept in kv so a plugin reload still knows them.
+-- Each window keeps its own (pane ids are per window): `DISPLAYS .. ":" .. window key`.
 local displays = {}
 local DISPLAYS = "android:displays"
 local configuration, plugin_path, runtime_path
@@ -293,11 +294,15 @@ local function display_key(device)
   return device.physical and device.serial or ("avd:" .. device.name)
 end
 
+local function displays_key(cx)
+  return DISPLAYS .. ":" .. cx:window_key()
+end
+
 -- Records `device`'s pane, closes the panes it replaces (`closing`) and focuses it.
 local function finish(cx, device, pane, closing)
   displays[display_key(device)] =
     { pane = pane, name = device.name, serial = device.serial, physical = device.physical == true }
-  tern.kv.set(DISPLAYS, displays)
+  tern.kv.set(displays_key(cx), displays)
   for _, closed in closing do
     if closed ~= pane and cx.session:pane(closed) then
       cx.layout:close(closed)
@@ -837,9 +842,14 @@ local STARTED = tern.plugin.data .. "/android/started"
 local STARTED_SECONDS = 120
 
 -- Shows AVD `name` beside `pane` once adb lists its emulator and it advertises a display. It
--- registers seconds after `start --held` returns, hence `tries`, two seconds apart.
-local function show_started(cx, pane, name, tries)
-  request(cx, {}, "list", {}, function(current, value)
+-- registers seconds after `start --held` returns, hence `tries`, two seconds apart. `sdk` is the
+-- SDK the helper started it from, so the lookup asks the same adb.
+local function show_started(cx, pane, name, sdk, tries)
+  local arguments = {}
+  if type(sdk) == "string" and not (configuration() or {}).android_sdk then
+    arguments = { "--sdk", sdk }
+  end
+  request(cx, {}, "list", arguments, function(current, value)
     for _, avd in value.avds or {} do
       if avd.name == name and avd.serial and avd.embeddable then
         show(current, { name = name, serial = avd.serial }, nil, nil, pane, true)
@@ -849,11 +859,15 @@ local function show_started(cx, pane, name, tries)
     if tries > 1 then
       tern.timer(2000, function(fresh)
         if fresh and fresh.session:pane(pane) then
-          show_started(fresh, pane, name, tries - 1)
+          show_started(fresh, pane, name, sdk, tries - 1)
         end
       end)
     end
-  end, function() end)
+  end, function(current, message)
+    if current then
+      current:toast("error", "Could not show " .. name .. ": " .. tostring(message))
+    end
+  end)
 end
 
 -- Claims the markers naming a pane of this window, each second.
@@ -874,7 +888,7 @@ function M.watch_started(cx)
           pcall(tern.fs.remove, path)
         elseif cx.session:pane(marker.pane) then
           pcall(tern.fs.remove, path)
-          show_started(cx, marker.pane, marker.name, 30)
+          show_started(cx, marker.pane, marker.name, marker.sdk, 30)
         end
       end
     end
@@ -1043,7 +1057,7 @@ function M.install(config, path, runtime)
     for id, display in displays do
       if display.pane == event.pane then
         displays[id] = nil
-        tern.kv.set(DISPLAYS, displays)
+        tern.kv.set(displays_key(cx), displays)
         -- However the pane closed, an emulator it showed keeps running unless the user stops it.
         if not display.physical and display.name then
           offer_stop(cx, display.name)
@@ -1052,8 +1066,10 @@ function M.install(config, path, runtime)
     end
     tern.kv.set(key(cx, event.pane), nil)
   end)
-  displays = tern.kv.get(DISPLAYS) or {}
   local function restore(cx)
+    displays = tern.kv.get(displays_key(cx)) or {}
+    -- Before keys were per window, every window overwrote one shared record.
+    tern.kv.set(DISPLAYS, nil)
     for _, canvas in cx.canvas:list() do
       local saved = canvas.owner == tern.plugin.id and tern.kv.get(key(cx, canvas.pane))
       if saved and not entries[canvas.pane] then
@@ -1069,6 +1085,7 @@ function M.install(config, path, runtime)
         displays[id] = nil
       end
     end
+    tern.kv.set(displays_key(cx), displays)
   end
   tern.on("window_start", restore)
   tern.timer(0, restore)
