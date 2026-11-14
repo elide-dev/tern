@@ -5,7 +5,7 @@ import json
 import re
 import os
 from pathlib import Path
-from tern_config import config_dir
+from tern_config import config_dir, daemon_command
 import shutil
 import struct
 import subprocess
@@ -62,7 +62,7 @@ test("positive values", () => assert.equal(classify(1), "positive"));
             'TERN_PLUGIN_DATA': str(state / 'data'), 'TERN_DAEMON_SOCKET': str(state / 'daemon.sock'),
             'TERN_CONFIG_DIR': config_dir(state / 'config')}
         subprocess.run(['tern', 'plugin', 'link', str(package)], env=environment, check=True, stdout=log, stderr=log)
-        daemon = subprocess.Popen(['tern', 'daemon', '--socket', str(state / 'daemon.sock')], stdout=log, stderr=log, env=environment)
+        daemon = subprocess.Popen(daemon_command(state / 'daemon.sock'), stdout=log, stderr=log, env=environment)
         server = subprocess.Popen(['tern', '--control', str(socket), '--out', str(out), '--dir', str(project)],
             stdout=log, stderr=log, env=environment)
 

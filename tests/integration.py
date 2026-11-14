@@ -2,7 +2,7 @@
 project chrome and command_finished. Usage: python3 tests/integration.py --runtime /path/to/elide"""
 import argparse, json, os, shlex, shutil, subprocess, sys, tempfile, time, uuid
 from pathlib import Path
-from tern_config import config_dir
+from tern_config import config_dir, daemon_command
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
@@ -44,7 +44,7 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
            'TERN_DAEMON_SOCKET': str(state / 'daemon.sock'), 'TERN_CONFIG_DIR': config_dir(state / 'config')}
     out = base / 'out'; out.mkdir(); log = (out / 'tern.log').open('w')
     subprocess.run(['tern', 'plugin', 'link', str(package)], env=env, check=True, stdout=log, stderr=log)
-    daemon = subprocess.Popen(['tern', 'daemon', '--socket', str(state / 'daemon.sock')], stdout=log, stderr=log, env=env)
+    daemon = subprocess.Popen(daemon_command(state / 'daemon.sock'), stdout=log, stderr=log, env=env)
     sock = base / 'c.sock'
     server = subprocess.Popen(['tern', '--control', str(sock), '--out', str(out), '--dir', str(tapp / 'nested')],
                               stdout=log, stderr=log, env=env)

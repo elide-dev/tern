@@ -11,7 +11,7 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
-from tern_config import config_dir
+from tern_config import config_dir, daemon_command
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--runtime', required=True)
@@ -55,7 +55,7 @@ with tempfile.TemporaryDirectory(prefix='tar-', dir='/tmp') as temporary:
                    'TERN_DAEMON_SOCKET': str(state / 'daemon.sock'), 'TERN_CONFIG_DIR': config_dir(state / 'config')}
     with (out / 'tern.log').open('w') as log:
         subprocess.run([tern, 'plugin', 'link', str(package)], env=environment, check=True, stdout=log, stderr=log)
-        daemon = subprocess.Popen([tern, 'daemon', '--socket', str(state / 'daemon.sock')], env=environment,
+        daemon = subprocess.Popen(daemon_command(state / 'daemon.sock'), env=environment,
                                   stdout=log, stderr=log)
         # A window, not `tern serve`: serve runs its shells itself, without the daemon, and the
         # `spawn` hook that names the launcher runs only for the daemon's shells.

@@ -3,7 +3,7 @@ import argparse
 import json
 import os
 from pathlib import Path
-from tern_config import config_dir
+from tern_config import config_dir, daemon_command
 import shutil
 import struct
 import subprocess
@@ -67,7 +67,7 @@ sleep 300
                    'TERN_DAEMON_SOCKET': str(state / 'daemon.sock'), 'TERN_CONFIG_DIR': config_dir(state / 'config')}
     with (out / 'tern.log').open('w') as log:
         subprocess.run(['tern', 'plugin', 'link', str(package)], env=environment, check=True, stdout=log, stderr=log)
-        daemon = subprocess.Popen(['tern', 'daemon', '--socket', str(state / 'daemon.sock')], env=environment,
+        daemon = subprocess.Popen(daemon_command(state / 'daemon.sock'), env=environment,
                                   stdout=log, stderr=log)
         command = ['tern', *(['serve'] if args.headless else []), '--control', str(socket),
                    '--out', str(out), '--dir', str(nested)]

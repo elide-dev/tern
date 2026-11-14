@@ -9,7 +9,7 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
-from tern_config import config_dir
+from tern_config import config_dir, daemon_command
 from urllib.request import build_opener, ProxyHandler
 
 root = Path(__file__).resolve().parents[1]
@@ -74,7 +74,7 @@ with tempfile.TemporaryDirectory(prefix='tp-', dir='/tmp') as temporary:
             'TERN_PLUGIN_DATA': str(state / 'data'), 'TERN_DAEMON_SOCKET': str(state / 'daemon.sock'),
             'TERN_CONFIG_DIR': config_dir(state / 'config')}
         subprocess.run(['tern', 'plugin', 'link', str(package)], env=environment, check=True, stdout=log, stderr=log)
-        daemon = subprocess.Popen(['tern', 'daemon', '--socket', str(state / 'daemon.sock')], stdout=log, stderr=log, env=environment)
+        daemon = subprocess.Popen(daemon_command(state / 'daemon.sock'), stdout=log, stderr=log, env=environment)
         server = subprocess.Popen(['tern', '--control', str(socket), '--out', str(out), '--dir', str(nested)],
             stdout=log, stderr=log, env=environment)
         def ctl(command, *args):
