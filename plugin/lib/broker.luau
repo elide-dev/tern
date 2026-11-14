@@ -129,4 +129,7 @@ function M.project(request, callback)
   )
 end
 
+-- `check(binary, callback, ready)`: for other clients of the broker binary (agents.luau).
+M.check = check
+
 return M
