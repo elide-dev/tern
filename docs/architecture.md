@@ -274,14 +274,15 @@ launcher. The host half's `spawn` hook sets `ELIDE_ANDROID_EMULATOR_LAUNCHER` in
 the helper's `start --held --announce <plugin data>/android/started --name` as a JSON array; Elide
 runs it (AVD appended) instead of booting its own emulator unless `--window`/`--no-window` was
 passed, so the emulator advertises its token gRPC endpoint. Once the emulator holds the AVD the
-helper writes a marker there, `{name, pane, time}` with the asking shell's `TERN_PANE` (written
-aside and renamed; no pane, no marker). Each window reads the directory every second
-(`android.watch_started`) and claims the markers naming one of its panes: it runs `list` every
-2 s, up to 30 times, until that AVD has a serial and advertises a display, then shows it beside
-that pane as Run's is. A marker no window claims within 120 s is deleted. A phone, an emulator
-already running when the command started, or one with a window of its own gets no pane.
-Display panes are recorded per AVD name or physical
-serial (pane, name, serial) in plugin kv, so a reload still knows them; panes are matched by
+helper writes a marker there, `{name, pane, sdk, time}` with the asking shell's `TERN_PANE` and
+the SDK it started from (written aside and renamed; no pane, no marker). Each window reads the
+directory every second (`android.watch_started`) and claims the markers naming one of its panes:
+it runs `list` (through the marker's SDK unless `android_sdk` is configured) every 2 s, up to 30
+times, until that AVD has a serial and advertises a display, then shows it beside that pane as
+Run's is; a failing `list` says so in a toast. A marker no window claims within 120 s is deleted.
+A phone, an emulator already running when the command started, or one with a window of its own
+gets no pane. Display panes are recorded per AVD name or physical serial (pane, name, serial) in
+plugin kv under the window's key, so a reload still knows them; panes are matched by
 the title the display sets (`NAME`, `SERIAL`, then `NAME · SERIAL`), and a saved id whose pane
 now carries another title is dropped. On `pane_closed` for an emulator's pane, the plugin
 runs `list` and, if that AVD still runs, offers to stop it. No plugin code closes display
