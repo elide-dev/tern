@@ -487,13 +487,24 @@ local function publish_native(root, documents, problem, cx)
       end
       -- One post per session in flight; a newer snapshot goes out on the next poll.
       session.posting = true
-      loopback.request(url .. "documents", body, 10000, function(status)
+      loopback.request(url .. "documents", body, 10000, function(status, answer, current, timed_out)
         session.posting = false
         if status == 200 then
           session.snapshot = snapshot
-        elseif status == 404 or status == 410 or status == 0 then
+        elseif status == 404 or status == 410 or (status == 0 and not timed_out) then
+          -- The service is gone (or refuses connections): the page has ended.
           native_sessions[url] = nil
+        elseif status ~= 0 then
+          -- Rejected: the page shows why. The same snapshot is not sent again; the next edit is.
+          session.snapshot = snapshot
+          local ok, reply = pcall(tern.json.decode, answer)
+          local reason = ok and type(reply) == "table" and type(reply.error) == "string" and reply.error or answer
+          if current and session.rejected ~= reason then
+            current:toast("error", "The Compose preview did not take the editor's text.", reason)
+          end
+          session.rejected = reason
         end
+        -- A timeout leaves the snapshot unsent: the next poll sends it again.
       end)
     end
   end
