@@ -142,6 +142,23 @@ with tempfile.TemporaryDirectory(prefix='compose-', dir='/tmp') as temporary:
         assert page.status[0] == 'live', page.status
         print('PASS: previews live:', page.status[1], flush=True)
 
+        # A resource edit rebuilds the outputs behind the same class paths: the running renderer
+        # is configured again, not replaced by a second Komodo process.
+        strings = next(iter(sorted(project.rglob('src/main/res/values/strings.xml'))), None)
+        if strings is not None:
+            text = strings.read_text()
+            strings.write_text(text.replace('</resources>',
+                                            '    <string name="compose_harness_probe">probe</string>\n</resources>'))
+            page.until(lambda status: status and status[0] in ('building', 'refreshing'), 120,
+                       'a resource edit did not rebuild')
+            page.until(lambda status: status and status[0] in ('live', 'error'), 600,
+                       'the previews did not come back after a resource edit')
+            assert page.status[0] == 'live', page.status
+            logs = '\n'.join(path.read_text(errors='replace') for path in (cache / 'compose-service').glob('*.log'))
+            assert 'configuring the running renderer again' in logs, logs[-4000:]
+            assert logs.count('Komodo: starting') == 1, logs.count('Komodo: starting')
+            print('PASS: a resource edit reconfigures the running renderer instead of starting another', flush=True)
+
         # A post the service rejects suspends the preview with the reason; a good post resumes it.
         outside = base / 'outside' / 'Outside.kt'
         outside.parent.mkdir()
