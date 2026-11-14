@@ -269,17 +269,18 @@ of the workspace's bottom terminal (the toolbar hands actions that terminal), el
 editor. A page showing its summary (`main.activity.summary`) ended without a finished build,
 and so did a pane that closed or
 exited: no device pane. A pane without a surface 3 s after it opened is plain output, and gets
-the device pane then. A typed `elide run` reaches the same pane another way. The host half's
-`spawn` hook sets `ELIDE_ANDROID_EMULATOR_LAUNCHER` in every new shell to the helper's
-`start --held --name` as a JSON array; Elide runs it (AVD appended) instead of booting its own
-emulator unless `--window`/`--no-window` was passed, so the emulator advertises its token gRPC
-endpoint. Elide's Run block shows the device it chose at `main.head.end.device`, whose `title` is
-the serial. `command_started` for an `elide run` line arms `android.typed_run`, which polls the
-pane every 500 ms: once `main.activity.progress` or `main.activity.program` shows (a block an
-earlier run left in scrollback shows its summary instead), the device node's serial is looked up
-with `list`, and an embeddable AVD with that serial is shown as Run's is (up to five tries a second
-apart while the advertisement trails adb); `command_finished` ends the polling. A phone or an
-emulator with a window of its own gets no pane. Display panes are recorded per AVD name or physical
+the device pane then. An Elide command run any other way reaches the same pane through the
+launcher. The host half's `spawn` hook sets `ELIDE_ANDROID_EMULATOR_LAUNCHER` in every new shell to
+the helper's `start --held --announce <plugin data>/android/started --name` as a JSON array; Elide
+runs it (AVD appended) instead of booting its own emulator unless `--window`/`--no-window` was
+passed, so the emulator advertises its token gRPC endpoint. Once the emulator holds the AVD the
+helper writes a marker there, `{name, pane, time}` with the asking shell's `TERN_PANE` (written
+aside and renamed; no pane, no marker). Each window reads the directory every second
+(`android.watch_started`) and claims the markers naming one of its panes: it runs `list` every
+2 s, up to 30 times, until that AVD has a serial and advertises a display, then shows it beside
+that pane as Run's is. A marker no window claims within 120 s is deleted. A phone, an emulator
+already running when the command started, or one with a window of its own gets no pane.
+Display panes are recorded per AVD name or physical
 serial (pane, name, serial) in plugin kv, so a reload still knows them; panes are matched by
 the title the display sets (`NAME`, `SERIAL`, then `NAME · SERIAL`), and a saved id whose pane
 now carries another title is dropped. On `pane_closed` for an emulator's pane, the plugin

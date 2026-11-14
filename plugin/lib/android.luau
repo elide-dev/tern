@@ -828,84 +828,62 @@ function M.followed(cx, pane)
   watch(cx)
 end
 
--- Typed `elide run` lines whose Run block may name its device: pane -> { live, ended }.
-local typed = {}
-local DEVICE_NODE = "main.head.end.device"
+-- Markers the helper leaves when an Elide command boots an emulator through the launcher the
+-- host's spawn hook names (`start --held --announce`, android/sdk.ts `announceStart`):
+-- `{ name, pane, time }`, the AVD and the pane the command ran in. However that command was
+-- started (typed, wrapped, Run again, `elide build android-emulator`), the window showing the
+-- pane opens the device pane beside it. A marker no window claims expires.
+local STARTED = tern.plugin.data .. "/android/started"
+local STARTED_SECONDS = 120
 
--- The serial the Run block in `pane` names (the device node's title), or nil.
-local function named_device(cx, pane)
-  local tree = cx.session:surface(pane, { root = DEVICE_NODE, depth = 0 })
-  local node = type(tree) == "table" and (tree.k and tree or tree.main) or nil
-  local serial = type(node) == "table" and type(node.p) == "table" and node.p.title
-  return type(serial) == "string" and serial ~= "" and serial or nil
-end
-
--- Shows `serial` once its emulator advertises a display: an emulator with a window of its own,
--- or a phone, gets no pane. The advertisement can trail adb by a moment, hence `tries`.
-local function show_named(cx, pane, serial, tries)
+-- Shows AVD `name` beside `pane` once adb lists its emulator and it advertises a display. It
+-- registers seconds after `start --held` returns, hence `tries`, two seconds apart.
+local function show_started(cx, pane, name, tries)
   request(cx, {}, "list", {}, function(current, value)
     for _, avd in value.avds or {} do
-      if avd.serial == serial then
-        if avd.embeddable then
-          show(current, { name = avd.name, serial = serial }, nil, nil, pane, true)
-        elseif tries > 1 then
-          tern.timer(1000, function(fresh)
-            if fresh then
-              show_named(fresh, pane, serial, tries - 1)
-            end
-          end)
-        end
+      if avd.name == name and avd.serial and avd.embeddable then
+        show(current, { name = name, serial = avd.serial }, nil, nil, pane, true)
         return
       end
+    end
+    if tries > 1 then
+      tern.timer(2000, function(fresh)
+        if fresh and fresh.session:pane(pane) then
+          show_started(fresh, pane, name, tries - 1)
+        end
+      end)
     end
   end, function() end)
 end
 
-local function attend(cx, pane, state)
-  if typed[pane] ~= state then
-    return
+-- Claims the markers naming a pane of this window, each second.
+function M.watch_started(cx)
+  if cx.hosts:current().kind == "local" and tern.fs.exists(STARTED) then
+    for _, file in tern.fs.list(STARTED) do
+      local path = STARTED .. "/" .. file
+      if string.sub(file, -5) == ".json" then
+        local ok, marker = pcall(function()
+          return tern.json.decode(tern.fs.read(path, 4096))
+        end)
+        local valid = ok
+          and type(marker) == "table"
+          and type(marker.name) == "string"
+          and type(marker.pane) == "number"
+          and type(marker.time) == "number"
+        if not valid or os.time() - marker.time > STARTED_SECONDS then
+          pcall(tern.fs.remove, path)
+        elseif cx.session:pane(marker.pane) then
+          pcall(tern.fs.remove, path)
+          show_started(cx, marker.pane, marker.name, 30)
+        end
+      end
+    end
   end
-  if not cx.session:pane(pane) then
-    typed[pane] = nil
-    return
-  end
-  -- A block an earlier run left in scrollback shows its summary; the bar is this run's.
-  state.live = state.live or shown(cx, pane, "main.activity.progress") or shown(cx, pane, "main.activity.program")
-  local serial = state.live and named_device(cx, pane)
-  if serial then
-    typed[pane] = nil
-    show_named(cx, pane, serial, 5)
-    return
-  end
-  if state.ended then
-    typed[pane] = nil
-    return
-  end
-  tern.timer(500, function(current)
+  tern.timer(1000, function(current)
     if current then
-      attend(current, pane, state)
+      M.watch_started(current)
     end
   end)
-end
-
--- A typed `elide run` started in `pane`: once its Run block names a device, that device's pane opens.
-function M.typed_run(cx, pane)
-  if cx.hosts:current().kind ~= "local" then
-    return
-  end
-  local state = {}
-  typed[pane] = state
-  tern.timer(500, function(current)
-    if current then
-      attend(current, pane, state)
-    end
-  end)
-end
-
-function M.typed_run_ended(pane)
-  if typed[pane] then
-    typed[pane].ended = true
-  end
 end
 
 function M.open(cx, context, target)
@@ -1058,7 +1036,6 @@ function M.install(config, path, runtime)
     M.followed(cx, event.pane)
   end)
   tern.on("pane_closed", function(event, cx)
-    typed[event.pane] = nil
     if entries[event.pane] then
       entries[event.pane].closed = true
       entries[event.pane] = nil

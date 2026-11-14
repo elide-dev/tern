@@ -1074,9 +1074,6 @@ end
 
 tern.on("command_started", function(ev, cx)
   local command = shell.elide(ev.line)
-  if command == "run" then
-    android.typed_run(cx, ev.pane)
-  end
   if not REPORTS[command] then
     return
   end
@@ -1089,7 +1086,6 @@ tern.on("pane_closed", function(ev)
 end)
 
 tern.on("command_finished", function(ev, cx)
-  android.typed_run_ended(ev.pane)
   local command, subject, compound = shell.elide(ev.line)
   if not command then
     return
@@ -1434,6 +1430,7 @@ tern.timer(0, function(cx)
     return
   end
   this_window = cx:window_key()
+  android.watch_started(cx)
   publish_sessions()
   cx.browser:call({ op = "blocks" }):next(function(result, err, current)
     if not current or err or not (result and result.ok and type(result.ok.blocks) == "table") then

@@ -4,7 +4,7 @@ import { advertisements, emulatorEndpoint } from "./grpc";
 import { MirroredDevice } from "./mirror";
 import { errorMessage } from "./process";
 import { createConfigured, NotAndroidError, projectInfo, ProjectChoiceError, resolveProject, resolveSdk } from "./project";
-import { AndroidSdk, validateName } from "./sdk";
+import { AndroidSdk, announceStart, validateName } from "./sdk";
 
 const USAGE = `Usage: elide-tern-android COMMAND [OPTIONS]
 
@@ -32,6 +32,8 @@ Options:
   --serial SERIAL     Exact emulator-PORT to stop; emulator or device serial to display
   --start             display: start the --name AVD unless it runs, showing progress
   --held              start: return once the emulator holds the AVD, without waiting for adb
+  --announce DIR      start: leave a marker in DIR naming the AVD and this Tern pane (TERN_PANE),
+                      so the Elide plugin opens the device pane beside it
   --yes               Confirm deletion; never accepts SDK licenses
   --help              Show this help
 
@@ -51,7 +53,7 @@ const SERIAL = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 type Command = "list" | "images" | "profiles" | "create" | "start" | "stop" | "delete" | "display" | "wait";
 type Args = {
   command: Command; json: boolean; yes: boolean; start: boolean; held: boolean;
-  sdk?: string; root?: string; runtime?: string; name?: string; image?: string; device?: string; serial?: string;
+  sdk?: string; root?: string; runtime?: string; name?: string; image?: string; device?: string; serial?: string; announce?: string;
 };
 
 function parseArgs(argv: string[]): Args {
@@ -60,7 +62,7 @@ function parseArgs(argv: string[]): Args {
   if (!command || !Object.hasOwn(commands, command)) throw new Error(`Expected a command.\n${USAGE}`);
   const args: Args = { command: command as Command, json: false, yes: false, start: false, held: false };
   const seen = new Set<string>();
-  const strings: Record<string, true> = { sdk: true, root: true, runtime: true, name: true, image: true, device: true, serial: true };
+  const strings: Record<string, true> = { sdk: true, root: true, runtime: true, name: true, image: true, device: true, serial: true, announce: true };
   for (let i = 1; i < argv.length; i++) {
     const flag = argv[i]!;
     const key = flag.slice(2);
@@ -83,6 +85,7 @@ function parseArgs(argv: string[]): Args {
   only("yes", ["delete"]);
   only("start", ["display"]);
   only("held", ["start"]);
+  only("announce", ["start"]);
   only("json", ["list", "images", "profiles", "create", "start", "stop", "delete", "wait"]);
   if (args.runtime && !args.root) throw new Error("--runtime is only needed with --root; omit it for standalone commands.");
   if (args.command === "display" && args.start) {
@@ -162,6 +165,7 @@ async function main(args: Args): Promise<void> {
     case "start": {
       const avd = selectedName();
       const started = await sdk.start(avd, undefined, args.held);
+      if (args.announce) await announceStart(args.announce, avd, process.env.TERN_PANE);
       result = { message: started.serial ? `${avd} is running.` : `${avd} is starting.`, name: avd, ...started };
       break;
     }

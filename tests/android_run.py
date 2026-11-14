@@ -1,6 +1,7 @@
-"""A typed `elide run` in an Android project, in real Tern with the Elide plugin: new shells name the
-plugin's helper as Elide's emulator launcher, so the emulator starts without a window; the Run
-block names the device it uses, and the plugin opens that device's pane beside the terminal."""
+"""An Elide run in an Android project, in real Tern with the Elide plugin: new shells name the
+plugin's helper as Elide's emulator launcher, so the emulator starts without a window and the helper
+announces the start; the plugin opens that device's pane beside the terminal, even though the run
+goes through a wrapper script no command-line match would recognize."""
 import argparse
 import json
 import os
@@ -105,10 +106,15 @@ with tempfile.TemporaryDirectory(prefix='tar-', dir='/tmp') as temporary:
             launcher = state / 'launcher'
             ctl('run', 'printenv ELIDE_ANDROID_EMULATOR_LAUNCHER > ' + shlex.quote(str(launcher)))
             wait(lambda: launcher.exists() and launcher.read_text().strip(), what='printenv wrote nothing')
-            assert json.loads(launcher.read_text()) == [helper, 'start', '--held', '--name'], launcher.read_text()
-            # 2. A typed run boots the emulator through it and its Run block names the device.
+            named_launcher = json.loads(launcher.read_text())
+            assert named_launcher[:4] == [helper, 'start', '--held', '--announce'] and named_launcher[5:] == ['--name'] \
+                and named_launcher[4].endswith('/android/started'), named_launcher
+            # 2. A run through a wrapper boots the emulator through it and its Run block names the device.
             terminal = lua('cx.session:focused()')
-            ctl('run', shlex.join([runtime, 'run']))
+            wrapper = state / 'run.sh'
+            wrapper.write_text('#!/bin/sh\nexec ' + shlex.join([runtime, 'run']) + '\n')
+            wrapper.chmod(0o755)
+            ctl('run', shlex.quote(str(wrapper)))
             prefix = avd + ' · emulator-'
 
             def named():

@@ -350,7 +350,8 @@ tern.on("pane_exited", function(ev)
 end)
 
 -- New shells name this plugin's helper as Elide's emulator launcher (ELIDE_ANDROID_EMULATOR_LAUNCHER):
--- an Elide command that boots an emulator there gets one without a window, which a device pane can show.
+-- an Elide command that boots an emulator there gets one without a window, and the helper leaves a
+-- marker naming the AVD and the pane (`--announce`), from which the window opens its device pane.
 tern.on("spawn", function(spec)
   local ok, config = pcall(function()
     return tern.json.decode(tern.fs.read(tern.plugin.dir .. "/config.json", 65536))
@@ -363,7 +364,8 @@ tern.on("spawn", function(spec)
   if not tern.fs.exists(helper) then
     return nil
   end
-  spec.env.ELIDE_ANDROID_EMULATOR_LAUNCHER = tern.json.encode({ helper, "start", "--held", "--name" })
+  spec.env.ELIDE_ANDROID_EMULATOR_LAUNCHER =
+    tern.json.encode({ helper, "start", "--held", "--announce", tern.plugin.data .. "/android/started", "--name" })
   return spec
 end)
 
