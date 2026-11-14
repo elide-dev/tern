@@ -47,7 +47,10 @@ competing brokers from unlinking a live socket. SDKs load lazily in workers;
 the broker never loads the native library. At most eight sessions and sixteen
 concurrent socket clients are admitted. A session has one serialized exchange;
 concurrent calls to it return busy. Independent sessions run on independent
-workers and cannot monopolize each other's runtime exchange lock.
+workers and cannot monopolize each other's runtime exchange lock. The broker's and its workers'
+error output goes to `<state>/broker.log` (written afresh at each start), whose tail a failed
+start quotes. Once its executable is replaced on disk (an upgrade), a broker removes its socket,
+finishes the connections it has and exits; the next request starts the new build.
 
 Each request uses Studio's four-byte little-endian framing. Requests are capped
 at 4 MiB, responses at 16 MiB; socket reads/writes have deadlines. SDK exchanges
