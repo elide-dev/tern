@@ -141,6 +141,11 @@ with tempfile.TemporaryDirectory(prefix='install-') as temporary:
             data = json.loads(reports()[-1].read_text())
             assert data['outcome'] == 'up-to-date', data
             shot('install-current-light')
+            # A tree item's toggle reaches the page: guava closed stays closed when the search
+            # below replaces the tree and then gives it back, which only the page can know.
+            twisty = '[data-role="install-tree"] .sf-tree-row:not(.leaf) .sf-tree-tw'
+            ctl('click', twisty)
+            wait(lambda: 'com.google.guava:failureaccess' not in tree('[data-role="install-tree"]'))
             # Find a package: the match shows under the package that requires it; q is a letter
             # while the field has the keyboard, and Escape gives the keyboard back.
             search = '[data-role="install-search"]'
@@ -154,8 +159,15 @@ with tempfile.TemporaryDirectory(prefix='install-') as temporary:
             found = tree('[data-role="install-tree"]')
             assert 'com.google.guava:guava' in found and 'com.google.guava:failureaccess' in found, found
             assert 'junit' not in found, found
+            for _ in 'failure':
+                ctl('key', 'Backspace')
+            wait(lambda: 'match' not in tree('[data-role="install-graph"]'))
+            assert 'com.google.guava:guava' in tree('[data-role="install-tree"] .sf-tree-node.shut'), tree('[data-role="install-tree"]')
+            assert 'com.google.guava:failureaccess' not in tree('[data-role="install-tree"]'), tree('[data-role="install-tree"]')
             ctl('key', 'Escape')
             wait(lambda: not nodes(search + '.focused'))
+            ctl('click', twisty)
+            wait(lambda: 'com.google.guava:failureaccess' in tree('[data-role="install-tree"]'))
             quit_page()
 
             # Bare, the install draws inline and its block stays in scrollback after it exits.
