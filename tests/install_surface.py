@@ -141,6 +141,21 @@ with tempfile.TemporaryDirectory(prefix='install-') as temporary:
             data = json.loads(reports()[-1].read_text())
             assert data['outcome'] == 'up-to-date', data
             shot('install-current-light')
+            # Find a package: the match shows under the package that requires it; q is a letter
+            # while the field has the keyboard, and Escape gives the keyboard back.
+            search = '[data-role="install-search"]'
+            ctl('click', search)
+            wait(lambda: nodes(search + '.focused'))
+            ctl('type', 'failureq')
+            wait(lambda: 'failureq' in tree(search) and '0 matches' in tree('[data-role="install-graph"]'))
+            assert status('Up to date'), tree()
+            ctl('key', 'Backspace')
+            wait(lambda: '1 match' in tree('[data-role="install-graph"]'))
+            found = tree('[data-role="install-tree"]')
+            assert 'com.google.guava:guava' in found and 'com.google.guava:failureaccess' in found, found
+            assert 'junit' not in found, found
+            ctl('key', 'Escape')
+            wait(lambda: not nodes(search + '.focused'))
             quit_page()
 
             # Bare, the install draws inline and its block stays in scrollback after it exits.
@@ -210,7 +225,7 @@ with tempfile.TemporaryDirectory(prefix='install-') as temporary:
                 shot('install-npm-light')
                 quit_page()
                 npm = 'npm records and lane'
-            print(f'PASS: dependency records, ecosystem table, downloads, dependency tree, report, up to date, page, inline block, failure, plain --surface ({npm})')
+            print(f'PASS: dependency records, ecosystem table, downloads, dependency tree, search, report, up to date, page, inline block, failure, plain --surface ({npm})')
             print('Shots:', *shots)
         finally:
             server.terminate()
