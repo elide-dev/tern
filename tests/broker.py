@@ -1,6 +1,7 @@
 """Behavioral IPC checks; --sdk adds real native embedding acceptance."""
 import argparse
 import concurrent.futures
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -65,6 +66,16 @@ def main():
                               capture_output=True, timeout=20)
       assert result.returncode == 0, result.stderr
       os.kill(json.loads(result.stdout)['result']['pid'], signal.SIGTERM)
+      # A broker that cannot start says why: here another process holds the lifetime lock while
+      # the socket is gone, so `serve` refuses, and `request` reports its words from broker.log.
+      held = Path(directory) / 'held'
+      held.mkdir(mode=0o700)
+      with open(held / 'broker.lock', 'w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = subprocess.run([str(BINARY), 'request', str(held)], input='{"op":"ping"}', text=True,
+                                capture_output=True, timeout=20)
+      assert result.returncode != 0 and 'Broker already running' in result.stderr, result.stderr
+      assert 'Broker already running' in (held / 'broker.log').read_text()
       if args.sdk:
         session = success(op='open', sdk=str(Path(args.sdk).resolve()))['session']
         capabilities = success(op='discover', session=session)

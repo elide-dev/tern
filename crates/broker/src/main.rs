@@ -142,13 +142,24 @@ fn connect(state: &Path) -> Result<UnixStream, String> {
   if let Ok(stream) = UnixStream::connect(&socket) {
     return Ok(stream);
   }
+  // The broker's error output, and its workers' (they inherit it), for the startup error below and
+  // for a person reading the state directory. Each start writes it afresh.
+  let log_path = state.join("broker.log");
+  let log = OpenOptions::new()
+    .write(true)
+    .create(true)
+    .truncate(true)
+    .mode(0o600)
+    .custom_flags(libc::O_NOFOLLOW)
+    .open(&log_path)
+    .map_err(err)?;
   let mut child = Command::new(std::env::current_exe().map_err(err)?)
     .arg("serve")
     .arg(state)
     .process_group(0)
     .stdin(Stdio::null())
     .stdout(Stdio::null())
-    .stderr(Stdio::null())
+    .stderr(log)
     .spawn()
     .map_err(err)?;
   loop {
@@ -156,7 +167,9 @@ fn connect(state: &Path) -> Result<UnixStream, String> {
       return Ok(stream);
     }
     if let Some(status) = child.try_wait().map_err(err)? {
-      return Err(format!("Broker startup failed: {status}"));
+      let said = fs::read(&log_path).unwrap_or_default();
+      let said = String::from_utf8_lossy(&said[said.len().saturating_sub(2048)..]);
+      return Err(format!("Broker startup failed ({status}): {}", said.trim()));
     }
     if start.elapsed() > Duration::from_secs(5) {
       let _ = child.kill();
