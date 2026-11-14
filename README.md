@@ -445,7 +445,9 @@ editor: Tern's highlighting, undo and redo, auto-indent, indent and comment togg
 disk. Overlays appear when they can act: **Coverage** tints covered, uncovered and
 partially covered rows from the newest coverage run (F5 runs one) while you keep editing, and **Debug** sets breakpoints with F9 and launches with F5,
 then shows Resume, Pause, Stop and stepping controls (F5, F6, ⇧F5, F10, F11, ⇧F11) only
-while a debug session exists, with breakpoint and paused rows tinted. Switching overlays only
+while a debug session exists, with breakpoint and paused rows tinted. Every editor of a project
+controls the same target, and a pause in another file of the project opens that file at the
+paused line in the Debug overlay. Switching overlays only
 fades colors; no text moves. A hotness overlay will appear once
 the project session records source-located profile samples. Files over 600 lines are shown without highlighting
 to keep typing fast. `elide://source` links open this editor for sources inside a project.
