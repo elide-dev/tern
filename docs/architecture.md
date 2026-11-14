@@ -534,12 +534,16 @@ Offsets are UTF-16 code units.
   only covered/uncovered and branch counts (no hit counts), and the JavaScript producer reported no
   branch counts for the harness's ternary, so partial lines have not been seen with real data yet.
   With no coverage run the overlay offers **Run with coverage** (F5; `project_test` on the root with
-  `coverage: true`) and polls each second until it finishes; F6 refreshes.
+  `coverage: true`) and polls each second until it finishes; F6 refreshes the marks, keeping the
+  text the run was anchored to. Tints stay when newer test runs push their run out of the broker's
+  last four (the tooltip says so); incomplete coverage reads "N% · incomplete".
 - **Debug.** While active the block polls `project_debug_snapshot` (`compact`) every 500 ms and
-  re-renders only when the revision, pending flag, controller or error changes. The stop is a `▶`
+  re-renders only when the revision, pending flag, controller or error changes; a failed poll shows
+  "Debugger error" until the next one answers, a command's error until the next stop. The stop is a `▶`
   `accent` sign, its line number in `accent`, the line's `accent` band and a ` paused` note; a
   breakpoint is a `●` `error` sign with its number in `error` and a light `error` band (`○` and `warning` with the adapter's
-  message while unverified); where both fall on one line the stop wins. The caret jumps to each new
+  message while unverified; `○` muted, "not in the running target", for one set only here while a
+  target launched without it runs); where both fall on one line the stop wins. The caret jumps to each new
   stop and F7 returns to it. F9 toggles a breakpoint on the caret line: before a launch it is kept
   locally and passed to `project_debug_launch`; with a live target the file's replacement `lines`
   (mapped back to the launched text) go through `project_debug_request` `breakpoints`. Debug
