@@ -4,6 +4,7 @@ the full page and the inline block, a failed resolution, and npm beside Maven. N
 access to Maven Central (and the npm registry for the npm part)."""
 import argparse
 import json
+import re
 import shlex
 import shutil
 import subprocess
@@ -237,7 +238,27 @@ with tempfile.TemporaryDirectory(prefix='install-') as temporary:
                 shot('install-npm-light')
                 quit_page()
                 npm = 'npm records and lane'
-            print(f'PASS: dependency records, ecosystem table, downloads, dependency tree, search, report, up to date, page, inline block, failure, plain --surface ({npm})')
+
+            # PyPI, when this runtime carries the PyPI resolver: its lane gets the package count
+            # when its leg ends (pytools reports no live progress).
+            python = (state / 'pypi-only').resolve()
+            python.mkdir()
+            (python / 'elide.pkl').write_text('amends "elide:project.pkl"\n\nname = "pypi-example"\n\ndependencies {\n  pypi {\n    packages {\n      "six==1.17.0"\n    }\n  }\n}\n')
+            probe = subprocess.run([runtime, 'install', '--ecosystems=pypi'], cwd=python, capture_output=True, text=True, timeout=600)
+            if probe.returncode != 0:
+                pypi = 'PyPI skipped: this runtime could not install PyPI packages'
+                print('NOTE:', pypi, probe.stderr[-500:])
+            else:
+                ctl('run', 'cd ' + shlex.quote(str(python)) + ' && ' + shlex.join([str(host), runtime, '--surface=screen', '--ecosystems=pypi', '--fresh']))
+                wait(lambda: nodes('.sf-dock'))
+                wait(lambda: status('Installed'), timeout=300)
+                lane = tree('[data-role="install-ecosystems"]')
+                assert 'PyPI' in lane and 'Installed' in lane, lane
+                # State, then Packages: "PyPI Installed 1 — …" (no download size: pytools has none).
+                assert re.search(r'PyPI\s*Installed\s+1\s+—', lane), lane
+                quit_page()
+                pypi = 'PyPI lane count'
+            print(f'PASS: dependency records, ecosystem table, downloads, dependency tree, search, report, up to date, page, inline block, failure, plain --surface ({npm}; {pypi})')
             print('Shots:', *shots)
         finally:
             server.terminate()
