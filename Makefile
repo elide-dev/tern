@@ -35,6 +35,7 @@ test-unit: broker
 	$(LUA) tests/source.lua
 	$(LUA) tests/diagnostics.lua
 	$(LUA) tests/shell.lua
+	$(LUA) tests/broker.lua
 	$(MAKE) test-android-unit
 	cargo test --workspace
 	python3 tests/broker.py

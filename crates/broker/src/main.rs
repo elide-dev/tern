@@ -30,6 +30,9 @@ use std::{
 static INFERRED: std::sync::LazyLock<Mutex<coverage::Inferred>> =
   std::sync::LazyLock::new(|| Mutex::new(coverage::Inferred::default()));
 
+/// The request schema (`protocol.rs`, docs/protocol.md). Bump it with any change a plugin
+/// relies on; the plugin refuses a broker that answers another.
+const PROTOCOL: u32 = 1;
 const DEADLINE: Duration = Duration::from_secs(10);
 const IDLE: Duration = Duration::from_secs(120);
 const MAX_SESSIONS: usize = 8;
@@ -50,8 +53,14 @@ fn main() {
 
 fn run() -> Result<(), String> {
   let args: Vec<_> = std::env::args_os().skip(1).collect();
+  // The request schema this binary speaks: the plugin checks it before its first request, so a
+  // stale binary says so instead of failing on an op it does not know.
+  if args.len() == 1 && args[0] == "protocol" {
+    println!("{PROTOCOL}");
+    return Ok(());
+  }
   if args.len() != 2 {
-    return Err("Usage: elide-tern-broker <request|serve|socket|project-root> <state-directory>".into());
+    return Err("Usage: elide-tern-broker <request|serve|socket|project-root> <state-directory>, or protocol".into());
   }
   let path = Path::new(&args[1]);
   match args[0].to_str() {
@@ -439,7 +448,7 @@ fn dispatch(request: Request, sessions: &Sessions, serial: &AtomicUsize, project
       return Ok(json!({}));
     }
     Request::Ping {} => {
-      return Ok(json!({"protocol": 1, "pid": std::process::id(), "sessions": sessions.lock().unwrap().len()}));
+      return Ok(json!({"protocol": PROTOCOL, "pid": std::process::id(), "sessions": sessions.lock().unwrap().len()}));
     }
     Request::Open { sdk } => {
       let sdk = Path::new(sdk).canonicalize().map_err(err)?;
