@@ -305,8 +305,29 @@ local function alive(state)
   return not state.closed and running(state.pane)
 end
 
+-- The project attachment each project root's editors share in this host: one lease, so every
+-- editor of a project controls the debug target any of them launched. `{ binding, users = { [state]
+-- = true } }` once attached; `{ waiting = { callbacks } }` while the attach request runs.
+local attachments = {}
+
+-- Gives up `state`'s use of its project's attachment; the last user detaches it.
+local function release(state)
+  local binding = state.binding
+  state.binding = nil
+  local entry = binding and attachments[state.root]
+  if not entry or entry.binding ~= binding then
+    return
+  end
+  entry.users[state] = nil
+  if next(entry.users) == nil then
+    attachments[state.root] = nil
+    broker.project({ op = "project_detach", binding = binding }, function() end)
+  end
+end
+
 -- Stops background work and releases the project attachment; a debug target this block controls
--- gets the broker's 30-second takeover grace before it is stopped.
+-- gets the broker's 30-second takeover grace before it is stopped (once no editor of the project
+-- holds the attachment).
 local function close(state)
   if state.closed then
     return
@@ -318,10 +339,7 @@ local function close(state)
     timer:cancel()
   end
   state.timers = {}
-  if state.binding then
-    broker.project({ op = "project_detach", binding = state.binding }, function() end)
-    state.binding = nil
-  end
+  release(state)
 end
 
 tern.on("pane_exited", function(ev)
@@ -430,8 +448,26 @@ local function absorb(state, snapshot)
   state.runs = type(snapshot.runs) == "table" and snapshot.runs or {}
 end
 
+-- How long a block waits before attaching again after its attachment failed or expired.
+local REATTACH_MS = 5000
+-- A renewal that fails for another reason than an expired attachment is retried this often, this
+-- many times, before the attachment is given up: the lease outlives two renewal periods.
+local RENEW_RETRY_MS = 5000
+local RENEW_TRIES = 3
+
+local attach
+
+-- The attachment failed: the block shows why and attaches again shortly. An attachment the broker
+-- no longer knows ("attach again") is dropped for every editor of the project.
 local function fail(state, cx, problem)
-  state.attach, state.attach_error, state.binding = "error", tostring(problem or "Project request failed."), nil
+  local binding = state.binding
+  local entry = binding and attachments[state.root]
+  if entry and entry.binding == binding and string.find(tostring(problem), "attach again", 1, true) then
+    attachments[state.root] = nil
+    state.binding = nil
+  end
+  release(state)
+  state.attach, state.attach_error = "error", tostring(problem or "Project request failed.")
   for name, timer in state.timers do
     if name ~= "disk" then
       timer:cancel()
@@ -439,6 +475,14 @@ local function fail(state, cx, problem)
     end
   end
   state.debug.polling = false
+  state.timers.reattach = tern.timer(REATTACH_MS, function()
+    state.timers.reattach = nil
+    if not alive(state) then
+      close(state)
+      return
+    end
+    attach(state, cx)
+  end)
   cx:render()
 end
 
@@ -455,8 +499,8 @@ local function enter(state, cx)
   end
 end
 
-local function renew(state, cx)
-  state.timers.renew = tern.timer(RENEW_MS, function()
+local function renew(state, cx, delay)
+  state.timers.renew = tern.timer(delay or RENEW_MS, function()
     state.timers.renew = nil
     if not alive(state) then
       close(state)
@@ -471,9 +515,16 @@ local function renew(state, cx)
         return
       end
       if err then
-        fail(state, cx, err)
+        state.renew_failures = (state.renew_failures or 0) + 1
+        if string.find(tostring(err), "attach again", 1, true) or state.renew_failures >= RENEW_TRIES then
+          state.renew_failures = 0
+          fail(state, cx, err)
+        else
+          renew(state, cx, RENEW_RETRY_MS)
+        end
         return
       end
+      state.renew_failures = 0
       if type(snapshot) == "table" then
         absorb(state, snapshot)
         if state.mode == "coverage" then
@@ -486,38 +537,77 @@ local function renew(state, cx)
   end)
 end
 
-local function attach(state, cx)
-  if not state.root or state.closed or state.attach == "attaching" then
+-- `state` uses `binding`, its project's shared attachment: reads the project and starts renewing.
+local function attached(state, cx, binding)
+  state.binding = binding
+  attachments[state.root].users[state] = true
+  broker.project({ op = "project_snapshot", binding = binding }, function(snapshot, problem)
+    if not alive(state) then
+      close(state)
+      return
+    end
+    if problem then
+      fail(state, cx, problem)
+      return
+    end
+    absorb(state, snapshot)
+    state.attach = "ready"
+    renew(state, cx)
+    enter(state, cx)
+    cx:render()
+  end)
+end
+
+function attach(state, cx)
+  if not state.root or state.closed or state.attach == "attaching" or state.attach == "ready" then
     return
   end
+  -- A Retry click comes before the scheduled attempt: that one is not needed any more.
+  if state.timers.reattach then
+    state.timers.reattach:cancel()
+    state.timers.reattach = nil
+  end
   state.attach, state.attach_error = "attaching", nil
-  broker.project({ op = "project_attach", root = state.root }, function(binding, err)
+  local entry = attachments[state.root]
+  if entry and entry.binding then
+    attached(state, cx, entry.binding)
+    return
+  end
+  -- The project's first editor attaches; the others wait for its answer.
+  local function answered(binding, err)
     if not alive(state) then
-      if type(binding) == "table" then
-        broker.project({ op = "project_detach", binding = binding }, function() end)
-      end
+      close(state)
       return
     end
+    if err then
+      fail(state, cx, err)
+      return
+    end
+    attached(state, cx, binding)
+  end
+  if entry then
+    table.insert(entry.waiting, answered)
+    return
+  end
+  entry = { waiting = { answered }, users = {} }
+  attachments[state.root] = entry
+  broker.project({ op = "project_attach", root = state.root }, function(binding, err)
+    local waiting = entry.waiting
+    entry.waiting = nil
     if err or type(binding) ~= "table" then
-      fail(state, cx, err or "Invalid attachment.")
-      return
+      attachments[state.root] = nil
+      err = err or "Invalid attachment."
+    else
+      entry.binding = binding
     end
-    state.binding = binding
-    broker.project({ op = "project_snapshot", binding = binding }, function(snapshot, problem)
-      if not alive(state) then
-        close(state)
-        return
-      end
-      if problem then
-        fail(state, cx, problem)
-        return
-      end
-      absorb(state, snapshot)
-      state.attach = "ready"
-      renew(state, cx)
-      enter(state, cx)
-      cx:render()
-    end)
+    for _, waiter in waiting do
+      waiter(entry.binding, err)
+    end
+    -- Every waiting editor closed meanwhile: nobody holds the attachment.
+    if entry.binding and next(entry.users) == nil then
+      attachments[state.root] = nil
+      broker.project({ op = "project_detach", binding = entry.binding }, function() end)
+    end
   end)
 end
 
