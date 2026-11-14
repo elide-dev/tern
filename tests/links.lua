@@ -28,6 +28,13 @@ end
 local p = links.parse
 check("source", p("elide://source?path=/p/a.js&line=2&col=5"), { action = "source", path = "/p/a.js", line = 2, col = 5 })
 check("source no line", p("elide://source?path=/p/a.js"), { action = "source", path = "/p/a.js" })
+check(
+  "source overlay",
+  p("elide://source?path=/p/a.js&line=3&overlay=debug"),
+  { action = "source", path = "/p/a.js", line = 3, overlay = "debug" }
+)
+check("source unknown overlay", p("elide://source?path=/p/a.js&overlay=hotness"), nil)
+check("debug takes no overlay", p("elide://debug?root=/p&path=/p/a.js&overlay=debug"), { action = "debug", root = "/p", path = "/p/a.js" })
 check("source root", p("elide://source?root=/p&path=/p/src/a.js&line=1"), {
   action = "source",
   root = "/p",

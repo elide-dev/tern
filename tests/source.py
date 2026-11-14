@@ -33,6 +33,10 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         'test("positive values", () => assert.equal(classify(1), "positive"));\n'
         'test("signs", () => assert.equal(sign(1), "+"));\n')
     (project / 'notes.txt').write_text('not a source\n')
+    # Stepping into `twice` leaves entry.mjs for line 3 of helper.mjs.
+    entry = project / 'entry.mjs'
+    entry.write_text('import {twice} from "./helper.mjs";\nconst result = twice(2);\nconsole.log(result);\n')
+    (project / 'helper.mjs').write_text('// Doubles a value.\nexport function twice(value) {\n  return value * 2;\n}\n')
     # Near the size limit, and one past it.
     large = project / 'large.mjs'
     large.write_text(''.join(f'export const value{i} = {i}; // padding to make the line longer than usual\n' for i in range(5000)))
@@ -331,8 +335,8 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         clear = number[0] >= editor[0] + 2 * cell - 0.5 and abs(sign[1] - number[1]) < 4
         return inside and clear, detail
 
-    def open_tab(path, ready, line=None):
-        args = [str(path), str(project)] + ([str(line)] if line else [])
+    def open_tab(path, ready, line=None, mode=None):
+        args = [str(path), str(project)] + ([str(line or ''), mode] if mode else [str(line)] if line else [])
         for _ in range(3):
             lua('cx:new_block("elide.source", ' + json.dumps(args).replace('[', '{').replace(']', '}') + ', "tab")')
             if wait(ready, 15):
@@ -647,6 +651,41 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         shots('source-debug-wide')
         ctl('key', 'F5')
         check('continue runs to exit', wait(lambda: 'Exited' in tree('.sf-main .sf-badge'), 60), tree('.sf-main'))
+        # Stepping into a function in another project file opens that file at the stop in the Debug
+        # overlay beside the editor that launched (issue #4); that editor says the target paused
+        # elsewhere. A new tab keeps these editors out of the checks that follow. Hidden tabs stay in
+        # the tree off screen, so these checks read on-screen nodes only.
+        def shown(selector):
+            return ' '.join(n.get('text') or '' for n in filter(onscreen, nodes(selector)))
+        def shown_sign(glyph, tone):
+            return glyph in shown('.sf-editor .sf-ed-gutter .sf-t-' + tone)
+        classify_tab = next(i for i, t in enumerate(ctl('state')['tabs'], 1) if t['active'])
+        # The block opens focused with its caret on the linked line.
+        check('opens in the overlay its opener names', open_tab(entry, lambda: 'entry.mjs' in shown('[data-role="source-path"]')
+              and 'Ln 2,' in shown('[data-role="source-position"]')
+              and any(onscreen(n) for n in nodes('[data-role="source-btn-debug-launch"]')), 2, 'debug'), shown('.sf-main'))
+        ctl('key', 'F9')
+        wait(lambda: shown_sign('●', 'error'), 10)
+        ctl('key', 'F5')
+        check('paused at the call', wait(lambda: 'Paused at 2' in shown('[data-role="source-overlay-state"]'), 120),
+              [shown('[data-role="source-overlay-state"]'), shown('.sf-dock')])
+        ctl('key', 'F11')
+        def followed():
+            states = shown('[data-role="source-overlay-state"]')
+            return 'helper.mjs' in shown('[data-role="source-path"]') and 'Paused at 3' in states and 'Paused elsewhere' in states
+        check('step into another file opens it at the stop', wait(followed, 30),
+              [shown('[data-role="source-path"]'), shown('[data-role="source-overlay-state"]')])
+        time.sleep(2)
+        check('one editor follows the stop', sum('helper.mjs' in (n.get('text') or '')
+              for n in nodes('[data-role="source-path"]')) == 1, tree('[data-role="source-path"]'))
+        ctl('key', 'F5')
+        check('continue from the followed editor runs to exit',
+              wait(lambda: 'Paused' not in shown('[data-role="source-overlay-state"]')
+                   and 'Exited' in shown('[data-role="source-overlay-state"]'), 60),
+              shown('[data-role="source-overlay-state"]'))
+        ctl('tab', 'close')
+        ctl('tab', classify_tab)
+        wait(lambda: 'classify.mjs' in shown('[data-role="source-path"]') and 'entry.mjs' not in tree('[data-role="source-path"]'), 15)
         # Large files: a ~380 KiB file opens and takes edits; one past the limit says so.
         ctl('open-url', 'elide://source?root=' + str(project) + '&path=' + str(large) + '&line=4000')
         check('large file opens at line', wait(lambda: 'Ln 4000,' in tree('[data-role="source-position"]'), 30),

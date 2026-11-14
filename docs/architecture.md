@@ -329,7 +329,7 @@ contract Elide emits against:
 
 | URL | Effect |
 | --- | --- |
-| `elide://source?path=<abs>[&root=<abs>][&line=<n>[&col=<n>]]` | Opens the Elide source block on the file at `line` when it is a JavaScript, TypeScript, Python or Kotlin source in a known project (`root`, or a detected project containing `path`) and the plugin is configured; otherwise opens the file in Tern's editor at `line`. |
+| `elide://source?path=<abs>[&root=<abs>][&line=<n>[&col=<n>]][&overlay=<mode>]` | Opens the Elide source block on the file at `line` when it is a JavaScript, TypeScript, Python or Kotlin source in a known project (`root`, or a detected project containing `path`) and the plugin is configured, in `overlay` (`none`, `coverage`, `debug` or `diagnostics`) unless the block remembers another; otherwise opens the file in Tern's editor at `line`. |
 | `elide://debug?root=<abs>&path=<abs>[&line=<n>]` | Launches the project debugger for `root` with `path` as its source. |
 | `elide://tests?root=<abs>` | Opens the project's test runs for `root`. |
 | `elide://help?topic=<slug>` | Runs `<runtime> --ignore-version help elide://help?topic=<slug>` in a new pane beside the link's pane (a new tab when the link came from no pane); `elide help` resolves the URL to its topic. |
@@ -379,8 +379,9 @@ surface node tree, so no foreign editor widget can be embedded; the block owns t
 it in Tern's `editor` node with `lang`, a per-line `gutter`, `virt` notes and `decor` ranges.
 Offsets are UTF-16 code units.
 
-- **Arguments.** The absolute file, then optionally the project root and a one-based line.
-  Without a root the block looks for the nearest `elide.pkl` above the file.
+- **Arguments.** The absolute file, then optionally the project root, a one-based line (may be
+  empty) and the overlay to open in (a restored block keeps the overlay it last showed). Without a
+  root the block looks for the nearest `elide.pkl` above the file.
 - **Opening.** `elide://source` (above), the project menu's **Open Elide source…** and the
   `plugin.elide.source` command
   (the focused file, else a prompted project path), and "Open with Elide source" from the `files`
@@ -545,7 +546,11 @@ Offsets are UTF-16 code units.
   `redo` F10, Step into `arrow-down` F11, Step out `arrow-up` ⇧F11), each with `aria`, a `title`
   naming the action and key, and a `disabled` reason. F6, F7, F10, F11 and ⇧F5 act only while a
   target exists. Test files launch in `test` mode, all with `stop_on_entry` false. Control needs
-  `controller == "you"`. Every command carries a fresh UUID and is resent with the same UUID and
+  `controller == "you"`; the editors of one project in a host share one attachment, so any of them
+  controls a target another launched. A stop whose top frame lies in another source file of the
+  project opens that file at the stop through `elide://source?…&overlay=debug`, once per stop and
+  only when no editor shows it in the Debug overlay already; the launching editor says
+  "Paused elsewhere". Every command carries a fresh UUID and is resent with the same UUID and
   payload only when no response arrived.
 - **Hotness** is hidden. Neither the broker nor
   `elide-project-session` keeps source-located profile samples, so a read-only
@@ -559,7 +564,8 @@ Offsets are UTF-16 code units.
 an `elide://source` link in an isolated desktop window and drives it by keys: go to line, typing,
 save (checked on disk), undo and redo, auto-indent, a reload after an outside write, find, a
 coverage run from the block with covered and uncovered marks and their behavior across an unsaved
-edit, a breakpoint with F9 and a launch with F5 checked against the broker's own snapshot, a large
+edit, a breakpoint with F9 and a launch with F5 checked against the broker's own snapshot, a step
+into another file opening that file at the stop, a large
 file taking edits without highlighting, and an oversized file's empty state. It takes light and
 dark screenshots, split beside a terminal and wide in a tab of its own.
 

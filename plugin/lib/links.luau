@@ -7,10 +7,12 @@ local M = {}
 local MAX_URL = 8192
 local MAX_NUMBER = 1000000000
 local MAX_TOPIC = 128
+-- The source block's overlays an `elide://source` link may open it in.
+local OVERLAYS = { none = true, coverage = true, debug = true, diagnostics = true }
 
 -- Which query keys each action takes, and which it requires.
 local ACTIONS = {
-  source = { keys = { path = true, root = true, line = true, col = true }, required = { "path" } },
+  source = { keys = { path = true, root = true, line = true, col = true, overlay = true }, required = { "path" } },
   debug = { keys = { root = true, path = true, line = true }, required = { "root", "path" } },
   tests = { keys = { root = true }, required = { "root" } },
   help = { keys = { topic = true }, required = { "topic" } },
@@ -77,7 +79,7 @@ local function number(value)
   return n
 end
 
--- Parses `elide://<action>?<query>` into `{ action, root?, path?, line?, col?, topic? }`.
+-- Parses `elide://<action>?<query>` into `{ action, root?, path?, line?, col?, overlay?, topic? }`.
 -- Returns nil for any other scheme, an unknown action, a malformed or duplicate query
 -- value, a non-absolute path, or a `path` outside the given `root`. Unknown keys are
 -- ignored so later contract versions can add some. When `root` is absent, the caller
@@ -126,6 +128,12 @@ function M.parse(url)
       return nil
     end
     result.topic = fields.topic
+  end
+  if fields.overlay ~= nil then
+    if not OVERLAYS[fields.overlay] then
+      return nil
+    end
+    result.overlay = fields.overlay
   end
   for _, key in ipairs({ "root", "path" }) do
     if fields[key] ~= nil then

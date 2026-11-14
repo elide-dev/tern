@@ -829,7 +829,44 @@ local function move_to(state, line)
   buffer.home(buf, false)
 end
 
-local function absorb_debug(state, snap)
+-- Each project root's last stop followed into another file (`generation:stop_epoch`), so one of the
+-- editors sharing the project opens that file once per stop.
+local followed = {}
+
+-- The absolute path of a frame's file inside `state`'s project (under its root as opened), or nil.
+local function project_path(state, path)
+  if type(path) ~= "string" or not state.root then
+    return nil
+  end
+  if string.sub(path, 1, 1) ~= "/" then
+    return links.absolute(state.root .. "/" .. path)
+  end
+  for _, root in { state.root, state.canonical } do
+    if type(root) == "string" and links.within(path, root) then
+      return links.absolute(state.root .. string.sub(path, #root + 1))
+    end
+  end
+  return nil
+end
+
+-- A stop in another source file of the project opens that file at the stop, in the Debug overlay,
+-- unless an editor already shows it there (that one follows the stop itself).
+local function follow(state, cx, target, frame)
+  local key = tostring(target.generation) .. ":" .. tostring(target.stop_epoch)
+  local path = project_path(state, frame.path)
+  if followed[state.root] == key or not path or not source.lang(path) or type(frame.line) ~= "number" then
+    return
+  end
+  followed[state.root] = key
+  for _, other in blocks do
+    if other ~= state and not other.closed and other.mode == "debug" and same(other, frame.path) then
+      return
+    end
+  end
+  cx:open(parser.link({ path = path, line = frame.line }) .. "&overlay=debug")
+end
+
+local function absorb_debug(state, cx, snap)
   local debug = state.debug
   if type(snap) ~= "table" or type(snap.debug) ~= "table" then
     debug.snap, debug.stop, debug.verified, debug.elsewhere = nil, nil, {}, nil
@@ -851,6 +888,7 @@ local function absorb_debug(state, snap)
       debug.stop = current_line(state, "debug", frame.line)
     else
       debug.elsewhere = tostring(frame.path or "?") .. ":" .. tostring(frame.line or "?")
+      follow(state, cx, target, frame)
     end
   end
   if debug.stop and target.stop_epoch ~= debug.epoch then
@@ -903,7 +941,7 @@ function poll_debug(state, cx)
       if err then
         debug.error = tostring(err)
       else
-        absorb_debug(state, snap)
+        absorb_debug(state, cx, snap)
       end
       local target = debug.snap and debug.snap.debug
       debug.signature = table.concat({
@@ -2643,6 +2681,8 @@ tern.block.define("source", {
     end
     root = root or find_root(path)
     saved = type(saved) == "table" and saved or {}
+    -- The overlay it last showed, else the one its opener asked for (`args[4]`).
+    local mode = saved.mode or args[4]
     local state = {
       pane = cx.pane,
       path = path,
@@ -2651,7 +2691,7 @@ tern.block.define("source", {
       relative = root and source.relative(path, root),
       project = root and string.match(root, "([^/]+)$"),
       lang = source.lang(path),
-      mode = table.find(OVERLAYS, saved.mode) and saved.mode ~= "hotness" and saved.mode or "none",
+      mode = table.find(OVERLAYS, mode) and mode ~= "hotness" and mode or "none",
       wrap = saved.wrap == true,
       focus = "editor",
       breakpoints = {},

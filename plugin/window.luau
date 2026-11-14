@@ -1521,8 +1521,12 @@ tern.route.link(function(request, cx)
     end
     if root and source.lang(target.path) and configuration() then
       local args = { target.path, root }
-      if target.line then
-        table.insert(args, tostring(target.line))
+      if target.line or target.overlay then
+        table.insert(args, target.line and tostring(target.line) or "")
+      end
+      -- The overlay the block opens in, e.g. Debug when it follows a paused target into this file.
+      if target.overlay then
+        table.insert(args, target.overlay)
       end
       -- The block attaches to the project, so a root the link named must be one this window knows.
       if target.root and not links.known(target.root, project.roots()) then
