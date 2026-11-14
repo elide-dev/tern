@@ -328,10 +328,14 @@ end
 -- The device pane being launched: { device, closing, before = pane ids before the split, expires }.
 local launching
 
--- Finishes `launching` with `pane`, unless the pane existed before the split or it expired.
+-- Finishes `launching` with `pane`, unless the pane existed before the split, it expired, or it
+-- is not a command pane (`agent`, as the display's is): a terminal the user opened meanwhile is
+-- not taken for the display.
 local function launched(cx, pane)
   local launch = launching
-  if launch and not launch.before[pane] and os.clock() < launch.expires then
+  local info = cx.session:pane(pane)
+  local ours = info == nil or info.kind == nil or info.kind == "agent"
+  if launch and ours and not launch.before[pane] and os.clock() < launch.expires then
     launching = nil
     finish(cx, launch.device, pane, launch.closing)
   end
