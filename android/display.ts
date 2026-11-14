@@ -46,6 +46,8 @@ const SEGMENT_ID = 71;
 /** The toolbar's height in rows: room for Tern-sized buttons with padding around them. */
 const BAR_ROWS = 3;
 const SCREEN_OFF = "The screen is off. Press Power to wake it.";
+/** Times a dropped connection to a device that is still there is opened again. */
+const RECONNECTS = 3;
 type Act = ToolbarButton | "close";
 /** The device's navigation buttons sit in the middle, hardware keys left of them, rotation right; Close ends the bar. */
 const NAVIGATION: Act[] = ["back", "home", "recents"];
@@ -119,7 +121,9 @@ export async function runDisplay(title: string, connect: Connect): Promise<void>
   const started = Date.now();
   // `closing`: the user closed the view; a wait for a dropped emulator to exit ends at once.
   let stopping = false, restored = false, closing = false;
-  const { promise: finished, resolve: finish } = Promise.withResolvers<string | undefined>();
+  // Resolved by `stop` with why the view ends; replaced (`rearm`) when a dropped connection is
+  // tried again.
+  let { promise: finished, resolve: finish } = Promise.withResolvers<string | undefined>();
   const directory = mkdtempSync(path.join(os.tmpdir(), "elide-tern-display-"));
   const framePath = path.join(directory, "frame.rgb");
 
@@ -127,6 +131,13 @@ export async function runDisplay(title: string, connect: Connect): Promise<void>
     if (stopping) return;
     stopping = true;
     finish(reason);
+  }
+
+  /** Lets the view run again after a stop: for a reconnect to a device that is still there. */
+  function rearm(): void {
+    ({ promise: finished, resolve: finish } = Promise.withResolvers<string | undefined>());
+    stopping = false;
+    streamSize = "";
   }
 
   // ── Terminal output ────────────────────────────────────────────────────────────
@@ -618,7 +629,25 @@ export async function runDisplay(title: string, connect: Connect): Promise<void>
       setStep("Waiting for the screen…");
       subscribe();
       failure = await finished;
-      if (failure && !hungUp) {
+      // A dropped connection to a device that is still there (its gRPC server restarted, a
+      // blip) is opened again, a few times; a device that went away ends the view.
+      for (let retry = 1; failure && !hungUp && !closing && retry <= RECONNECTS; retry++) {
+        status(failure);
+        const settle = Date.now() + 2_000;
+        gone = await device.ended(() => !hungUp && !closing && Date.now() < settle);
+        if (gone || hungUp || closing) break;
+        status(`${failure}\nReconnecting (${retry} of ${RECONNECTS})…`);
+        await device.close().catch(() => {});
+        rearm();
+        const again = await connect(text => { if (!stopping) setStep(text); }, abort.signal).catch(() => undefined);
+        if (!again) continue;
+        device = again;
+        await device.open({ status: text => { if (!stopping) status(text); }, stop });
+        status("");
+        subscribe();
+        failure = await finished;
+      }
+      if (failure && !hungUp && !gone) {
         status(failure);
         gone = await device.ended(() => !hungUp && !closing);
       }
