@@ -1191,13 +1191,17 @@ tern.on("command_finished", function(ev, cx)
     end
     status = ev.status
   end
-  local detail = nil
+  local detail, success = nil, nil
   if command == "build" then
     detail = build_counts(report)
   elseif command == "install" then
     detail = install_detail(report)
+    -- The page says "Up to date" when nothing needed fetching; so does the bar.
+    if type(report) == "table" and report.outcome == "up-to-date" then
+      success = "Up to date"
+    end
   end
-  project.finished(ev.pane, command, status, detail)
+  project.finished(ev.pane, command, status, detail, success)
   tern.chrome.refresh()
   -- Statuses from 128 up are signals (an interrupt), not failing tests.
   if command == "test" and status ~= 0 and status < 128 then

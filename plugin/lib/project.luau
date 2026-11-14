@@ -103,11 +103,12 @@ end
 
 -- Records how an `elide <command>` line ended in `pane`, in the project the pane is in; the
 -- caller refreshes the chrome. `detail`, when given, follows the outcome after a middle dot
--- ("Build failed · 3 errors"). A nil `command` forgets the last outcome: the line's end said
--- nothing about it.
-function M.finished(pane, command, status, detail)
+-- ("Build failed · 3 errors"); `success`, when given, names a success in place of the
+-- command's usual word ("Up to date" for an install that fetched nothing). A nil `command`
+-- forgets the last outcome: the line's end said nothing about it.
+function M.finished(pane, command, status, detail, success)
   results[pane] = if command
-    then { command = command, status = status, detail = detail, root = M.root_of(pane) }
+    then { command = command, status = status, detail = detail, success = success, root = M.root_of(pane) }
     else nil
 end
 
@@ -147,7 +148,7 @@ local function outcome(pane, root)
     return { text = labels.interrupted, icon = "slash-circle", tone = "muted", command = labels.command }
   end
   local ok = result.status == 0
-  local text = if ok then labels.ok else labels.failed
+  local text = if ok then result.success or labels.ok else labels.failed
   if result.detail then
     text ..= " · " .. result.detail
   end
