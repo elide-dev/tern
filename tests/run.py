@@ -234,6 +234,22 @@ with tempfile.TemporaryDirectory(prefix='run-') as temporary:
                 wait(lambda: not running(marker) and not child_running())
                 assert blocks('run-status', 'Stopped') == stopped + 1, tree('[data-role="run-status"]')
                 assert 'tick 4' in latest_log(), latest_log()
+            # Outside a project, `elide run <script>` and bare `elide <script>` are hosted too.
+            outside = ''
+            if len(launchers) > 1:
+                loose = (state / 'loose').resolve()
+                loose.mkdir()
+                (loose / 'wait.mjs').write_text(WAIT)
+                for command in [[runtime, 'run', 'wait.mjs'], [runtime, 'wait.mjs']]:
+                    marker = shlex.join(command)
+                    ticking, stopped = blocks('run-output', '5 lines'), blocks('run-status', 'Stopped')
+                    ctl('run', 'cd ' + shlex.quote(str(loose)) + ' && ' + marker)
+                    wait(lambda: blocks('run-output', '5 lines') == ticking + 1)
+                    ctl('key', 'ctrl+c')
+                    wait(lambda: not running(marker))
+                    wait(lambda: blocks('run-status', 'Stopped') == stopped + 1)
+                assert not (loose / '.dev').exists(), 'reports outside a project go to the temp dir'
+                outside = ', scripts outside a project'
             # A runtime that advertises --surface accepts it on a plain run outside Tern.
             if '--surface' in usage:
                 plain = subprocess.run([runtime, 'run', '--surface=screen'], cwd=project, capture_output=True, text=True, timeout=300)
@@ -242,7 +258,7 @@ with tempfile.TemporaryDirectory(prefix='run-') as temporary:
                 flag = 'plain run accepts --surface'
             else:
                 flag = 'runtime predates --surface; plain-run check skipped'
-            print(f'PASS: output, task table, logcat records, wrapping, log height, task fold, output.log, exit status, Stop, compile error cards, page, inline block, bare run on a terminal ({flag})')
+            print(f'PASS: output, task table, logcat records, wrapping, log height, task fold, output.log, exit status, Stop, compile error cards, page, inline block, bare run on a terminal{outside} ({flag})')
             print('Shots:', *(str(out / 'serve' / f'{name}.png') for name in ['run-screen-light', 'run-screen-dark', 'run-logcat-light', 'run-logcat-dark', 'run-logcat-narrow-light', 'run-logcat-narrow-dark', 'run-inline-light']))
         finally:
             server.terminate()
