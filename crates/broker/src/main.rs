@@ -194,8 +194,28 @@ fn serve(state: &Path) -> Result<(), String> {
   let active = Arc::new(AtomicUsize::new(0));
   let serial = Arc::new(AtomicUsize::new(1));
   let mut last = Instant::now();
+  // An upgrade (`make broker` renames a new build into place) must not leave clients talking to the
+  // old broker for as long as they keep it busy: once its executable is replaced, it stops taking
+  // connections and exits when the ones it has end, and the next request starts the new build.
+  let build = executable();
+  let mut checked = Instant::now();
+  let mut replaced = false;
   loop {
     let mut idle = false;
+    if !replaced && checked.elapsed() >= Duration::from_secs(1) {
+      checked = Instant::now();
+      if build.is_some() && executable() != build {
+        replaced = true;
+        let _ = fs::remove_file(&socket);
+      }
+    }
+    if replaced {
+      if active.load(Ordering::SeqCst) == 0 {
+        return Ok(());
+      }
+      thread::sleep(Duration::from_millis(25));
+      continue;
+    }
     match listener.accept() {
       Ok((mut stream, _)) => {
         last = Instant::now();
@@ -239,6 +259,13 @@ fn serve(state: &Path) -> Result<(), String> {
     }
   }
   fs::remove_file(socket).map_err(err)
+}
+
+/// The running executable's identity on disk (device, inode, modification time), when it can be
+/// read.
+fn executable() -> Option<(u64, u64, std::time::SystemTime)> {
+  let metadata = fs::metadata(std::env::current_exe().ok()?).ok()?;
+  Some((metadata.dev(), metadata.ino(), metadata.modified().ok()?))
 }
 
 fn connection(

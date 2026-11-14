@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import socket
 import struct
 import subprocess
@@ -76,6 +77,32 @@ def main():
                                 capture_output=True, timeout=20)
       assert result.returncode != 0 and 'Broker already running' in result.stderr, result.stderr
       assert 'Broker already running' in (held / 'broker.log').read_text()
+      # An upgraded broker binary takes over: the running one, its executable replaced, steps aside
+      # and the next request starts the new build.
+      tools = Path(directory) / 'tools'
+      tools.mkdir()
+      copy = tools / 'elide-tern-broker'
+      shutil.copy2(BINARY, copy)
+      upgraded = Path(directory) / 'upgraded'
+      def ping(binary):
+        result = subprocess.run([str(binary), 'request', str(upgraded)], input='{"op":"ping"}', text=True,
+                                capture_output=True, timeout=20)
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)['result']['pid']
+      old = ping(copy)
+      shutil.copy2(BINARY, tools / 'next')
+      os.rename(tools / 'next', copy)
+      deadline = time.monotonic() + 10
+      while True:
+        try:
+          os.kill(old, 0)
+        except ProcessLookupError:
+          break
+        assert time.monotonic() < deadline, 'the replaced broker kept running'
+        time.sleep(.1)
+      new = ping(copy)
+      assert new != old, (old, new)
+      os.kill(new, signal.SIGTERM)
       if args.sdk:
         session = success(op='open', sdk=str(Path(args.sdk).resolve()))['session']
         capabilities = success(op='discover', session=session)
