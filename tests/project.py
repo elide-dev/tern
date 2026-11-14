@@ -120,7 +120,8 @@ with tempfile.TemporaryDirectory(prefix='tp-', dir='/tmp') as temporary:
             ctl('click', '.wg-status-chip')
             wait(lambda: 'Run tests' in tree('#pick'))
             ctl('shot', 'project-actions')
-            ctl('key', 'Enter')
+            # The menu leads with Build and Run (U3); pick the test action by its label.
+            choose('Run tests')
             wait(lambda: 'Passed' in tree('[data-role="run-status"]'))
             native_panel('elide-tern-project')
             assert str(project.resolve()) in tree('[data-role="subject"]')
