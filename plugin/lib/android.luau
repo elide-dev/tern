@@ -56,13 +56,21 @@ local function render(cx, state)
   local rows = {}
   for index, avd in state.avds or {} do
     local running = avd.serial ~= nil
+    -- An emulator started elsewhere (Android Studio) has no gRPC token Tern can use: Show would
+    -- open a pane with only that error, so it is off and the row says what to do.
+    local outside = running and avd.embeddable == false
     local actions = running
-        and { button("eye", "Show", "show-" .. index, disabled), button("stop", "Stop", "stop-" .. index, disabled) }
+        and {
+          button("eye", "Show", "show-" .. index, disabled or outside),
+          button("stop", "Stop", "stop-" .. index, disabled),
+        }
       or {
         button("play", "Start", "start-" .. index, disabled),
         button("trash", "Delete…", "delete-" .. index, disabled),
       }
-    local detail = avd.state .. (avd.serial and (" · " .. avd.serial) or "")
+    local detail = avd.state
+      .. (avd.serial and (" · " .. avd.serial) or "")
+      .. (outside and " · started outside Tern: stop it and start it here to show it" or "")
     table.insert(rows, device_row("mi-android", "Virtual device", avd.name, detail, running, actions))
   end
   for index, device in state.devices or {} do
@@ -126,14 +134,20 @@ local function render(cx, state)
   cx.canvas:set(state.pane, { view = ui.node("col", { role = "android-manager", gap = "md" }, view) })
 end
 
+-- `state.sdk`, once a `list` named it, stands in for the project on `start` and `wait`: those
+-- need only the SDK, and resolving the project again costs an `elide project export` per member.
 local function command_args(state, command, arguments)
   local config = configuration() or {}
   local argv = { plugin_path(config.android or "../dist/elide-tern-android"), command, "--json" }
-  if config.android_sdk then
+  local known = state.sdk and (command == "start" or command == "wait")
+  if known then
+    table.insert(argv, "--sdk")
+    table.insert(argv, state.sdk)
+  elseif config.android_sdk then
     table.insert(argv, "--sdk")
     table.insert(argv, plugin_path(config.android_sdk))
   end
-  if state.context then
+  if state.context and not known then
     table.insert(argv, "--root")
     table.insert(argv, state.context.root)
     table.insert(argv, "--runtime")
@@ -646,12 +660,22 @@ function M.run_device(cx, context, done)
       return
     end
     local display = device.embeddable and { name = device.name, serial = device.serial } or nil
+    if not display and not device.physical then
+      current:toast(
+        "info",
+        device.name .. " runs outside Tern, so no device pane opens.",
+        "Stop it and start it from the device manager to see it in Tern."
+      )
+    end
     if not device.physical and device.name == project_avd then
       plan.args, plan.display = { "--emulator" }, display
       done(current, plan)
       return
     end
     -- Elide installs on a `--device` as soon as adb lists it; another emulator may still boot.
+    if not device.physical and device.state ~= "running" then
+      current:toast("info", "Waiting for " .. device.name .. " to finish booting…")
+    end
     request(current, state, "wait", { "--serial", device.serial }, function(fresh, value)
       plan.args, plan.display = { "--device=" .. value.serial }, display
       done(fresh, plan)
@@ -696,10 +720,14 @@ function M.run_device(cx, context, done)
   function prepare(from)
     request(from, state, "list", {}, function(current, value)
       local project = value.project
+      state.sdk = value.sdk
       local candidates = {}
       for _, avd in value.avds or {} do
         if avd.serial then
-          table.insert(candidates, { name = avd.name, serial = avd.serial, embeddable = avd.embeddable == true })
+          table.insert(
+            candidates,
+            { name = avd.name, serial = avd.serial, state = avd.state, embeddable = avd.embeddable == true }
+          )
         end
       end
       for _, device in value.devices or {} do
@@ -983,7 +1011,8 @@ function M.install(config, path, runtime)
           for _, avd in value.avds or {} do
             local running = avd.serial ~= nil
             local wants_running = spec.id == "stop" or spec.id == "show"
-            if wants_running == running then
+            -- Show cannot embed an emulator started outside Tern (see `render`).
+            if wants_running == running and not (spec.id == "show" and avd.embeddable == false) then
               local id = avd.serial or avd.name
               devices[id] = avd
               table.insert(items, { label = avd.name .. (avd.serial and (" · " .. avd.serial) or ""), value = id })

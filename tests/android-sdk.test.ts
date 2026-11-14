@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { announceStart, liveLocks } from "../android/sdk";
+import { announceStart, liveLocks, logCause } from "../android/sdk";
 
 describe("liveLocks", () => {
   test("only locks a live process holds block an AVD", async () => {
@@ -41,5 +41,28 @@ describe("announceStart", () => {
     expect(await announceStart(directory, "Pixel_8", "0", "/sdk")).toBeUndefined();
     expect(await announceStart(directory, "Pixel_8", "12; rm", "/sdk")).toBeUndefined();
     expect(await readdir(directory).catch(() => [])).toEqual([]);
+  });
+});
+
+describe("logCause", () => {
+  test("the error lines at the end of the log, not its first INFO lines", () => {
+    const log = [
+      "INFO    | Android emulator version 35.1.4",
+      "INFO    | Found systemPath /sdk/system-images/android-35/google_apis/arm64-v8a/",
+      "WARNING | unexpected system image feature string",
+      "ERROR   | x86_64 emulation currently requires hardware acceleration!",
+      "INFO    | shutting down",
+      "FATAL   | CPU acceleration status: HAXM is not installed on this machine",
+      "",
+    ].join("\n");
+    expect(logCause(log)).toEqual([
+      "ERROR   | x86_64 emulation currently requires hardware acceleration!",
+      "FATAL   | CPU acceleration status: HAXM is not installed on this machine",
+    ]);
+  });
+
+  test("without an error line, the last lines", () => {
+    expect(logCause("INFO | a\nINFO | b\n\nINFO | c\n")).toEqual(["INFO | b", "INFO | c"]);
+    expect(logCause("")).toEqual([]);
   });
 });

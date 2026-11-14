@@ -308,16 +308,31 @@ export class AndroidSdk {
     } catch (error) {
       if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) await stopProcess(child);
       const handle = await open(log, "r");
-      let detail: string;
+      let tail = "";
       try {
         const size = (await handle.stat()).size;
         const bytes = Buffer.alloc(Math.min(size, 16_384));
         const result = await handle.read(bytes, 0, bytes.length, Math.max(0, size - bytes.length));
-        detail = bytes.toString("utf8", 0, result.bytesRead).trim();
+        tail = bytes.toString("utf8", 0, result.bytesRead);
+        // Read from the middle of the file, the first line is cut.
+        if (size > bytes.length) tail = tail.slice(tail.indexOf("\n") + 1);
       } finally { await handle.close(); }
-      throw new Error(`${errorMessage(error)}\nEmulator log: ${log}${detail ? `\n${detail}` : ""}`);
+      // The lines that say why go first: the pane shows only a few, and a toast one.
+      const cause = logCause(tail);
+      throw new Error([errorMessage(error), ...cause, `Emulator log: ${log}`].join("\n"));
     }
   }
+}
+
+/**
+ * Why an emulator start failed, from the end of its log (`tail`): the last two FATAL, ERROR or
+ * PANIC lines, else its last two lines. The log starts with pages of INFO lines; the reason
+ * (a KVM, GPU or image error) comes last.
+ */
+export function logCause(tail: string): string[] {
+  const lines = tail.split("\n").map(line => line.trimEnd()).filter(line => line.trim() !== "");
+  const fatal = lines.filter(line => /\b(FATAL|ERROR|PANIC)\b/.test(line));
+  return (fatal.length ? fatal : lines).slice(-2);
 }
 
 /**
