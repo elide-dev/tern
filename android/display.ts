@@ -117,7 +117,8 @@ export async function runDisplay(title: string, connect: Connect): Promise<void>
   /** The step in progress, shown with an animated bar until the first frame; and the latest notice. */
   let step: string | undefined = `Connecting to ${title}…`, message = "";
   const started = Date.now();
-  let stopping = false, restored = false;
+  // `closing`: the user closed the view; a wait for a dropped emulator to exit ends at once.
+  let stopping = false, restored = false, closing = false;
   const { promise: finished, resolve: finish } = Promise.withResolvers<string | undefined>();
   const directory = mkdtempSync(path.join(os.tmpdir(), "elide-tern-display-"));
   const framePath = path.join(directory, "frame.rgb");
@@ -390,7 +391,7 @@ export async function runDisplay(title: string, connect: Connect): Promise<void>
     if (touching) { device?.touch("up", touching.u, touching.v, touching.pinch); touching = undefined; }
   };
   const act = (button: Act) => {
-    if (button === "close") stop();
+    if (button === "close") { closing = true; stop(); }
     else device?.press(button);
   };
   const mouse = (code: number, x: number, y: number, release: boolean) => {
@@ -619,7 +620,7 @@ export async function runDisplay(title: string, connect: Connect): Promise<void>
       failure = await finished;
       if (failure && !hungUp) {
         status(failure);
-        gone = await device.ended(() => !hungUp);
+        gone = await device.ended(() => !hungUp && !closing);
       }
     }
   } catch (error) {
@@ -645,7 +646,7 @@ export async function runDisplay(title: string, connect: Connect): Promise<void>
     process.stdin.pause();
     rmSync(directory, { recursive: true, force: true });
   }
-  if (failure) {
+  if (failure && !closing) {
     // The device stopping or leaving is the normal end of a view, not an error.
     if (!gone) throw new Error(failure);
     console.log(gone);
