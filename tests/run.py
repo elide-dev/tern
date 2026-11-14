@@ -161,10 +161,10 @@ with tempfile.TemporaryDirectory(prefix='run-') as temporary:
             assert nodes('[data-role="build-tasks"]:not(.collapsed)'), tree('[data-role="build-tasks"]')
             # Logcat output: records under the folded tasks, a stack trace's lines in one. The log
             # takes the height the pane has left, so the page does not scroll, and it follows the
-            # lines written after the pause.
+            # lines written after the pause. Its FATAL EXCEPTION fails the run (U11).
             hello.write_text(LOGCAT)
             ctl('key', 'r')
-            wait(lambda: status('Finished'))
+            wait(lambda: status('Crashed'))
             assert '46 lines' in output(), output()
             assert nodes('[data-role="build-tasks"].collapsed'), tree('[data-role="build-tasks"]')
             fatal = nodes('[data-role="run-log-record"]')[-1]
