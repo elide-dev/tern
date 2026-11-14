@@ -166,6 +166,10 @@ installed Komodo/layoutlib host; the tested Komodo build can stall infinite tran
 cycle boundary even while coroutine timers advance. Source refreshes reuse the session but may
 reset composition state. IME composition and clipboard paste are not supported by the live
 keyboard protocol.
+Run `make test-compose RUNTIME=/path/to/elide COMPOSE_PROJECT=/path/to/compose-project
+COMPOSE_FILE=relative/path/Previews.kt` for the preview service as the plugin drives it, on a copy
+of the project under `/tmp`: canonical paths, previews going live, a rejected editor post
+suspending the preview, a project whose first load fails, and closing a session.
 
 Only one page controls a session. Its loopback URL contains a temporary access token; do not
 share it. The page follows Tern's light or dark theme setting, or the system's appearance.

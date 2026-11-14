@@ -26,6 +26,9 @@ previewing:
 	mkdir -p dist
 	cp "$(ELIDE_SOURCE)/target/debug/examples/compose_preview" dist/.elide-tern-compose.new
 	mv dist/.elide-tern-compose.new dist/elide-tern-compose
+.PHONY: test-compose
+test-compose: previewing
+	python3 -u tests/compose.py --runtime "$(RUNTIME)" --project "$(COMPOSE_PROJECT)" --file "$(COMPOSE_FILE)"
 test: test-unit
 test-unit: broker
 	$(LUA) tests/links.lua
