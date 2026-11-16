@@ -712,7 +712,8 @@ The broker links the runtime's `elide-embed-host` crate (the supervised embeddin
 worker, frame protocol and generated Cap'n Proto bindings, shared with Studio) and
 `elide-project-session` from a sibling `../elide` checkout of `elide-dev/runtime`.
 No runtime source is vendored, so building the broker needs access to the runtime
-repository. SDK archive verification, updates and release packaging belong above
+repository. `.elide-revision` names the oldest runtime revision the plugin builds
+against, and `make check` verifies that `../elide` contains it. SDK archive verification, updates and release packaging belong above
 that crate; this repository consumes an explicitly selected, complete SDK directory.
 
 Published Tern contracts: [blocks](https://docs.stencil.so/tern/guides/blocks.html),
