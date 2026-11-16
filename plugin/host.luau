@@ -305,8 +305,29 @@ local function alive(state)
   return not state.closed and running(state.pane)
 end
 
+-- The project attachment each project root's editors share in this host: one lease, so every
+-- editor of a project controls the debug target any of them launched. `{ binding, users = { [state]
+-- = true } }` once attached; `{ waiting = { callbacks } }` while the attach request runs.
+local attachments = {}
+
+-- Gives up `state`'s use of its project's attachment; the last user detaches it.
+local function release(state)
+  local binding = state.binding
+  state.binding = nil
+  local entry = binding and attachments[state.root]
+  if not entry or entry.binding ~= binding then
+    return
+  end
+  entry.users[state] = nil
+  if next(entry.users) == nil then
+    attachments[state.root] = nil
+    broker.project({ op = "project_detach", binding = binding }, function() end)
+  end
+end
+
 -- Stops background work and releases the project attachment; a debug target this block controls
--- gets the broker's 30-second takeover grace before it is stopped.
+-- gets the broker's 30-second takeover grace before it is stopped (once no editor of the project
+-- holds the attachment).
 local function close(state)
   if state.closed then
     return
@@ -318,10 +339,7 @@ local function close(state)
     timer:cancel()
   end
   state.timers = {}
-  if state.binding then
-    broker.project({ op = "project_detach", binding = state.binding }, function() end)
-    state.binding = nil
-  end
+  release(state)
 end
 
 tern.on("pane_exited", function(ev)
@@ -332,7 +350,8 @@ tern.on("pane_exited", function(ev)
 end)
 
 -- New shells name this plugin's helper as Elide's emulator launcher (ELIDE_ANDROID_EMULATOR_LAUNCHER):
--- an Elide command that boots an emulator there gets one without a window, which a device pane can show.
+-- an Elide command that boots an emulator there gets one without a window, and the helper leaves a
+-- marker naming the AVD and the pane (`--announce`), from which the window opens its device pane.
 tern.on("spawn", function(spec)
   local ok, config = pcall(function()
     return tern.json.decode(tern.fs.read(tern.plugin.dir .. "/config.json", 65536))
@@ -345,7 +364,8 @@ tern.on("spawn", function(spec)
   if not tern.fs.exists(helper) then
     return nil
   end
-  spec.env.ELIDE_ANDROID_EMULATOR_LAUNCHER = tern.json.encode({ helper, "start", "--held", "--name" })
+  spec.env.ELIDE_ANDROID_EMULATOR_LAUNCHER =
+    tern.json.encode({ helper, "start", "--held", "--announce", tern.plugin.data .. "/android/started", "--name" })
   return spec
 end)
 
@@ -430,8 +450,26 @@ local function absorb(state, snapshot)
   state.runs = type(snapshot.runs) == "table" and snapshot.runs or {}
 end
 
+-- How long a block waits before attaching again after its attachment failed or expired.
+local REATTACH_MS = 5000
+-- A renewal that fails for another reason than an expired attachment is retried this often, this
+-- many times, before the attachment is given up: the lease outlives two renewal periods.
+local RENEW_RETRY_MS = 5000
+local RENEW_TRIES = 3
+
+local attach
+
+-- The attachment failed: the block shows why and attaches again shortly. An attachment the broker
+-- no longer knows ("attach again") is dropped for every editor of the project.
 local function fail(state, cx, problem)
-  state.attach, state.attach_error, state.binding = "error", tostring(problem or "Project request failed."), nil
+  local binding = state.binding
+  local entry = binding and attachments[state.root]
+  if entry and entry.binding == binding and string.find(tostring(problem), "attach again", 1, true) then
+    attachments[state.root] = nil
+    state.binding = nil
+  end
+  release(state)
+  state.attach, state.attach_error = "error", tostring(problem or "Project request failed.")
   for name, timer in state.timers do
     if name ~= "disk" then
       timer:cancel()
@@ -439,10 +477,18 @@ local function fail(state, cx, problem)
     end
   end
   state.debug.polling = false
+  state.timers.reattach = tern.timer(REATTACH_MS, function()
+    state.timers.reattach = nil
+    if not alive(state) then
+      close(state)
+      return
+    end
+    attach(state, cx)
+  end)
   cx:render()
 end
 
-local load_coverage, poll_debug, overlay_modes
+local load_coverage, poll_debug, overlay_modes, edited
 
 local function enter(state, cx)
   if state.attach ~= "ready" then
@@ -455,8 +501,8 @@ local function enter(state, cx)
   end
 end
 
-local function renew(state, cx)
-  state.timers.renew = tern.timer(RENEW_MS, function()
+local function renew(state, cx, delay)
+  state.timers.renew = tern.timer(delay or RENEW_MS, function()
     state.timers.renew = nil
     if not alive(state) then
       close(state)
@@ -471,9 +517,16 @@ local function renew(state, cx)
         return
       end
       if err then
-        fail(state, cx, err)
+        state.renew_failures = (state.renew_failures or 0) + 1
+        if string.find(tostring(err), "attach again", 1, true) or state.renew_failures >= RENEW_TRIES then
+          state.renew_failures = 0
+          fail(state, cx, err)
+        else
+          renew(state, cx, RENEW_RETRY_MS)
+        end
         return
       end
+      state.renew_failures = 0
       if type(snapshot) == "table" then
         absorb(state, snapshot)
         if state.mode == "coverage" then
@@ -486,38 +539,77 @@ local function renew(state, cx)
   end)
 end
 
-local function attach(state, cx)
-  if not state.root or state.closed or state.attach == "attaching" then
+-- `state` uses `binding`, its project's shared attachment: reads the project and starts renewing.
+local function attached(state, cx, binding)
+  state.binding = binding
+  attachments[state.root].users[state] = true
+  broker.project({ op = "project_snapshot", binding = binding }, function(snapshot, problem)
+    if not alive(state) then
+      close(state)
+      return
+    end
+    if problem then
+      fail(state, cx, problem)
+      return
+    end
+    absorb(state, snapshot)
+    state.attach = "ready"
+    renew(state, cx)
+    enter(state, cx)
+    cx:render()
+  end)
+end
+
+function attach(state, cx)
+  if not state.root or state.closed or state.attach == "attaching" or state.attach == "ready" then
     return
   end
+  -- A Retry click comes before the scheduled attempt: that one is not needed any more.
+  if state.timers.reattach then
+    state.timers.reattach:cancel()
+    state.timers.reattach = nil
+  end
   state.attach, state.attach_error = "attaching", nil
-  broker.project({ op = "project_attach", root = state.root }, function(binding, err)
+  local entry = attachments[state.root]
+  if entry and entry.binding then
+    attached(state, cx, entry.binding)
+    return
+  end
+  -- The project's first editor attaches; the others wait for its answer.
+  local function answered(binding, err)
     if not alive(state) then
-      if type(binding) == "table" then
-        broker.project({ op = "project_detach", binding = binding }, function() end)
-      end
+      close(state)
       return
     end
+    if err then
+      fail(state, cx, err)
+      return
+    end
+    attached(state, cx, binding)
+  end
+  if entry then
+    table.insert(entry.waiting, answered)
+    return
+  end
+  entry = { waiting = { answered }, users = {} }
+  attachments[state.root] = entry
+  broker.project({ op = "project_attach", root = state.root }, function(binding, err)
+    local waiting = entry.waiting
+    entry.waiting = nil
     if err or type(binding) ~= "table" then
-      fail(state, cx, err or "Invalid attachment.")
-      return
+      attachments[state.root] = nil
+      err = err or "Invalid attachment."
+    else
+      entry.binding = binding
     end
-    state.binding = binding
-    broker.project({ op = "project_snapshot", binding = binding }, function(snapshot, problem)
-      if not alive(state) then
-        close(state)
-        return
-      end
-      if problem then
-        fail(state, cx, problem)
-        return
-      end
-      absorb(state, snapshot)
-      state.attach = "ready"
-      renew(state, cx)
-      enter(state, cx)
-      cx:render()
-    end)
+    for _, waiter in waiting do
+      waiter(entry.binding, err)
+    end
+    -- Every waiting editor closed meanwhile: nobody holds the attachment.
+    if entry.binding and next(entry.users) == nil then
+      attachments[state.root] = nil
+      broker.project({ op = "project_detach", binding = entry.binding }, function() end)
+    end
   end)
 end
 
@@ -608,7 +700,12 @@ function load_coverage(state, cx, force)
   end
   local run = coverage_run(state)
   if not run then
-    coverage.state, coverage.run = "missing", nil
+    -- Newer test runs pushed the measured run out of the snapshot: tints already drawn stay.
+    if coverage.state == "ready" then
+      coverage.evicted = true
+    else
+      coverage.state, coverage.run = "missing", nil
+    end
     return
   end
   local summary = type(run.coverage) == "table" and run.coverage or {}
@@ -625,7 +722,11 @@ function load_coverage(state, cx, force)
   if not force and coverage.run == run.id and (coverage.state == "ready" or coverage.state == "loading") then
     return
   end
+  -- Refreshing the run already shown keeps the text it was anchored to: the disk may have changed
+  -- since, and re-anchoring would move its tints onto other lines.
+  local anchored = coverage.lines_run == run.id
   coverage.state, coverage.run, coverage.error, coverage.stale = "loading", run.id, nil, false
+  coverage.evicted = false
   local token = {}
   coverage.token = token
   local function current()
@@ -659,13 +760,15 @@ function load_coverage(state, cx, force)
         return
       end
       coverage.marks, coverage.covered, coverage.total = source.coverage(found)
-      coverage.complete = page.complete ~= false
+      coverage.complete = page.complete ~= false and summary.state ~= "incomplete"
       coverage.state = "ready"
-      -- Measured against the file on disk. Marks follow later edits by line; lines whose text
-      -- differs from the measured text (unsaved edits included) draw dimmed.
-      coverage.lines = buffer.new(state.disk).lines
-      -- Anchored to the disk text it measured; a dirty buffer's lines map through what changed.
-      state.buf.maps.coverage = source.line_map(coverage.lines, state.buf.lines)
+      if not anchored then
+        -- Measured against the file on disk. Marks follow later edits by line; lines whose text
+        -- differs from the measured text (unsaved edits included) draw dimmed.
+        coverage.lines, coverage.lines_run = buffer.new(state.disk).lines, run.id
+        -- Anchored to the disk text it measured; a dirty buffer's lines map through what changed.
+        state.buf.maps.coverage = source.line_map(coverage.lines, state.buf.lines)
+      end
       check_identity(state, cx, file.sourceDigest, token)
       cx:render()
     end)
@@ -739,13 +842,53 @@ local function move_to(state, line)
   buffer.home(buf, false)
 end
 
-local function absorb_debug(state, snap)
+-- Each project root's last stop followed into another file (`generation:stop_epoch`), so one of the
+-- editors sharing the project opens that file once per stop.
+local followed = {}
+
+-- The absolute path of a frame's file inside `state`'s project (under its root as opened), or nil.
+local function project_path(state, path)
+  if type(path) ~= "string" or not state.root then
+    return nil
+  end
+  if string.sub(path, 1, 1) ~= "/" then
+    return links.absolute(state.root .. "/" .. path)
+  end
+  for _, root in { state.root, state.canonical } do
+    if type(root) == "string" and links.within(path, root) then
+      return links.absolute(state.root .. string.sub(path, #root + 1))
+    end
+  end
+  return nil
+end
+
+-- A stop in another source file of the project opens that file at the stop, in the Debug overlay,
+-- unless an editor already shows it there (that one follows the stop itself).
+local function follow(state, cx, target, frame)
+  local key = tostring(target.generation) .. ":" .. tostring(target.stop_epoch)
+  local path = project_path(state, frame.path)
+  if followed[state.root] == key or not path or not source.lang(path) or type(frame.line) ~= "number" then
+    return
+  end
+  followed[state.root] = key
+  for _, other in blocks do
+    if other ~= state and not other.closed and other.mode == "debug" and same(other, frame.path) then
+      return
+    end
+  end
+  cx:open(parser.link({ path = path, line = frame.line }) .. "&overlay=debug")
+end
+
+local function absorb_debug(state, cx, snap)
   local debug = state.debug
   if type(snap) ~= "table" or type(snap.debug) ~= "table" then
     debug.snap, debug.stop, debug.verified, debug.elsewhere = nil, nil, {}, nil
     return
   end
   local target = snap.debug
+  if target.generation ~= debug.generation or target.stop_epoch ~= debug.epoch then
+    debug.error = nil
+  end
   if target.generation ~= debug.generation then
     -- A target launched elsewhere ran the file on disk; anchor its lines there, through any unsaved
     -- edits.
@@ -761,6 +904,7 @@ local function absorb_debug(state, snap)
       debug.stop = current_line(state, "debug", frame.line)
     else
       debug.elsewhere = tostring(frame.path or "?") .. ":" .. tostring(frame.line or "?")
+      follow(state, cx, target, frame)
     end
   end
   if debug.stop and target.stop_epoch ~= debug.epoch then
@@ -811,13 +955,17 @@ function poll_debug(state, cx)
       end
       local before = debug.signature
       if err then
-        debug.error = tostring(err)
+        -- A failed poll says so until the next one answers; command errors stay until the stop
+        -- they were sent at is over.
+        debug.poll_error = tostring(err)
       else
-        absorb_debug(state, snap)
+        debug.poll_error = nil
+        absorb_debug(state, cx, snap)
       end
       local target = debug.snap and debug.snap.debug
       debug.signature = table.concat({
         tostring(debug.error),
+        tostring(debug.poll_error),
         target and tostring(target.revision) or "-",
         target and tostring(target.pending) or "-",
         debug.snap and tostring(debug.snap.controller) or "-",
@@ -963,9 +1111,20 @@ local function write(state, cx)
   return true
 end
 
--- ⌘S: asks before overwriting a file that changed on disk since it was loaded or saved.
+-- ⌘S: asks before overwriting a file that changed on disk since it was loaded or saved, or that
+-- can no longer be read (it grew past the size this editor reads, or stopped being UTF-8 text):
+-- the editor never showed what saving would replace.
 local function save(state, cx)
-  local current = read(state.path)
+  local current, problem = read(state.path)
+  if problem and tern.fs.exists(state.path) then
+    state.confirm = {
+      kind = "overwrite",
+      title = state.name .. " can't be read any more",
+      text = problem.title .. " on disk: " .. problem.text .. " Saving replaces it with your text.",
+      action = "Overwrite",
+    }
+    return
+  end
   if current and current ~= state.disk then
     state.confirm = {
       kind = "overwrite",
@@ -985,13 +1144,11 @@ local function reload(state, text)
   -- Only the changed middle is replaced, so breakpoints and overlay marks above and below it keep
   -- their lines.
   local edit = buffer.reload(buf, text)
-  if edit then
-    state.breakpoints = buffer.remap(state.breakpoints, edit)
-  end
   buf.cursor = buffer.clamp(buf, cursor)
   state.disk = text
   buffer.mark_saved(buf)
-  compose.document(state.pane, state.path, nil)
+  -- As any edit: breakpoints follow it, and find results and cached views of the text refresh.
+  edited(state, edit)
 end
 
 -- Diagnostics ---------------------------------------------------------------------------------
@@ -1470,7 +1627,7 @@ local function go_to(state, cx)
 end
 
 -- After an edit: breakpoints follow their lines, find results follow the text.
-local function edited(state, edit)
+function edited(state, edit)
   -- Every edit, undo and redo passes here; cached views of the text key on this. (Not
   -- `state.revision`: that is the project snapshot revision the lease renewal sends.)
   state.edits = (state.edits or 0) + 1
@@ -1590,6 +1747,10 @@ local function lines_view(state, starts)
         if point and not point.verified and active(debug) then
           glyph, tone, number = "○", "warning", "warning"
           note = { ui.span(" " .. (type(point.message) == "string" and point.message or "unverified"), "muted") }
+        elseif not point and active(debug) then
+          -- Set here only: the running target was launched without it and will not stop there.
+          glyph, tone, number = "○", "muted", "muted"
+          note = { ui.span(" not in the running target", "muted") }
         else
           glyph, tone, number, tint = "●", "error", "error", "error"
         end
@@ -1700,9 +1861,15 @@ local function overlay_state(state)
           "muted",
           "The file changed since this run measured it; its tints are muted."
       end
-      return percent .. "% covered",
-        coverage_tone(percent),
-        coverage.covered .. " of " .. coverage.total .. " measured lines"
+      local detail = coverage.covered .. " of " .. coverage.total .. " measured lines"
+      if coverage.evicted then
+        detail ..= ". Newer test runs replaced the run these tints came from; run coverage again to refresh them."
+      end
+      if not coverage.complete then
+        -- Part of the run's coverage was not collected.
+        return percent .. "% · incomplete", "warning", detail .. ". The run's coverage is incomplete."
+      end
+      return percent .. "% covered", coverage_tone(percent), detail
     elseif s == "running" then
       return "Running tests…", "accent"
     elseif s == "loading" or s == "idle" then
@@ -1721,8 +1888,8 @@ local function overlay_state(state)
     return nil
   end
   local debug = state.debug
-  if debug.error then
-    return "Debugger error", "error", debug.error
+  if debug.error or debug.poll_error then
+    return "Debugger error", "error", debug.error or debug.poll_error
   elseif debug.launching then
     return "Launching…", "accent", "Launching " .. tostring(state.relative)
   elseif debug.elsewhere then
@@ -2221,6 +2388,21 @@ local function status_bar(state)
         priority = 7,
       })
     )
+    -- Only drafts up to MAX_DRAFT survive a plugin reload or a daemon restart (see `save` below).
+    if buffer.bytes(buf) > MAX_DRAFT then
+      table.insert(
+        segs,
+        ui.node("seg", {
+          key = "unkept",
+          role = "source-unkept",
+          side = "right",
+          text = "Not kept until saved",
+          title = "Unsaved changes over " .. (MAX_DRAFT // 1024) .. " KiB are lost if Tern or the plugin restarts.",
+          tone = "warning",
+          priority = 6,
+        })
+      )
+    end
   end
   return ui.node("status", { key = "bar", role = "source-status" }, segs)
 end
@@ -2296,6 +2478,10 @@ local function menu_action(state, cx, act, value)
 end
 
 -- Keys --------------------------------------------------------------------------------------------
+
+-- What Option+1…4 types on a macOS US layout: Tern names the composed character, not the digit
+-- (as Option+Z arrives as Ω), so the overlay shortcuts match these too.
+local OPTION_DIGITS = { ["¡"] = 1, ["™"] = 2, ["£"] = 3, ["¢"] = 4 }
 
 local function field_keys(state, cx, key)
   local name = key.name
@@ -2476,9 +2662,9 @@ local function key_handler(state, key, cx)
     focus(state, cx, "go")
   elseif key.alt and not key.meta and (name == "z" or name == "Ω") then
     state.wrap = not state.wrap
-  elseif key.alt and not key.meta and string.find(name, "^[1-4]$") then
+  elseif key.alt and not key.meta and (string.find(name, "^[1-4]$") or OPTION_DIGITS[name]) then
     local modes = overlay_modes(state)
-    set_mode(state, cx, modes[tonumber(name)] or state.mode)
+    set_mode(state, cx, modes[OPTION_DIGITS[name] or tonumber(name)] or state.mode)
   elseif (cmd and name == "z" and not key.shift) and state.focus == "editor" then
     edited(state, buffer.undo(state.buf))
   elseif ((cmd and name == "z" and key.shift) or (key.ctrl and name == "y")) and state.focus == "editor" then
@@ -2527,6 +2713,8 @@ tern.block.define("source", {
     end
     root = root or find_root(path)
     saved = type(saved) == "table" and saved or {}
+    -- The overlay it last showed, else the one its opener asked for (`args[4]`).
+    local mode = saved.mode or args[4]
     local state = {
       pane = cx.pane,
       path = path,
@@ -2535,7 +2723,7 @@ tern.block.define("source", {
       relative = root and source.relative(path, root),
       project = root and string.match(root, "([^/]+)$"),
       lang = source.lang(path),
-      mode = table.find(OVERLAYS, saved.mode) and saved.mode ~= "hotness" and saved.mode or "none",
+      mode = table.find(OVERLAYS, mode) and mode ~= "hotness" and mode or "none",
       wrap = saved.wrap == true,
       focus = "editor",
       breakpoints = {},

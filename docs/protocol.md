@@ -32,10 +32,16 @@ Do not poll in an unbounded tight loop. Each session permits one request at a ti
 printf '%s' '{"op":"ping"}' | dist/elide-tern-broker request /private/state/directory
 ```
 
+`dist/elide-tern-broker protocol` prints the version of this request schema (1). The plugin
+runs it once per window before its first request and refuses a broker that answers another
+version, or none (a binary from before the check), naming `make broker` as the fix.
+
 The request helper bounds stdin and checks its shape before starting the broker.
-The broker revalidates all socket input. Local state paths must be short enough
-for Unix sockets and have mode 0700; symlinks and foreign-owned directories are
-rejected. The initial transport is Unix-only; Windows and iOS are unsupported.
+The broker revalidates all socket input. Local state directories must have mode 0700;
+symlinks and foreign-owned directories are rejected. The socket itself lives in
+`/tmp/elide-tern-<uid>/<hash of the state path>.sock` (`elide-tern-broker socket <state>` prints
+it), so state paths of any length work. The initial transport is Unix-only; Windows and iOS are
+unsupported.
 # Shared project test sessions
 
 These additive operations use the existing private broker socket and response envelope.

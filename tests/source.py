@@ -3,6 +3,7 @@ block marks covered and uncovered lines, and the Debug overlay sets a breakpoint
 shows the stop marker. Usage: python3 tests/source.py --runtime /path/to/elide [--sdk /path/to/embedder]"""
 import argparse, json, os, re, shutil, struct, subprocess, sys, tempfile, time, uuid, zlib
 from pathlib import Path
+from tern_config import config_dir, daemon_command
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
@@ -32,6 +33,10 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         'test("positive values", () => assert.equal(classify(1), "positive"));\n'
         'test("signs", () => assert.equal(sign(1), "+"));\n')
     (project / 'notes.txt').write_text('not a source\n')
+    # Stepping into `twice` leaves entry.mjs for line 3 of helper.mjs.
+    entry = project / 'entry.mjs'
+    entry.write_text('import {twice} from "./helper.mjs";\nconst result = twice(2);\nconsole.log(result);\n')
+    (project / 'helper.mjs').write_text('// Doubles a value.\nexport function twice(value) {\n  return value * 2;\n}\n')
     # Near the size limit, and one past it.
     large = project / 'large.mjs'
     large.write_text(''.join(f'export const value{i} = {i}; // padding to make the line longer than usual\n' for i in range(5000)))
@@ -54,10 +59,10 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
     (package / 'config.json').write_text(json.dumps(config))
     (state / 'crates/tern/goldens').mkdir(parents=True)
     env = {**os.environ, 'STENCIL_FIXTURE_ROOT': str(state / 'crates/tern'), 'TERN_PLUGIN_DATA': str(state / 'data'),
-           'TERN_DAEMON_SOCKET': str(state / 'daemon.sock'), 'TERN_CONFIG_DIR': str(state / 'config')}
+           'TERN_DAEMON_SOCKET': str(state / 'daemon.sock'), 'TERN_CONFIG_DIR': config_dir(state / 'config')}
     out = base / 'out'; out.mkdir(); log = (out / 'tern.log').open('w')
     subprocess.run(['tern', 'plugin', 'link', str(package)], env=env, check=True, stdout=log, stderr=log)
-    daemon = subprocess.Popen(['tern', 'daemon', '--socket', str(state / 'daemon.sock')], stdout=log, stderr=log, env=env)
+    daemon = subprocess.Popen(daemon_command(state / 'daemon.sock'), stdout=log, stderr=log, env=env)
     sock = base / 'c.sock'
     server = subprocess.Popen(['tern', '--control', str(sock), '--out', str(out), '--dir', str(project)],
                               stdout=log, stderr=log, env=env)
@@ -330,8 +335,8 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         clear = number[0] >= editor[0] + 2 * cell - 0.5 and abs(sign[1] - number[1]) < 4
         return inside and clear, detail
 
-    def open_tab(path, ready, line=None):
-        args = [str(path), str(project)] + ([str(line)] if line else [])
+    def open_tab(path, ready, line=None, mode=None):
+        args = [str(path), str(project)] + ([str(line or ''), mode] if mode else [str(line)] if line else [])
         for _ in range(3):
             lua('cx:new_block("elide.source", ' + json.dumps(args).replace('[', '{').replace(']', '}') + ', "tab")')
             if wait(ready, 15):
@@ -474,6 +479,33 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         check('toolbar height unchanged when deleted on disk', toolbar_height() == toolbar_clean, [toolbar_clean, toolbar_height()])
         aside.rename(source)
         wait(lambda: 'Deleted on disk' not in tree('.sf-main .sf-badge'), 15)
+        # The file stops being text on disk under unsaved edits: ⌘S asks before replacing what the
+        # editor never showed, and Cancel leaves the disk alone.
+        kept = source.read_bytes()
+        click('[data-role~="source-editor"]')
+        go_line(1)
+        ctl('key', 'End')
+        ctl('type', ' // mine')
+        wait(lambda: nodes('[data-role="source-modified"]'), 10)
+        binary = b'\x00\x01\x02 not text \xff\xfe'
+        source.write_bytes(binary)
+        time.sleep(3)
+        ctl('key', 'Meta+s')
+        check('save over an unreadable file asks', wait(lambda: "can't be read any more"
+              in tree('[data-role="source-confirm-strip"]'), 10), tree('.sf-dock'))
+        ctl('key', 'Escape')
+        time.sleep(1)
+        check('unreadable file left alone', source.read_bytes() == binary, source.read_bytes()[:40])
+        source.write_bytes(kept)
+        # Undo groups typing by word: undo until the buffer is back at the text on disk, so the
+        # coverage run below starts without a "Save and run" confirm.
+        for _ in range(8):
+            if not nodes('[data-role="source-modified"]'):
+                break
+            ctl('key', 'Meta+z')
+            time.sleep(.3)
+        check('undo back to the disk text is clean', wait(lambda: not nodes('[data-role="source-modified"]'), 15),
+              tree('.sf-dock'))
 
         # Find marks matches and selects the next one; go to line moves the caret.
         ctl('key', 'Control+f')
@@ -558,12 +590,26 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         untinted = lambda line: not any(tinted(t, line) for t in ['success', 'error', 'warning', 'muted', 'success.sf-t-dim'])
         check('coverage refreshed while dirty follows the inserted line', wait(lambda: tinted('error', 6)
               and untinted(2), 30), tree('.sf-editor .sf-t-mark'))
-        for _ in range(12):
-            if not nodes('[data-role="source-modified"]'):
+        # Refreshing the same run after the edits are saved keeps its tints on the lines it measured
+        # (muted when the artifact's digest shows the file changed), rather than re-anchoring them to
+        # the new disk text, which would put measured line 2's tint on the inserted line 2.
+        ctl('key', 'Meta+s')
+        wait(lambda: not nodes('[data-role="source-modified"]'), 10)
+        ctl('key', 'F6')
+        time.sleep(2)
+        check('refresh after a save keeps the measured lines', wait(lambda: untinted(2) and not untinted(6), 30),
+              tree('.sf-editor .sf-t-mark'))
+        # Undo groups typing by word, so '/* a */ ' takes several steps; back to the measured text.
+        def measured_text():
+            text = editor_text()
+            return '/*' not in text and '// above' not in text
+        for _ in range(16):
+            if measured_text():
                 break
             ctl('key', 'Meta+z')
             time.sleep(.3)
-        check('undo back to the saved text', wait(lambda: '/* a */' not in editor_text() and not nodes('[data-role="source-modified"]'), 10), editor_text())
+        ctl('key', 'Meta+s')
+        check('undo back to the saved text', wait(lambda: measured_text() and not nodes('[data-role="source-modified"]'), 10), editor_text())
         # Edits must not disturb the project lease: the next renewal (every 30 s) must still succeed.
         # A counter that once shared its name with the snapshot revision broke it after an edit.
         time.sleep(35)
@@ -579,6 +625,13 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
             time.sleep(.8)
             rects.append(first_text_rect())
         check('overlay switches move no text', rects[0] and all(r and r[:2] == rects[0][:2] for r in rects), rects)
+        # ⌥1–⌥4 pick an overlay. On a macOS US layout Option+digit arrives as the composed
+        # character (⌥3 is £, ⌥1 is ¡), which is what Tern names in the key event (U12).
+        click('[data-role~="source-editor"]')
+        ctl('key', 'Alt+£')
+        check('⌥3 (£) shows the Debug overlay', wait(lambda: nodes('[data-role="source-btn-debug-launch"]'), 10), tree('[data-role="source-toolbar"]'))
+        ctl('key', 'Alt+¡')
+        check('⌥1 (¡) leaves it', wait(lambda: not nodes('[data-role="source-btn-debug-launch"]'), 10), tree('[data-role="source-toolbar"]'))
 
         # Debug: F9 on two lines, F5 launches; the target pauses at the call first, then in the function.
         overlay('debug')
@@ -619,6 +672,41 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         shots('source-debug-wide')
         ctl('key', 'F5')
         check('continue runs to exit', wait(lambda: 'Exited' in tree('.sf-main .sf-badge'), 60), tree('.sf-main'))
+        # Stepping into a function in another project file opens that file at the stop in the Debug
+        # overlay beside the editor that launched (issue #4); that editor says the target paused
+        # elsewhere. A new tab keeps these editors out of the checks that follow. Hidden tabs stay in
+        # the tree off screen, so these checks read on-screen nodes only.
+        def shown(selector):
+            return ' '.join(n.get('text') or '' for n in filter(onscreen, nodes(selector)))
+        def shown_sign(glyph, tone):
+            return glyph in shown('.sf-editor .sf-ed-gutter .sf-t-' + tone)
+        classify_tab = next(i for i, t in enumerate(ctl('state')['tabs'], 1) if t['active'])
+        # The block opens focused with its caret on the linked line.
+        check('opens in the overlay its opener names', open_tab(entry, lambda: 'entry.mjs' in shown('[data-role="source-path"]')
+              and 'Ln 2,' in shown('[data-role="source-position"]')
+              and any(onscreen(n) for n in nodes('[data-role="source-btn-debug-launch"]')), 2, 'debug'), shown('.sf-main'))
+        ctl('key', 'F9')
+        wait(lambda: shown_sign('●', 'error'), 10)
+        ctl('key', 'F5')
+        check('paused at the call', wait(lambda: 'Paused at 2' in shown('[data-role="source-overlay-state"]'), 120),
+              [shown('[data-role="source-overlay-state"]'), shown('.sf-dock')])
+        ctl('key', 'F11')
+        def followed():
+            states = shown('[data-role="source-overlay-state"]')
+            return 'helper.mjs' in shown('[data-role="source-path"]') and 'Paused at 3' in states and 'Paused elsewhere' in states
+        check('step into another file opens it at the stop', wait(followed, 30),
+              [shown('[data-role="source-path"]'), shown('[data-role="source-overlay-state"]')])
+        time.sleep(2)
+        check('one editor follows the stop', sum('helper.mjs' in (n.get('text') or '')
+              for n in nodes('[data-role="source-path"]')) == 1, tree('[data-role="source-path"]'))
+        ctl('key', 'F5')
+        check('continue from the followed editor runs to exit',
+              wait(lambda: 'Paused' not in shown('[data-role="source-overlay-state"]')
+                   and 'Exited' in shown('[data-role="source-overlay-state"]'), 60),
+              shown('[data-role="source-overlay-state"]'))
+        ctl('tab', 'close')
+        ctl('tab', classify_tab)
+        wait(lambda: 'classify.mjs' in shown('[data-role="source-path"]') and 'entry.mjs' not in tree('[data-role="source-path"]'), 15)
         # Large files: a ~380 KiB file opens and takes edits; one past the limit says so.
         ctl('open-url', 'elide://source?root=' + str(project) + '&path=' + str(large) + '&line=4000')
         check('large file opens at line', wait(lambda: 'Ln 4000,' in tree('[data-role="source-position"]'), 30),

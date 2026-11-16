@@ -4,3 +4,4 @@
 plugin/tern.d.luau
 plugin/config.json
 .worktrees/
+__pycache__/

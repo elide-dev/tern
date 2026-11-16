@@ -13,11 +13,12 @@ match = ["elide project *", "elide * --json", "elide * --json *", "elide --json 
 
 [[lenses]]
 id = "build"
-match = ["elide build", "elide build *", "elide javac *", "elide kotlinc *"]
+# Global options may come before the subcommand (`elide -q build`, `elide --no-color test`).
+match = ["elide build", "elide build *", "elide -* build", "elide -* build *", "elide javac *", "elide kotlinc *"]
 
 [[lenses]]
 id = "tap"
-match = ["elide test --reporter=tap*", "elide test * --reporter=tap*"]
+match = ["elide *test *--reporter=tap*", "elide *test *--reporter tap*"]
 
 [[blocks]]
 id = "source"

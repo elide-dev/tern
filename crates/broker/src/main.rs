@@ -30,6 +30,9 @@ use std::{
 static INFERRED: std::sync::LazyLock<Mutex<coverage::Inferred>> =
   std::sync::LazyLock::new(|| Mutex::new(coverage::Inferred::default()));
 
+/// The request schema (`protocol.rs`, docs/protocol.md). Bump it with any change a plugin
+/// relies on; the plugin refuses a broker that answers another.
+const PROTOCOL: u32 = 1;
 const DEADLINE: Duration = Duration::from_secs(10);
 const IDLE: Duration = Duration::from_secs(120);
 const MAX_SESSIONS: usize = 8;
@@ -50,13 +53,23 @@ fn main() {
 
 fn run() -> Result<(), String> {
   let args: Vec<_> = std::env::args_os().skip(1).collect();
+  // The request schema this binary speaks: the plugin checks it before its first request, so a
+  // stale binary says so instead of failing on an op it does not know.
+  if args.len() == 1 && args[0] == "protocol" {
+    println!("{PROTOCOL}");
+    return Ok(());
+  }
   if args.len() != 2 {
-    return Err("Usage: elide-tern-broker <request|serve|project-root> <state-directory>".into());
+    return Err("Usage: elide-tern-broker <request|serve|socket|project-root> <state-directory>, or protocol".into());
   }
   let path = Path::new(&args[1]);
   match args[0].to_str() {
     Some("project-root") => {
       println!("{}", project::discover(path)?);
+      Ok(())
+    }
+    Some("socket") => {
+      println!("{}", socket(&private_dir(path)?)?.display());
       Ok(())
     }
     Some("serve") => serve(&private_dir(path)?),
@@ -102,11 +115,12 @@ fn private_dir(path: &Path) -> Result<PathBuf, String> {
   if !meta.is_dir() || meta.uid() != unsafe { libc::geteuid() } || meta.mode() & 0o077 != 0 {
     return Err("Broker state must be an owned, non-symlink directory with mode 0700".into());
   }
-  let path = path.canonicalize().map_err(err)?;
-  if path.join("broker.sock").as_os_str().as_encoded_bytes().len() >= 100 {
-    return Err("Broker state path is too long for a portable Unix socket; choose a shorter directory".into());
-  }
-  Ok(path)
+  path.canonicalize().map_err(err)
+}
+
+/// The socket lives outside `state` (see `elide_project_session::client::socket`).
+fn socket(state: &Path) -> Result<PathBuf, String> {
+  elide_project_session::client::socket(state).map_err(|e| format!("Broker socket for state {}: {e}", state.display()))
 }
 
 fn lock(path: &Path) -> Result<File, String> {
@@ -122,7 +136,7 @@ fn lock(path: &Path) -> Result<File, String> {
 }
 
 fn connect(state: &Path) -> Result<UnixStream, String> {
-  let socket = state.join("broker.sock");
+  let socket = socket(state)?;
   if let Ok(stream) = UnixStream::connect(&socket) {
     return Ok(stream);
   }
@@ -137,13 +151,24 @@ fn connect(state: &Path) -> Result<UnixStream, String> {
   if let Ok(stream) = UnixStream::connect(&socket) {
     return Ok(stream);
   }
+  // The broker's error output, and its workers' (they inherit it), for the startup error below and
+  // for a person reading the state directory. Each start writes it afresh.
+  let log_path = state.join("broker.log");
+  let log = OpenOptions::new()
+    .write(true)
+    .create(true)
+    .truncate(true)
+    .mode(0o600)
+    .custom_flags(libc::O_NOFOLLOW)
+    .open(&log_path)
+    .map_err(err)?;
   let mut child = Command::new(std::env::current_exe().map_err(err)?)
     .arg("serve")
     .arg(state)
     .process_group(0)
     .stdin(Stdio::null())
     .stdout(Stdio::null())
-    .stderr(Stdio::null())
+    .stderr(log)
     .spawn()
     .map_err(err)?;
   loop {
@@ -151,7 +176,9 @@ fn connect(state: &Path) -> Result<UnixStream, String> {
       return Ok(stream);
     }
     if let Some(status) = child.try_wait().map_err(err)? {
-      return Err(format!("Broker startup failed: {status}"));
+      let said = fs::read(&log_path).unwrap_or_default();
+      let said = String::from_utf8_lossy(&said[said.len().saturating_sub(2048)..]);
+      return Err(format!("Broker startup failed ({status}): {}", said.trim()));
     }
     if start.elapsed() > Duration::from_secs(5) {
       let _ = child.kill();
@@ -165,7 +192,7 @@ fn connect(state: &Path) -> Result<UnixStream, String> {
 fn serve(state: &Path) -> Result<(), String> {
   let lifetime = lock(&state.join("broker.lock"))?;
   lifetime.try_lock_exclusive().map_err(|_| "Broker already running")?;
-  let socket = state.join("broker.sock");
+  let socket = socket(state)?;
   if socket.exists() {
     fs::remove_file(&socket).map_err(err)?;
   }
@@ -176,12 +203,36 @@ fn serve(state: &Path) -> Result<(), String> {
   let active = Arc::new(AtomicUsize::new(0));
   let serial = Arc::new(AtomicUsize::new(1));
   let mut last = Instant::now();
+  // An upgrade (`make broker` renames a new build into place) must not leave clients talking to the
+  // old broker for as long as they keep it busy: once its executable is replaced, it stops taking
+  // connections and exits when the ones it has end, and the next request starts the new build.
+  let build = executable();
+  let mut checked = Instant::now();
+  let mut replaced = false;
   loop {
+    let mut idle = false;
+    if !replaced && checked.elapsed() >= Duration::from_secs(1) {
+      checked = Instant::now();
+      if build.is_some() && executable() != build {
+        replaced = true;
+        let _ = fs::remove_file(&socket);
+      }
+    }
+    if replaced {
+      if active.load(Ordering::SeqCst) == 0 {
+        return Ok(());
+      }
+      thread::sleep(Duration::from_millis(25));
+      continue;
+    }
     match listener.accept() {
-      Ok((stream, _)) => {
+      Ok((mut stream, _)) => {
         last = Instant::now();
         if active.load(Ordering::SeqCst) >= 16 {
-          drop(stream);
+          // Said, not just dropped: the client reports why instead of a lost connection.
+          let _ = stream.set_nonblocking(false);
+          let _ = stream.set_write_timeout(Some(Duration::from_millis(200)));
+          let _ = write_frame(&mut stream, br#"{"ok":false,"error":"Broker busy; try again"}"#);
           continue;
         }
         active.fetch_add(1, Ordering::SeqCst);
@@ -192,8 +243,12 @@ fn serve(state: &Path) -> Result<(), String> {
           active.fetch_sub(1, Ordering::SeqCst);
         });
       }
-      Err(e) if e.kind() == io::ErrorKind::WouldBlock => (),
-      Err(e) => return Err(err(e)),
+      Err(e) if e.kind() == io::ErrorKind::WouldBlock => idle = true,
+      // Out of descriptors and the like pass; one failed accept must not end the broker.
+      Err(e) => {
+        eprintln!("elide-tern: accept failed: {e}");
+        idle = true;
+      }
     }
     sessions
       .lock()
@@ -207,9 +262,19 @@ fn serve(state: &Path) -> Result<(), String> {
     {
       break;
     }
-    thread::sleep(Duration::from_millis(25));
+    // Waiting connections are taken at once; only an idle broker sleeps between polls.
+    if idle {
+      thread::sleep(Duration::from_millis(25));
+    }
   }
   fs::remove_file(socket).map_err(err)
+}
+
+/// The running executable's identity on disk (device, inode, modification time), when it can be
+/// read.
+fn executable() -> Option<(u64, u64, std::time::SystemTime)> {
+  let metadata = fs::metadata(std::env::current_exe().ok()?).ok()?;
+  Some((metadata.dev(), metadata.ino(), metadata.modified().ok()?))
 }
 
 fn connection(
@@ -383,7 +448,7 @@ fn dispatch(request: Request, sessions: &Sessions, serial: &AtomicUsize, project
       return Ok(json!({}));
     }
     Request::Ping {} => {
-      return Ok(json!({"protocol": 1, "pid": std::process::id(), "sessions": sessions.lock().unwrap().len()}));
+      return Ok(json!({"protocol": PROTOCOL, "pid": std::process::id(), "sessions": sessions.lock().unwrap().len()}));
     }
     Request::Open { sdk } => {
       let sdk = Path::new(sdk).canonicalize().map_err(err)?;

@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+from tern_config import config_dir, daemon_command
 import shutil
 import struct
 import subprocess
@@ -63,10 +64,10 @@ sleep 300
     (fixture_root / 'goldens').mkdir(parents=True)
     socket = state / 'control.sock'
     environment = {**os.environ, 'STENCIL_FIXTURE_ROOT': str(fixture_root),
-                   'TERN_DAEMON_SOCKET': str(state / 'daemon.sock'), 'TERN_CONFIG_DIR': str(state / 'config')}
+                   'TERN_DAEMON_SOCKET': str(state / 'daemon.sock'), 'TERN_CONFIG_DIR': config_dir(state / 'config')}
     with (out / 'tern.log').open('w') as log:
         subprocess.run(['tern', 'plugin', 'link', str(package)], env=environment, check=True, stdout=log, stderr=log)
-        daemon = subprocess.Popen(['tern', 'daemon', '--socket', str(state / 'daemon.sock')], env=environment,
+        daemon = subprocess.Popen(daemon_command(state / 'daemon.sock'), env=environment,
                                   stdout=log, stderr=log)
         command = ['tern', *(['serve'] if args.headless else []), '--control', str(socket),
                    '--out', str(out), '--dir', str(nested)]
@@ -137,8 +138,8 @@ sleep 300
             wait(socket.exists)
             if args.headless:
                 ctl('plugins', 'fixtures')
-            ctl('status-bar', 'on')
-            wait(lambda: ctl('tree', '.sl-plugin').get('nodes'))
+            ctl('widgets', 'classic')
+            wait(lambda: ctl('tree', '.wg-status-chip').get('nodes'))
             initial = ctl('state')['focused']['id']
             ctl('plugins', 'run', 'plugin.elide.workspace')
             wait(lambda: ctl('tree', '[data-role="project-actions"]').get('nodes'))
@@ -279,7 +280,7 @@ sleep 300
             time.sleep(6)
             # Outside a project, Run tests asks for a subject and opens the page with --surface=screen.
             outside_pane = lua('cx.layout:split(cx.session:focused(), "down", {cwd = ' + json.dumps(str(state)) + '})')
-            wait(lambda: not ctl('tree', '.sl-plugin').get('nodes'))
+            wait(lambda: not ctl('tree', '.wg-status-chip').get('nodes'))
             ctl('plugins', 'run', 'plugin.elide.test')
             wait(lambda: (ctl('state').get('picker') or {}).get('mode') == 'prompt')
             ctl('key', 'Enter')
@@ -305,6 +306,21 @@ sleep 300
             ctl('click', '[data-role="project-run"]')
             assert wait(lambda: launched(str(fake_runtime) + ' --ignore-version run --surface=screen'))
             print('PASS: Run opens the full Run page', flush=True)
+            # Build from the palette, twice: the second focuses the first one's page instead of
+            # starting another build.
+            build_page = str(fake_runtime) + ' --ignore-version build --surface=screen'
+            def count(prefix):
+                listing = subprocess.run(['ps', '-axo', 'args'], capture_output=True, text=True).stdout
+                return sum(prefix in line for line in listing.splitlines())
+            builds = count(build_page)
+            lua('cx.layout:focus(' + str(other_editor) + ')')
+            ctl('plugins', 'run', 'plugin.elide.build')
+            wait(lambda: count(build_page) == builds + 1)
+            time.sleep(2)
+            ctl('plugins', 'run', 'plugin.elide.build')
+            time.sleep(4)
+            assert count(build_page) == builds + 1, 'a second Build started another build'
+            print('PASS: Build from the palette, twice, opens one page', flush=True)
             # The toolbar sits above the editor. When the editor closes it takes the editor's rows, then
             # shrinks back under its height cap; it closes with the tab's last other pane.
             lua('cx.docs:open(' + json.dumps(str(third / 'elide.pkl')) + ', {how="tab"})')

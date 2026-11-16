@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+from tern_config import config_dir, daemon_command
 import shutil
 import subprocess
 import tempfile
@@ -82,9 +83,9 @@ test("a debugged test", () => {
 
     with (out / 'tern.log').open('w') as log:
         environment = {**os.environ, 'STENCIL_FIXTURE_ROOT': str(fixture_root),
-            'TERN_DAEMON_SOCKET': str(state / 'daemon.sock'), 'TERN_CONFIG_DIR': str(state / 'config')}
+            'TERN_DAEMON_SOCKET': str(state / 'daemon.sock'), 'TERN_CONFIG_DIR': config_dir(state / 'config')}
         subprocess.run(['tern', 'plugin', 'link', str(package)], env=environment, check=True, stdout=log, stderr=log)
-        daemon = subprocess.Popen(['tern', 'daemon', '--socket', str(state / 'daemon.sock')], stdout=log, stderr=log, env=environment)
+        daemon = subprocess.Popen(daemon_command(state / 'daemon.sock'), stdout=log, stderr=log, env=environment)
         server = subprocess.Popen(['tern', '--control', str(socket), '--out', str(out), '--dir', str(project)],
             stdout=log, stderr=log, env=environment)
 

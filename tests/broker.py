@@ -1,10 +1,12 @@
 """Behavioral IPC checks; --sdk adds real native embedding acceptance."""
 import argparse
 import concurrent.futures
+import fcntl
 import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import socket
 import struct
 import subprocess
@@ -45,8 +47,10 @@ def main():
       invalid = subprocess.run([str(BINARY), 'request', str(state)], input='{"op":"ping","unknown":1}',
                                text=True, capture_output=True)
       assert invalid.returncode != 0
+      broker_socket = subprocess.run([str(BINARY), 'socket', str(state)], text=True, capture_output=True,
+                                     check=True).stdout.strip()
       with socket.socket(socket.AF_UNIX) as connection:
-        connection.connect(str(state / 'broker.sock'))
+        connection.connect(broker_socket)
         connection.sendall(struct.pack('<I', 4 * 1024 * 1024 + 1))
         size = struct.unpack('<I', connection.recv(4))[0]
         result = json.loads(connection.recv(size))
@@ -56,6 +60,49 @@ def main():
       result = subprocess.run([str(BINARY), 'request', str(insecure)], input='{"op":"ping"}',
                               text=True, capture_output=True)
       assert result.returncode != 0 and '0700' in result.stderr
+      # A state directory as long as Tern's per-project plugin data still gets a broker.
+      deep = Path(directory) / 'Library/Application Support/tern/plugin-data/elide/p' / ('k' * 32) / 'broker'
+      assert len(str(deep / 'broker.sock').encode()) > 104
+      result = subprocess.run([str(BINARY), 'request', str(deep)], input='{"op":"ping"}', text=True,
+                              capture_output=True, timeout=20)
+      assert result.returncode == 0, result.stderr
+      os.kill(json.loads(result.stdout)['result']['pid'], signal.SIGTERM)
+      # A broker that cannot start says why: here another process holds the lifetime lock while
+      # the socket is gone, so `serve` refuses, and `request` reports its words from broker.log.
+      held = Path(directory) / 'held'
+      held.mkdir(mode=0o700)
+      with open(held / 'broker.lock', 'w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = subprocess.run([str(BINARY), 'request', str(held)], input='{"op":"ping"}', text=True,
+                                capture_output=True, timeout=20)
+      assert result.returncode != 0 and 'Broker already running' in result.stderr, result.stderr
+      assert 'Broker already running' in (held / 'broker.log').read_text()
+      # An upgraded broker binary takes over: the running one, its executable replaced, steps aside
+      # and the next request starts the new build.
+      tools = Path(directory) / 'tools'
+      tools.mkdir()
+      copy = tools / 'elide-tern-broker'
+      shutil.copy2(BINARY, copy)
+      upgraded = Path(directory) / 'upgraded'
+      def ping(binary):
+        result = subprocess.run([str(binary), 'request', str(upgraded)], input='{"op":"ping"}', text=True,
+                                capture_output=True, timeout=20)
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)['result']['pid']
+      old = ping(copy)
+      shutil.copy2(BINARY, tools / 'next')
+      os.rename(tools / 'next', copy)
+      deadline = time.monotonic() + 10
+      while True:
+        try:
+          os.kill(old, 0)
+        except ProcessLookupError:
+          break
+        assert time.monotonic() < deadline, 'the replaced broker kept running'
+        time.sleep(.1)
+      new = ping(copy)
+      assert new != old, (old, new)
+      os.kill(new, signal.SIGTERM)
       if args.sdk:
         session = success(op='open', sdk=str(Path(args.sdk).resolve()))['session']
         capabilities = success(op='discover', session=session)

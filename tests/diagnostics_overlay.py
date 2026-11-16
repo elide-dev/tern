@@ -6,6 +6,7 @@ from tests/build.py. Usage: python3 tests/diagnostics_overlay.py --runtime /path
 whose `elide build` hosts the Build surface and writes diagnostics.json)"""
 import argparse, json, os, re, shlex, shutil, subprocess, sys, tempfile, time, uuid
 from pathlib import Path
+from tern_config import config_dir, daemon_command
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
@@ -46,10 +47,10 @@ with tempfile.TemporaryDirectory(prefix='w3d-', dir='/tmp') as temporary:
                                                       'project_state': str(base / 'projects')}))
     (state / 'crates/tern/goldens').mkdir(parents=True)
     env = {**os.environ, 'STENCIL_FIXTURE_ROOT': str(state / 'crates/tern'), 'TERN_PLUGIN_DATA': str(state / 'data'),
-           'TERN_DAEMON_SOCKET': str(state / 'daemon.sock'), 'TERN_CONFIG_DIR': str(state / 'config')}
+           'TERN_DAEMON_SOCKET': str(state / 'daemon.sock'), 'TERN_CONFIG_DIR': config_dir(state / 'config')}
     out = base / 'out'; out.mkdir(); log = (out / 'tern.log').open('w')
     subprocess.run(['tern', 'plugin', 'link', str(package)], env=env, check=True, stdout=log, stderr=log)
-    daemon = subprocess.Popen(['tern', 'daemon', '--socket', str(state / 'daemon.sock')], stdout=log, stderr=log, env=env)
+    daemon = subprocess.Popen(daemon_command(state / 'daemon.sock'), stdout=log, stderr=log, env=env)
     sock = base / 'c.sock'
     server = subprocess.Popen(['tern', '--control', str(sock), '--out', str(out), '--dir', str(project)],
                               stdout=log, stderr=log, env=env)
@@ -117,11 +118,11 @@ with tempfile.TemporaryDirectory(prefix='w3d-', dir='/tmp') as temporary:
     try:
         wait(sock.exists)
         time.sleep(4)
-        ctl('status-bar', 'on')
+        ctl('widgets', 'classic')
         run('export PATH=' + shlex.quote(str(bindir)) + ':$PATH; cd ' + shlex.quote(str(project)))
         terminal = ctl('state')['focused']['id']
-        check('project detected', wait(lambda: 'Build λ' in tree('.sl-plugin') or 'build-example' in tree('.sl-plugin'), 30),
-              tree('.sl-plugin'))
+        check('project detected', wait(lambda: 'Build λ' in tree('.wg-status-chip') or 'build-example' in tree('.wg-status-chip'), 30),
+              tree('.wg-status-chip'))
 
         # A real build through the Build surface writes the newest report.
         run('elide build')
@@ -135,8 +136,8 @@ with tempfile.TemporaryDirectory(prefix='w3d-', dir='/tmp') as temporary:
             if count:
                 words.append('%d %s' % (count, one if count == 1 else many))
         phrase = ', '.join(words)
-        check('status segment counts', wait(lambda: ('Build failed · ' + phrase) in tree('.sl-plugin'), 60),
-              (phrase, tree('.sl-plugin')))
+        check('status segment counts', wait(lambda: ('Build failed · ' + phrase) in tree('.wg-status-chip'), 60),
+              (phrase, tree('.wg-status-chip')))
 
         # The source block on Util.java: the Diagnostics tab appears because a report exists.
         ctl('open-url', 'elide://source?root=' + str(project) + '&path=' + str(util) + '&line=1')

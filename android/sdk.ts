@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
-import { mkdtemp, open, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -213,10 +213,7 @@ export class AndroidSdk {
    * left by a crash and holds nothing.
    */
   private async holder(name: string): Promise<number | undefined> {
-    const text = await readFile(path.join(await this.directory(name), "hardware-qemu.ini.lock"), "utf8").catch(() => "");
-    const pid = Number.parseInt(text.replace(/\0/g, "").trim(), 10);
-    if (!Number.isInteger(pid) || pid <= 0) return undefined;
-    try { process.kill(pid, 0); return pid; } catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM" ? pid : undefined; }
+    return lockHolder(path.join(await this.directory(name), "hardware-qemu.ini.lock"));
   }
 
   /** The AVD's content directory, as registered in its NAME.ini. */
@@ -232,14 +229,9 @@ export class AndroidSdk {
 
   private async assertUnlocked(name: string): Promise<void> {
     const directory = await this.directory(name);
-    const entries = await readdir(directory).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return [];
-      throw error;
-    });
-    // multiinstance.lock is a persistent advisory-lock file, not a running-instance marker.
-    // The emulator leaves it behind on a clean exit. Transient .lock files/directories are different.
-    if (entries.some(entry => entry !== "multiinstance.lock" && entry.endsWith(".lock"))) {
-      throw new Error(`${name} has emulator lock files in ${directory}. Close its emulator first; if it crashed, confirm no emulator is running before removing stale locks.`);
+    const held = await liveLocks(directory);
+    if (held.length > 0) {
+      throw new Error(`${name} is locked by a running emulator (${held.join(", ")} in ${directory}). Close its emulator first.`);
     }
   }
 
@@ -314,16 +306,89 @@ export class AndroidSdk {
       }
       throw new Error("Emulator did not register with adb within 60 seconds.");
     } catch (error) {
-      if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) killProcessTree(child.pid, "SIGKILL");
+      if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) await stopProcess(child);
       const handle = await open(log, "r");
-      let detail: string;
+      let tail = "";
       try {
         const size = (await handle.stat()).size;
         const bytes = Buffer.alloc(Math.min(size, 16_384));
         const result = await handle.read(bytes, 0, bytes.length, Math.max(0, size - bytes.length));
-        detail = bytes.toString("utf8", 0, result.bytesRead).trim();
+        tail = bytes.toString("utf8", 0, result.bytesRead);
+        // Read from the middle of the file, the first line is cut.
+        if (size > bytes.length) tail = tail.slice(tail.indexOf("\n") + 1);
       } finally { await handle.close(); }
-      throw new Error(`${errorMessage(error)}\nEmulator log: ${log}${detail ? `\n${detail}` : ""}`);
+      // The lines that say why go first: the pane shows only a few, and a toast one.
+      const cause = logCause(tail);
+      throw new Error([errorMessage(error), ...cause, `Emulator log: ${log}`].join("\n"));
     }
   }
+}
+
+/**
+ * Why an emulator start failed, from the end of its log (`tail`): the last two FATAL, ERROR or
+ * PANIC lines, else its last two lines. The log starts with pages of INFO lines; the reason
+ * (a KVM, GPU or image error) comes last.
+ */
+export function logCause(tail: string): string[] {
+  const lines = tail.split("\n").map(line => line.trimEnd()).filter(line => line.trim() !== "");
+  const fatal = lines.filter(line => /\b(FATAL|ERROR|PANIC)\b/.test(line));
+  return (fatal.length ? fatal : lines).slice(-2);
+}
+
+/**
+ * The live pid a lock at `lock` names, else `undefined`: the emulator writes its pid,
+ * NUL-terminated, into a lock file, or into a `pid` file inside a lock directory. A lock whose
+ * process is gone was left by a crash or a killed start and holds nothing.
+ */
+export async function lockHolder(lock: string): Promise<number | undefined> {
+  const info = await stat(lock).catch(() => undefined);
+  if (!info) return undefined;
+  const text = await readFile(info.isDirectory() ? path.join(lock, "pid") : lock, "utf8").catch(() => "");
+  const pid = Number.parseInt(text.replace(/\0/g, "").trim(), 10);
+  if (!Number.isInteger(pid) || pid <= 0) return undefined;
+  try { process.kill(pid, 0); return pid; } catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM" ? pid : undefined; }
+}
+
+/**
+ * Leaves a marker in `directory` saying AVD `name` was started from SDK `sdk` for Tern pane
+ * `pane` (the `TERN_PANE` of the command that asked): the window showing that pane opens the
+ * device pane beside it (`plugin/lib/android.luau`), however the command was typed, wrapped or
+ * re-run, and lists devices through the same SDK. No pane, no marker. Returns the marker's path.
+ * `time` is in Unix seconds.
+ */
+export async function announceStart(directory: string, name: string, pane: string | undefined, sdk: string, now = Date.now()): Promise<string | undefined> {
+  if (!pane || !/^[1-9]\d{0,15}$/.test(pane)) return undefined;
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const marker = path.join(directory, `${now}-${process.pid}-${validateName(name)}.json`);
+  // Written aside and renamed, so a reader never sees half a marker.
+  await writeFile(`${marker}.tmp`, JSON.stringify({ name, pane: Number(pane), sdk, time: Math.floor(now / 1000) }), { mode: 0o600 });
+  await rename(`${marker}.tmp`, marker);
+  return marker;
+}
+
+/**
+ * The emulator locks in AVD `directory` a live process holds. `multiinstance.lock` is a
+ * persistent advisory-lock file the emulator leaves on a clean exit, not a running-instance
+ * marker; stale locks of dead processes do not block a start or a delete.
+ */
+export async function liveLocks(directory: string): Promise<string[]> {
+  const entries = await readdir(directory).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  });
+  const held: string[] = [];
+  for (const entry of entries) {
+    if (entry === "multiinstance.lock" || !entry.endsWith(".lock")) continue;
+    if (await lockHolder(path.join(directory, entry))) held.push(entry);
+  }
+  return held;
+}
+
+/** Stops `child`'s process group: SIGTERM, so the emulator releases its locks, then SIGKILL. */
+async function stopProcess(child: ChildProcess, grace = 5_000): Promise<void> {
+  const pid = child.pid!;
+  killProcessTree(pid, "SIGTERM");
+  const deadline = Date.now() + grace;
+  while (child.exitCode === null && child.signalCode === null && Date.now() < deadline) await delay(100);
+  if (child.exitCode === null && child.signalCode === null) killProcessTree(pid, "SIGKILL");
 }

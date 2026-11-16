@@ -17,9 +17,45 @@ local function resolve(value)
   return tern.plugin.dir .. "/" .. value
 end
 
--- Runs one broker request against `state`; `callback(result, err, transport)` where `transport`
--- is true when no response envelope arrived (the request may or may not have run).
-local function send(binary, state, request, callback)
+-- The request schema this plugin speaks (`PROTOCOL` in crates/broker/src/main.rs).
+local PROTOCOL = 1
+-- Broker binaries whose protocol matched, by path, for this window's life.
+local checked = {}
+
+-- Calls `ready()` once the broker at `binary` speaks `PROTOCOL`, else `callback` with why. A
+-- binary older than the check has no `protocol` command and fails it too.
+local function check(binary, callback, ready)
+  if checked[binary] then
+    ready()
+    return
+  end
+  local started, failure = pcall(function()
+    tern.process.run({ binary, "protocol" }, { timeout_ms = 5000 }, function(result)
+      local spoken = result.status == 0 and tonumber((string.gsub(result.stdout or "", "%s+", ""))) or nil
+      if spoken == PROTOCOL then
+        checked[binary] = true
+        ready()
+        return
+      end
+      callback(
+        nil,
+        "The Elide broker at "
+          .. binary
+          .. " speaks protocol "
+          .. (spoken and tostring(spoken) or "0 (no protocol command)")
+          .. "; this plugin needs "
+          .. PROTOCOL
+          .. ". Rebuild it with `make broker`.",
+        false
+      )
+    end)
+  end)
+  if not started then
+    callback(nil, tostring(failure), true)
+  end
+end
+
+local function run(binary, state, request, callback)
   local started, failure = pcall(function()
     tern.process.run({ binary, "request", state }, {
       stdin = tern.json.encode(request),
@@ -42,6 +78,14 @@ local function send(binary, state, request, callback)
   if not started then
     callback(nil, tostring(failure), true)
   end
+end
+
+-- Runs one broker request against `state`; `callback(result, err, transport)` where `transport`
+-- is true when no response envelope arrived (the request may or may not have run).
+local function send(binary, state, request, callback)
+  check(binary, callback, function()
+    run(binary, state, request, callback)
+  end)
 end
 
 function M.request(request, callback)
@@ -84,5 +128,8 @@ function M.project(request, callback)
     callback
   )
 end
+
+-- `check(binary, callback, ready)`: for other clients of the broker binary (agents.luau).
+M.check = check
 
 return M

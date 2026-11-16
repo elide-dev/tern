@@ -2,6 +2,7 @@ local ui = tern.ui
 local M = {}
 local entries = {}
 -- Device panes by serial: `{pane, name, physical}`, kept in kv so a plugin reload still knows them.
+-- Each window keeps its own (pane ids are per window): `DISPLAYS .. ":" .. window key`.
 local displays = {}
 local DISPLAYS = "android:displays"
 local configuration, plugin_path, runtime_path
@@ -55,13 +56,21 @@ local function render(cx, state)
   local rows = {}
   for index, avd in state.avds or {} do
     local running = avd.serial ~= nil
+    -- An emulator started elsewhere (Android Studio) has no gRPC token Tern can use: Show would
+    -- open a pane with only that error, so it is off and the row says what to do.
+    local outside = running and avd.embeddable == false
     local actions = running
-        and { button("eye", "Show", "show-" .. index, disabled), button("stop", "Stop", "stop-" .. index, disabled) }
+        and {
+          button("eye", "Show", "show-" .. index, disabled or outside),
+          button("stop", "Stop", "stop-" .. index, disabled),
+        }
       or {
         button("play", "Start", "start-" .. index, disabled),
         button("trash", "Delete…", "delete-" .. index, disabled),
       }
-    local detail = avd.state .. (avd.serial and (" · " .. avd.serial) or "")
+    local detail = avd.state
+      .. (avd.serial and (" · " .. avd.serial) or "")
+      .. (outside and " · started outside Tern: stop it and start it here to show it" or "")
     table.insert(rows, device_row("mi-android", "Virtual device", avd.name, detail, running, actions))
   end
   for index, device in state.devices or {} do
@@ -125,14 +134,20 @@ local function render(cx, state)
   cx.canvas:set(state.pane, { view = ui.node("col", { role = "android-manager", gap = "md" }, view) })
 end
 
+-- `state.sdk`, once a `list` named it, stands in for the project on `start` and `wait`: those
+-- need only the SDK, and resolving the project again costs an `elide project export` per member.
 local function command_args(state, command, arguments)
   local config = configuration() or {}
   local argv = { plugin_path(config.android or "../dist/elide-tern-android"), command, "--json" }
-  if config.android_sdk then
+  local known = state.sdk and (command == "start" or command == "wait")
+  if known then
+    table.insert(argv, "--sdk")
+    table.insert(argv, state.sdk)
+  elseif config.android_sdk then
     table.insert(argv, "--sdk")
     table.insert(argv, plugin_path(config.android_sdk))
   end
-  if state.context then
+  if state.context and not known then
     table.insert(argv, "--root")
     table.insert(argv, state.context.root)
     table.insert(argv, "--runtime")
@@ -293,11 +308,15 @@ local function display_key(device)
   return device.physical and device.serial or ("avd:" .. device.name)
 end
 
+local function displays_key(cx)
+  return DISPLAYS .. ":" .. cx:window_key()
+end
+
 -- Records `device`'s pane, closes the panes it replaces (`closing`) and focuses it.
 local function finish(cx, device, pane, closing)
   displays[display_key(device)] =
     { pane = pane, name = device.name, serial = device.serial, physical = device.physical == true }
-  tern.kv.set(DISPLAYS, displays)
+  tern.kv.set(displays_key(cx), displays)
   for _, closed in closing do
     if closed ~= pane and cx.session:pane(closed) then
       cx.layout:close(closed)
@@ -309,10 +328,14 @@ end
 -- The device pane being launched: { device, closing, before = pane ids before the split, expires }.
 local launching
 
--- Finishes `launching` with `pane`, unless the pane existed before the split or it expired.
+-- Finishes `launching` with `pane`, unless the pane existed before the split, it expired, or it
+-- is not a command pane (`agent`, as the display's is): a terminal the user opened meanwhile is
+-- not taken for the display.
 local function launched(cx, pane)
   local launch = launching
-  if launch and not launch.before[pane] and os.clock() < launch.expires then
+  local info = cx.session:pane(pane)
+  local ours = info == nil or info.kind == nil or info.kind == "agent"
+  if launch and ours and not launch.before[pane] and os.clock() < launch.expires then
     launching = nil
     finish(cx, launch.device, pane, launch.closing)
   end
@@ -332,7 +355,14 @@ local function show(cx, device, replace, context, target, previews)
   replace = replace and cx.session:pane(replace) and replace
   local tab = previews and target and cx.session:pane(target) and cx.session:tab_of(target) or nil
   local place = (if previews then (tab and compose_pane(cx, tab)) else compose_pane(cx)) or replace
-  local closing = { place, replace ~= place and replace or nil }
+  -- A list without holes: entries are appended below.
+  local closing = {}
+  if place then
+    table.insert(closing, place)
+  end
+  if replace and replace ~= place then
+    table.insert(closing, replace)
+  end
   if previews then
     for _, info in cx.session:panes() do
       if is_preview(info) then
@@ -351,6 +381,15 @@ local function show(cx, device, replace, context, target, previews)
         pane = candidate.pane
         break
       end
+    end
+  end
+  -- A view that could not open its device says so in its title (android/display.ts): a new one
+  -- takes its place.
+  local label = if device.physical then device.serial else device.name
+  for _, candidate in (if label then cx.session:panes() else {}) do
+    if candidate.kind == "agent" and candidate.title == label .. " (failed)" then
+      place = place or candidate.pane
+      table.insert(closing, candidate.pane)
     end
   end
   if pane then
@@ -571,17 +610,16 @@ function M.declared(root)
   return false
 end
 
--- The Run whose device pane waits for its page's build: `{ plan, before = pane ids before the
--- page's split, expires, page?, plain? }`, `plain` being when a page still without a surface
--- counts as plain output.
+-- The Run whose device pane is armed but whose page has not opened yet: `{ plan, before = pane ids
+-- before the page's split, expires }`. Once its page opens, the follow watches that page on its own
+-- (`page`, and `plain`: when a page still without a surface counts as plain output), and another
+-- Run can arm meanwhile.
 local following
 
--- Opens the waiting Run's device pane in the place of a Compose preview in the editor's tab
+-- Opens `follow`'s device pane in the place of a Compose preview in the editor's tab
 -- (`plan.beside`, set by the Run), closing every other one, else right of the editor; without
 -- one, right of the page.
-local function reveal(cx)
-  local follow = following
-  following = nil
+local function reveal(cx, follow)
   local plan = follow.plan
   if plan.display and cx.session:pane(follow.page) then
     local beside = plan.beside and cx.session:pane(plan.beside) and plan.beside or follow.page
@@ -626,12 +664,22 @@ function M.run_device(cx, context, done)
       return
     end
     local display = device.embeddable and { name = device.name, serial = device.serial } or nil
+    if not display and not device.physical then
+      current:toast(
+        "info",
+        device.name .. " runs outside Tern, so no device pane opens.",
+        "Stop it and start it from the device manager to see it in Tern."
+      )
+    end
     if not device.physical and device.name == project_avd then
       plan.args, plan.display = { "--emulator" }, display
       done(current, plan)
       return
     end
     -- Elide installs on a `--device` as soon as adb lists it; another emulator may still boot.
+    if not device.physical and device.state ~= "running" then
+      current:toast("info", "Waiting for " .. device.name .. " to finish booting…")
+    end
     request(current, state, "wait", { "--serial", device.serial }, function(fresh, value)
       plan.args, plan.display = { "--device=" .. value.serial }, display
       done(fresh, plan)
@@ -676,10 +724,14 @@ function M.run_device(cx, context, done)
   function prepare(from)
     request(from, state, "list", {}, function(current, value)
       local project = value.project
+      state.sdk = value.sdk
       local candidates = {}
       for _, avd in value.avds or {} do
         if avd.serial then
-          table.insert(candidates, { name = avd.name, serial = avd.serial, embeddable = avd.embeddable == true })
+          table.insert(
+            candidates,
+            { name = avd.name, serial = avd.serial, state = avd.state, embeddable = avd.embeddable == true }
+          )
         end
       end
       for _, device in value.devices or {} do
@@ -765,33 +817,30 @@ local function shown(cx, pane, id)
   return type(cx.session:surface(pane, { root = id, depth = 0 })) == "table"
 end
 
--- Polls the waiting Run's page until its build is done: the Run page keys its bar `program` past
--- a finished build, the program (an Android deploy) running. A page that shows a summary instead
--- ended without one, and so did a pane that closed or exited; neither gets the device pane. A
--- runtime without the page prints plain output, with nothing to wait for.
-local function watch(cx)
-  local follow = following
+-- Polls a Run's page until its build is done: the Run page keys its bar `program` past a finished
+-- build, the program (an Android deploy) running. A page that shows a summary instead ended
+-- without one, and so did a pane that closed or exited; neither gets the device pane. A runtime
+-- without the page prints plain output, with nothing to wait for.
+local function watch(cx, follow)
   local info = cx.session:pane(follow.page)
   if not info or info.exited ~= nil then
-    following = nil
     return
   end
   local read = cx.session:read(follow.page, { lines = 1, max_chars = 1 })
   if type(read) == "table" and read.surface then
     if shown(cx, follow.page, "main.activity.program") then
-      reveal(cx)
+      reveal(cx, follow)
       return
     elseif shown(cx, follow.page, "main.activity.summary") then
-      following = nil
       return
     end
   elseif os.clock() >= follow.plain then
-    reveal(cx)
+    reveal(cx, follow)
     return
   end
   tern.timer(500, function(current)
-    if current and following == follow then
-      watch(current)
+    if current then
+      watch(current, follow)
     end
   end)
 end
@@ -800,96 +849,83 @@ end
 -- open) disarms it.
 function M.followed(cx, pane)
   local follow = following
-  if not follow or follow.page or (pane and follow.before[pane]) then
+  if not follow or (pane and follow.before[pane]) then
     return
   end
+  following = nil
   if not pane or os.clock() >= follow.expires then
-    following = nil
     return
   end
   -- The Run page opens its surface as it starts; a pane still without one is plain output.
   follow.page, follow.plain = pane, os.clock() + 3
-  watch(cx)
+  watch(cx, follow)
 end
 
--- Typed `elide run` lines whose Run block may name its device: pane -> { live, ended }.
-local typed = {}
-local DEVICE_NODE = "main.head.end.device"
+-- Markers the helper leaves when an Elide command boots an emulator through the launcher the
+-- host's spawn hook names (`start --held --announce`, android/sdk.ts `announceStart`):
+-- `{ name, pane, time }`, the AVD and the pane the command ran in. However that command was
+-- started (typed, wrapped, Run again, `elide build android-emulator`), the window showing the
+-- pane opens the device pane beside it. A marker no window claims expires.
+local STARTED = tern.plugin.data .. "/android/started"
+local STARTED_SECONDS = 120
 
--- The serial the Run block in `pane` names (the device node's title), or nil.
-local function named_device(cx, pane)
-  local tree = cx.session:surface(pane, { root = DEVICE_NODE, depth = 0 })
-  local node = type(tree) == "table" and (tree.k and tree or tree.main) or nil
-  local serial = type(node) == "table" and type(node.p) == "table" and node.p.title
-  return type(serial) == "string" and serial ~= "" and serial or nil
-end
-
--- Shows `serial` once its emulator advertises a display: an emulator with a window of its own,
--- or a phone, gets no pane. The advertisement can trail adb by a moment, hence `tries`.
-local function show_named(cx, pane, serial, tries)
-  request(cx, {}, "list", {}, function(current, value)
+-- Shows AVD `name` beside `pane` once adb lists its emulator and it advertises a display. It
+-- registers seconds after `start --held` returns, hence `tries`, two seconds apart. `sdk` is the
+-- SDK the helper started it from, so the lookup asks the same adb.
+local function show_started(cx, pane, name, sdk, tries)
+  local arguments = {}
+  if type(sdk) == "string" and not (configuration() or {}).android_sdk then
+    arguments = { "--sdk", sdk }
+  end
+  request(cx, {}, "list", arguments, function(current, value)
     for _, avd in value.avds or {} do
-      if avd.serial == serial then
-        if avd.embeddable then
-          show(current, { name = avd.name, serial = serial }, nil, nil, pane, true)
-        elseif tries > 1 then
-          tern.timer(1000, function(fresh)
-            if fresh then
-              show_named(fresh, pane, serial, tries - 1)
-            end
-          end)
-        end
+      if avd.name == name and avd.serial and avd.embeddable then
+        show(current, { name = name, serial = avd.serial }, nil, nil, pane, true)
         return
       end
     end
-  end, function() end)
-end
-
-local function attend(cx, pane, state)
-  if typed[pane] ~= state then
-    return
-  end
-  if not cx.session:pane(pane) then
-    typed[pane] = nil
-    return
-  end
-  -- A block an earlier run left in scrollback shows its summary; the bar is this run's.
-  state.live = state.live or shown(cx, pane, "main.activity.progress") or shown(cx, pane, "main.activity.program")
-  local serial = state.live and named_device(cx, pane)
-  if serial then
-    typed[pane] = nil
-    show_named(cx, pane, serial, 5)
-    return
-  end
-  if state.ended then
-    typed[pane] = nil
-    return
-  end
-  tern.timer(500, function(current)
+    if tries > 1 then
+      tern.timer(2000, function(fresh)
+        if fresh and fresh.session:pane(pane) then
+          show_started(fresh, pane, name, sdk, tries - 1)
+        end
+      end)
+    end
+  end, function(current, message)
     if current then
-      attend(current, pane, state)
+      current:toast("error", "Could not show " .. name .. ": " .. tostring(message))
     end
   end)
 end
 
--- A typed `elide run` started in `pane`: once its Run block names a device, that device's pane opens.
-function M.typed_run(cx, pane)
-  if cx.hosts:current().kind ~= "local" then
-    return
+-- Claims the markers naming a pane of this window, each second.
+function M.watch_started(cx)
+  if cx.hosts:current().kind == "local" and tern.fs.exists(STARTED) then
+    for _, file in tern.fs.list(STARTED) do
+      local path = STARTED .. "/" .. file
+      if string.sub(file, -5) == ".json" then
+        local ok, marker = pcall(function()
+          return tern.json.decode(tern.fs.read(path, 4096))
+        end)
+        local valid = ok
+          and type(marker) == "table"
+          and type(marker.name) == "string"
+          and type(marker.pane) == "number"
+          and type(marker.time) == "number"
+        if not valid or os.time() - marker.time > STARTED_SECONDS then
+          pcall(tern.fs.remove, path)
+        elseif cx.session:pane(marker.pane) then
+          pcall(tern.fs.remove, path)
+          show_started(cx, marker.pane, marker.name, marker.sdk, 30)
+        end
+      end
+    end
   end
-  local state = {}
-  typed[pane] = state
-  tern.timer(500, function(current)
+  tern.timer(1000, function(current)
     if current then
-      attend(current, pane, state)
+      M.watch_started(current)
     end
   end)
-end
-
-function M.typed_run_ended(pane)
-  if typed[pane] then
-    typed[pane].ended = true
-  end
 end
 
 function M.open(cx, context, target)
@@ -979,7 +1015,8 @@ function M.install(config, path, runtime)
           for _, avd in value.avds or {} do
             local running = avd.serial ~= nil
             local wants_running = spec.id == "stop" or spec.id == "show"
-            if wants_running == running then
+            -- Show cannot embed an emulator started outside Tern (see `render`).
+            if wants_running == running and not (spec.id == "show" and avd.embeddable == false) then
               local id = avd.serial or avd.name
               devices[id] = avd
               table.insert(items, { label = avd.name .. (avd.serial and (" · " .. avd.serial) or ""), value = id })
@@ -1042,7 +1079,6 @@ function M.install(config, path, runtime)
     M.followed(cx, event.pane)
   end)
   tern.on("pane_closed", function(event, cx)
-    typed[event.pane] = nil
     if entries[event.pane] then
       entries[event.pane].closed = true
       entries[event.pane] = nil
@@ -1050,7 +1086,7 @@ function M.install(config, path, runtime)
     for id, display in displays do
       if display.pane == event.pane then
         displays[id] = nil
-        tern.kv.set(DISPLAYS, displays)
+        tern.kv.set(displays_key(cx), displays)
         -- However the pane closed, an emulator it showed keeps running unless the user stops it.
         if not display.physical and display.name then
           offer_stop(cx, display.name)
@@ -1059,8 +1095,10 @@ function M.install(config, path, runtime)
     end
     tern.kv.set(key(cx, event.pane), nil)
   end)
-  displays = tern.kv.get(DISPLAYS) or {}
   local function restore(cx)
+    displays = tern.kv.get(displays_key(cx)) or {}
+    -- Before keys were per window, every window overwrote one shared record.
+    tern.kv.set(DISPLAYS, nil)
     for _, canvas in cx.canvas:list() do
       local saved = canvas.owner == tern.plugin.id and tern.kv.get(key(cx, canvas.pane))
       if saved and not entries[canvas.pane] then
@@ -1076,6 +1114,7 @@ function M.install(config, path, runtime)
         displays[id] = nil
       end
     end
+    tern.kv.set(displays_key(cx), displays)
   end
   tern.on("window_start", restore)
   tern.timer(0, restore)

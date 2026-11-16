@@ -2,6 +2,7 @@
 project chrome and command_finished. Usage: python3 tests/integration.py --runtime /path/to/elide"""
 import argparse, json, os, shlex, shutil, subprocess, sys, tempfile, time, uuid
 from pathlib import Path
+from tern_config import config_dir, daemon_command
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
@@ -28,6 +29,7 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
         'test("adds", () => { assert.strictEqual(1 + 1, 2); });\n'
         'test("fails", () => { assert.strictEqual(1 + 1, 3); });\n')
     (tapp / 'two.js').write_text('one\ntwo\nthree\n')
+    (tapp / 'notes.md').write_text('# Notes\n')
     (tapp / 'wait.mjs').write_text('setTimeout(() => {}, 60000);\n')
     (tapp / 'nested').mkdir()
     outside = base / 'outside.txt'; outside.write_text('outside\n')
@@ -39,10 +41,10 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
     (package / 'config.json').write_text(json.dumps({'runtime': runtime, 'broker': str(ROOT / 'dist/elide-tern-broker')}))
     (state / 'crates/tern/goldens').mkdir(parents=True)
     env = {**os.environ, 'STENCIL_FIXTURE_ROOT': str(state / 'crates/tern'), 'TERN_PLUGIN_DATA': str(state / 'data'),
-           'TERN_DAEMON_SOCKET': str(state / 'daemon.sock'), 'TERN_CONFIG_DIR': str(state / 'config')}
+           'TERN_DAEMON_SOCKET': str(state / 'daemon.sock'), 'TERN_CONFIG_DIR': config_dir(state / 'config')}
     out = base / 'out'; out.mkdir(); log = (out / 'tern.log').open('w')
     subprocess.run(['tern', 'plugin', 'link', str(package)], env=env, check=True, stdout=log, stderr=log)
-    daemon = subprocess.Popen(['tern', 'daemon', '--socket', str(state / 'daemon.sock')], stdout=log, stderr=log, env=env)
+    daemon = subprocess.Popen(daemon_command(state / 'daemon.sock'), stdout=log, stderr=log, env=env)
     sock = base / 'c.sock'
     server = subprocess.Popen(['tern', '--control', str(sock), '--out', str(out), '--dir', str(tapp / 'nested')],
                               stdout=log, stderr=log, env=env)
@@ -93,14 +95,14 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
     try:
         wait(sock.exists)
         time.sleep(4)
-        ctl('status-bar', 'on')
+        ctl('widgets', 'classic')
         plugins = subprocess.run(['tern', 'plugin', 'list', '--json'], env=env, capture_output=True, text=True).stdout
         check('plugin loads', 'elide' in plugins, plugins)
         bindir = str(Path(runtime).parent)
         run('export PATH=' + shlex.quote(bindir) + ':$PATH')
 
         # Chrome: from tapp/nested the default title would be "nested"; the project names it "tapp".
-        check('status segment', wait(lambda: 'tapp' in tree('.sl-plugin')), tree('.sl-plugin'))
+        check('status segment', wait(lambda: 'tapp' in tree('.wg-status-chip')), tree('.wg-status-chip'))
         ctl('plugins', 'run', 'plugin.elide.project')
         menu = wait(lambda: (lambda t: t if 'Run tests' in t else None)(tree('#pick')), 30) or tree('#pick')
         check('menu hides test runs before any run', 'Run tests' in menu and 'View test runs' not in menu, menu)
@@ -125,19 +127,24 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
         tap = wait(lambda: (lambda t: t if 'not ok' in t else None)(block_text(before)), 30) or block_text(before)
         check('tap lens summary', '1 passed' in tap and '1 failed' in tap, tap)
         check('tap lens rows', 'adds' in tap and 'fails' in tap and 'strictly equal' in tap, tap)
-        check('outcome segment', wait(lambda: 'Tests failed' in tree('.sl-plugin'), 10), tree('.sl-plugin'))
+        check('outcome segment', wait(lambda: 'Tests failed' in tree('.wg-status-chip'), 10), tree('.wg-status-chip'))
+        # The lens also takes `--reporter tap` and a global option before `test` (M21).
+        before = len(ctl('tree', '.sf-block').get('nodes', []))
+        run('elide --no-color test --reporter tap sample.test.mjs')
+        tap = wait(lambda: (lambda t: t if '1 passed' in t else None)(block_text(before)), 240) or block_text(before)
+        check('tap lens after a global option, space form', '1 passed' in tap and '1 failed' in tap, tap)
 
         # An interrupted run (status 128 and up) is neither a pass nor a failure.
         run('elide run wait.mjs')
         time.sleep(4)
         ctl('key', 'Control+c')
-        check('interrupted segment', wait(lambda: 'Run interrupted' in tree('.sl-plugin'), 20), tree('.sl-plugin'))
+        check('interrupted segment', wait(lambda: 'Run interrupted' in tree('.wg-status-chip'), 20), tree('.wg-status-chip'))
 
         # Build lens on a Java compile error.
         before = len(ctl('tree', '.sf-block').get('nodes', []))
         run('cd ' + shlex.quote(str(build)))
         run('elide build')
-        check('build segment', wait(lambda: 'Build failed' in tree('.sl-plugin'), 280), tree('.sl-plugin'))
+        check('build segment', wait(lambda: 'Build failed' in tree('.wg-status-chip'), 280), tree('.wg-status-chip'))
         # Runtimes with the native Build surface draw it inline under Tern; older ones print plain
         # output, which the build lens reads. Either way the error, its location and excerpt show.
         def build_view():
@@ -148,7 +155,16 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
         check('build excerpt shown', 'System.out.println' in built, built)
         ctl('shot', 'lenses')
         run('cd ' + shlex.quote(str(tapp)))
-        wait(lambda: 'tapp' in tree('.sl-plugin'), 30)
+        wait(lambda: 'tapp' in tree('.wg-status-chip'), 30)
+        check('outcome stays with its project', 'Build failed' not in tree('.wg-status-chip'), tree('.wg-status-chip'))
+
+        # Issue #3: past a pipe the shell's status is `cat`'s. Failing tests piped through `cat`
+        # end with status 0, and no report says otherwise: none is claimed.
+        piped = 'elide test --reporter=tap sample.test.mjs | cat'
+        run(piped)
+        finished = wait(lambda: piped in json.dumps((ctl('state').get('focused') or {}).get('last')), 240)
+        check('piped command claims no outcome', finished and 'Tests' not in tree('.wg-status-chip'),
+              tree('.wg-status-chip'))
 
         # elide:// links as the system hands them to Tern (tern.route.link).
         def opened(path):
@@ -163,8 +179,9 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
         check('source link opens', source_block('three'), tree('[data-role~="source-editor"]'))
         ctl('open-url', 'elide://source?root=' + str(tapp) + '&path=' + str(tapp / 'sample.test.mjs') + '&line=3')
         check('source link with root opens', source_block('strictEqual'), tree('[data-role~="source-editor"]'))
-        ctl('open-url', 'elide://source?root=' + str(tapp) + '&path=' + str(tapp / 'elide.pkl'))
-        check('non-source link opens the editor', opened(tapp / 'elide.pkl'), ctl('state').get('file_blocks'))
+        # Pkl opens in the source block too (since d80f9c4); Markdown is not a source.
+        ctl('open-url', 'elide://source?root=' + str(tapp) + '&path=' + str(tapp / 'notes.md'))
+        check('non-source link opens the editor', opened(tapp / 'notes.md'), ctl('state').get('file_blocks'))
         def none_open(path):
             return not any(Path(b['path']).resolve() == path.resolve() for b in ctl('state').get('file_blocks', []))
         check('outside root rejected', toast_after('elide://source?root=' + str(tapp) + '&path=' + str(outside), 'malformed') and none_open(outside), tree('.toast'))

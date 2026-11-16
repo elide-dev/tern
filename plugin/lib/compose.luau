@@ -35,8 +35,9 @@ local function post(url, session)
   if session.posting or session.ended or next(session.queued) == nil then
     return
   end
+  local sent = session.queued
   local entries = {}
-  for file, content in session.queued do
+  for file, content in sent do
     table.insert(
       entries,
       '{"file":'
@@ -52,10 +53,20 @@ local function post(url, session)
     url .. "documents",
     '{"origin":"host","replace":false,"documents":[' .. table.concat(entries, ",") .. "]}",
     10000,
-    function(status)
+    function(status, _, _, timed_out)
       session.posting = false
-      -- An ended session takes no more; the window drops it from the list.
-      session.ended = status == 0 or status == 404 or status == 410
+      if status == 0 and timed_out then
+        -- No answer in time is no answer: send these texts again unless newer ones are queued.
+        for file, content in sent do
+          if session.queued[file] == nil then
+            session.queued[file] = content
+          end
+        end
+      else
+        -- An ended session (gone, or refusing connections) takes no more; the window drops it.
+        -- A rejected post is not sent again: the page says why, and the next edit is posted.
+        session.ended = status == 0 or status == 404 or status == 410
+      end
       post(url, session)
     end
   )

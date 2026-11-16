@@ -161,10 +161,14 @@ with tempfile.TemporaryDirectory(prefix='run-') as temporary:
             assert nodes('[data-role="build-tasks"]:not(.collapsed)'), tree('[data-role="build-tasks"]')
             # Logcat output: records under the folded tasks, a stack trace's lines in one. The log
             # takes the height the pane has left, so the page does not scroll, and it follows the
-            # lines written after the pause.
+            # lines written after the pause. Its FATAL EXCEPTION fails the run (U11).
             hello.write_text(LOGCAT)
+            # Outside the compiled sources but in the project: the app frame's file, for its link.
+            frame_source = project / 'app/src/main/kotlin/sample/app/MainActivity.kt'
+            frame_source.parent.mkdir(parents=True)
+            frame_source.write_text('package sample.app\n\nclass MainActivity\n')
             ctl('key', 'r')
-            wait(lambda: status('Finished'))
+            wait(lambda: status('Crashed'))
             assert '46 lines' in output(), output()
             assert nodes('[data-role="build-tasks"].collapsed'), tree('[data-role="build-tasks"]')
             fatal = nodes('[data-role="run-log-record"]')[-1]
@@ -182,6 +186,27 @@ with tempfile.TemporaryDirectory(prefix='run-') as temporary:
             log, dock = rect('[data-role="run-logcat"]'), rect('.sf-dock')
             assert log[1] + log[3] <= dock[1], ('the log runs under the dock', log, dock)
             assert fatal['rect'][1] + fatal['rect'][3] <= log[1] + log[3] + 1, ('the log did not follow its last record', fatal, log)
+            # The app's frame links its location to the project file; the platform's does not.
+            links = nodes('[data-role="run-log-record"] [data-id$=".l42.message"] .sf-link')
+            assert [link['text'] for link in links] == ['(MainActivity.kt:12)'], links
+            assert 'elide://source?' in links[0]['title'] and 'MainActivity.kt' in links[0]['title'] and 'line=12' in links[0]['title'], links
+            # Filters (F5): Error and above leaves the crash; text in a tag or message narrows too.
+            records = lambda: len(nodes('[data-role="run-log-record"]'))
+            assert records() == 42, records()
+            ctl('click', '[data-role="run-log-levels"] .sf-tab[data-tab="E"]')
+            wait(lambda: records() == 1)
+            ctl('click', '[data-role="run-log-levels"] .sf-tab[data-tab="V"]')
+            wait(lambda: records() == 42)
+            search = '[data-role="run-log-filter"]'
+            ctl('click', search)
+            wait(lambda: nodes(search + '.focused'))
+            ctl('type', 'slow frame')
+            wait(lambda: records() == 1 and 'Slow frame' in nodes('[data-role="run-log-record"]')[0]['text'])
+            for _ in 'slow frame':
+                ctl('key', 'Backspace')
+            wait(lambda: records() == 42)
+            ctl('key', 'Escape')
+            wait(lambda: not nodes(search + '.focused'))
             # Narrow, a record's message goes under its tag and wraps: nothing is cut.
             ctl('resize', 560, 800)
             wait(lambda: nodes('.sf-col[data-role="run-log-record"]'))
@@ -234,6 +259,22 @@ with tempfile.TemporaryDirectory(prefix='run-') as temporary:
                 wait(lambda: not running(marker) and not child_running())
                 assert blocks('run-status', 'Stopped') == stopped + 1, tree('[data-role="run-status"]')
                 assert 'tick 4' in latest_log(), latest_log()
+            # Outside a project, `elide run <script>` and bare `elide <script>` are hosted too.
+            outside = ''
+            if len(launchers) > 1:
+                loose = (state / 'loose').resolve()
+                loose.mkdir()
+                (loose / 'wait.mjs').write_text(WAIT)
+                for command in [[runtime, 'run', 'wait.mjs'], [runtime, 'wait.mjs']]:
+                    marker = shlex.join(command)
+                    ticking, stopped = blocks('run-output', '5 lines'), blocks('run-status', 'Stopped')
+                    ctl('run', 'cd ' + shlex.quote(str(loose)) + ' && ' + marker)
+                    wait(lambda: blocks('run-output', '5 lines') == ticking + 1)
+                    ctl('key', 'ctrl+c')
+                    wait(lambda: not running(marker))
+                    wait(lambda: blocks('run-status', 'Stopped') == stopped + 1)
+                assert not (loose / '.dev').exists(), 'reports outside a project go to the temp dir'
+                outside = ', scripts outside a project'
             # A runtime that advertises --surface accepts it on a plain run outside Tern.
             if '--surface' in usage:
                 plain = subprocess.run([runtime, 'run', '--surface=screen'], cwd=project, capture_output=True, text=True, timeout=300)
@@ -242,7 +283,7 @@ with tempfile.TemporaryDirectory(prefix='run-') as temporary:
                 flag = 'plain run accepts --surface'
             else:
                 flag = 'runtime predates --surface; plain-run check skipped'
-            print(f'PASS: output, task table, logcat records, wrapping, log height, task fold, output.log, exit status, Stop, compile error cards, page, inline block, bare run on a terminal ({flag})')
+            print(f'PASS: output, task table, logcat records, wrapping, log height, task fold, output.log, exit status, Stop, compile error cards, page, inline block, bare run on a terminal{outside} ({flag})')
             print('Shots:', *(str(out / 'serve' / f'{name}.png') for name in ['run-screen-light', 'run-screen-dark', 'run-logcat-light', 'run-logcat-dark', 'run-logcat-narrow-light', 'run-logcat-narrow-dark', 'run-inline-light']))
         finally:
             server.terminate()

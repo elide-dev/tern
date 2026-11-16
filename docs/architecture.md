@@ -37,7 +37,9 @@ Tern's process API captures a process result and closes stdin after writing. It 
 not an interactive native FFI or persistent pipe API. A short-lived request
 client lets Luau use the existing asynchronous process API while the broker owns
 persistent runtime state. Requests never interpolate guest code into a shell.
-The socket is local, in an owned 0700 directory, and has no network listener.
+The socket is local and has no network listener. It lives in `/tmp/elide-tern-<uid>/`, an owned
+0700 directory, named by a hash of the state directory, so long state paths still fit the Unix
+socket path limit.
 Same-user applications are inside the trust boundary.
 
 The broker starts on the first request. Startup and lifetime locks prevent
@@ -45,7 +47,10 @@ competing brokers from unlinking a live socket. SDKs load lazily in workers;
 the broker never loads the native library. At most eight sessions and sixteen
 concurrent socket clients are admitted. A session has one serialized exchange;
 concurrent calls to it return busy. Independent sessions run on independent
-workers and cannot monopolize each other's runtime exchange lock.
+workers and cannot monopolize each other's runtime exchange lock. The broker's and its workers'
+error output goes to `<state>/broker.log` (written afresh at each start), whose tail a failed
+start quotes. Once its executable is replaced on disk (an upgrade), a broker removes its socket,
+finishes the connections it has and exits; the next request starts the new build.
 
 Each request uses Studio's four-byte little-endian framing. Requests are capped
 at 4 MiB, responses at 16 MiB; socket reads/writes have deadlines. SDK exchanges
@@ -267,18 +272,20 @@ of the workspace's bottom terminal (the toolbar hands actions that terminal), el
 editor. A page showing its summary (`main.activity.summary`) ended without a finished build,
 and so did a pane that closed or
 exited: no device pane. A pane without a surface 3 s after it opened is plain output, and gets
-the device pane then. A typed `elide run` reaches the same pane another way. The host half's
-`spawn` hook sets `ELIDE_ANDROID_EMULATOR_LAUNCHER` in every new shell to the helper's
-`start --held --name` as a JSON array; Elide runs it (AVD appended) instead of booting its own
-emulator unless `--window`/`--no-window` was passed, so the emulator advertises its token gRPC
-endpoint. Elide's Run block shows the device it chose at `main.head.end.device`, whose `title` is
-the serial. `command_started` for an `elide run` line arms `android.typed_run`, which polls the
-pane every 500 ms: once `main.activity.progress` or `main.activity.program` shows (a block an
-earlier run left in scrollback shows its summary instead), the device node's serial is looked up
-with `list`, and an embeddable AVD with that serial is shown as Run's is (up to five tries a second
-apart while the advertisement trails adb); `command_finished` ends the polling. A phone or an
-emulator with a window of its own gets no pane. Display panes are recorded per AVD name or physical
-serial (pane, name, serial) in plugin kv, so a reload still knows them; panes are matched by
+the device pane then. An Elide command run any other way reaches the same pane through the
+launcher. The host half's `spawn` hook sets `ELIDE_ANDROID_EMULATOR_LAUNCHER` in every new shell to
+the helper's `start --held --announce <plugin data>/android/started --name` as a JSON array; Elide
+runs it (AVD appended) instead of booting its own emulator unless `--window`/`--no-window` was
+passed, so the emulator advertises its token gRPC endpoint. Once the emulator holds the AVD the
+helper writes a marker there, `{name, pane, sdk, time}` with the asking shell's `TERN_PANE` and
+the SDK it started from (written aside and renamed; no pane, no marker). Each window reads the
+directory every second (`android.watch_started`) and claims the markers naming one of its panes:
+it runs `list` (through the marker's SDK unless `android_sdk` is configured) every 2 s, up to 30
+times, until that AVD has a serial and advertises a display, then shows it beside that pane as
+Run's is; a failing `list` says so in a toast. A marker no window claims within 120 s is deleted.
+A phone, an emulator already running when the command started, or one with a window of its own
+gets no pane. Display panes are recorded per AVD name or physical serial (pane, name, serial) in
+plugin kv under the window's key, so a reload still knows them; panes are matched by
 the title the display sets (`NAME`, `SERIAL`, then `NAME · SERIAL`), and a saved id whose pane
 now carries another title is dropped. On `pane_closed` for an emulator's pane, the plugin
 runs `list` and, if that AVD still runs, offers to stop it. No plugin code closes display
@@ -288,16 +295,19 @@ appears. Other text shows only for warnings and errors.
 
 ## Window integration points
 
-The window half also plugs into Tern's chrome, events and routes. None of these
-handlers start a process: formatters have a 4 ms budget and event and route handlers
-50 ms, so they read only state the asynchronous project probe already cached.
+The window half also plugs into Tern's chrome, events and routes. Formatters have a 4 ms budget
+and event and route handlers 50 ms, so they read only state the asynchronous project probe already
+cached. The probe itself (`<broker> project-root <path>`) starts on `focus`, `cwd` and
+`command_finished`, at most once per pane and path every 30 s; after a command a "no project"
+answer is asked again (the command may have created `elide.pkl`). Without a configured broker on
+disk no probe starts; palette commands then say what is missing.
 
 - **Chrome.** `tern.chrome.tab_title` names a tab after the detected project of its
   focused pane, unless the user named the tab. `tern.chrome.program_icon("elide",
   "bolt")` gives `elide` panes their own icon. The status segment opens the project
   menu on click (`plugin.elide.project`) and is followed by the last `elide test`,
-  `build` or `run` outcome in that pane.
-- **Events.** `command_finished` recognises `elide test|build|run` lines (leading
+  `build`, `run` or `install` outcome in that pane, while the pane is still in the project it ran in.
+- **Events.** `command_finished` recognises `elide test|build|run|install` lines (leading
   `VAR=value` words skipped, quoting not interpreted), records the outcome and calls
   `tern.chrome.refresh()`. A failing `elide test` (status 1 to 127) toasts "Tests
   failed" with the subject words, or the pane's directory when there are none;
@@ -327,7 +337,7 @@ contract Elide emits against:
 
 | URL | Effect |
 | --- | --- |
-| `elide://source?path=<abs>[&root=<abs>][&line=<n>[&col=<n>]]` | Opens the Elide source block on the file at `line` when it is a JavaScript, TypeScript, Python or Kotlin source in a known project (`root`, or a detected project containing `path`) and the plugin is configured; otherwise opens the file in Tern's editor at `line`. |
+| `elide://source?path=<abs>[&root=<abs>][&line=<n>[&col=<n>]][&overlay=<mode>]` | Opens the Elide source block on the file at `line` when it is a JavaScript, TypeScript, Python or Kotlin source in a known project (`root`, or a detected project containing `path`) and the plugin is configured, in `overlay` (`none`, `coverage`, `debug` or `diagnostics`) unless the block remembers another; otherwise opens the file in Tern's editor at `line`. |
 | `elide://debug?root=<abs>&path=<abs>[&line=<n>]` | Launches the project debugger for `root` with `path` as its source. |
 | `elide://tests?root=<abs>` | Opens the project's test runs for `root`. |
 | `elide://help?topic=<slug>` | Runs `<runtime> --ignore-version help elide://help?topic=<slug>` in a new pane beside the link's pane (a new tab when the link came from no pane); `elide help` resolves the URL to its topic. |
@@ -377,8 +387,9 @@ surface node tree, so no foreign editor widget can be embedded; the block owns t
 it in Tern's `editor` node with `lang`, a per-line `gutter`, `virt` notes and `decor` ranges.
 Offsets are UTF-16 code units.
 
-- **Arguments.** The absolute file, then optionally the project root and a one-based line.
-  Without a root the block looks for the nearest `elide.pkl` above the file.
+- **Arguments.** The absolute file, then optionally the project root, a one-based line (may be
+  empty) and the overlay to open in (a restored block keeps the overlay it last showed). Without a
+  root the block looks for the nearest `elide.pkl` above the file.
 - **Opening.** `elide://source` (above), the project menu's **Open Elide source…** and the
   `plugin.elide.source` command
   (the focused file, else a prompted project path), and "Open with Elide source" from the `files`
@@ -460,8 +471,8 @@ Offsets are UTF-16 code units.
   checks row 1 sits half a row pitch below the editor's top). The block's line height is about 13%
   over Tern's (`--sf-lh: calc(1em * 1.35)` on this editor, 17.55 px against 15.5 px at 13 px);
   `maxLines` counts lines of that height, so the block divides the rows it has by 1.35 / 1.192 and keeps half a line for the top padding, and
-  the harness checks every gutter row sits on its code row. ⌥1 to ⌥3 pick an available overlay (in the desktop harness they did not
-  reach the block, presumably taken by window bindings, so the harness uses the switch).
+  the harness checks every gutter row sits on its code row. ⌥1 to ⌥4 pick an available overlay. macOS delivers
+  Option+digit as the character the layout composes (¡ ™ £ ¢ on a US layout), which the block matches too.
 - **Stylesheet.** `plugin/styles/source.css` (the manifest's `styles`) is scoped to
   `[data-surface="plugin.elide.source"]` and colored only with Tern's tokens; it is the design
   guide's sanctioned escape hatch where no prop exists. Tern's stylesheet op rejects what it does not
@@ -527,12 +538,16 @@ Offsets are UTF-16 code units.
   only covered/uncovered and branch counts (no hit counts), and the JavaScript producer reported no
   branch counts for the harness's ternary, so partial lines have not been seen with real data yet.
   With no coverage run the overlay offers **Run with coverage** (F5; `project_test` on the root with
-  `coverage: true`) and polls each second until it finishes; F6 refreshes.
-- **Debug.** While active the block polls `project_debug_snapshot` (`compact`) every 500 ms and
-  re-renders only when the revision, pending flag, controller or error changes. The stop is a `▶`
+  `coverage: true`) and polls each second until it finishes; F6 refreshes the marks, keeping the
+  text the run was anchored to. Tints stay when newer test runs push their run out of the broker's
+  last four (the tooltip says so); incomplete coverage reads "N% · incomplete".
+- **Debug.** While the Debug overlay is open and attached, with or without a target, the block polls `project_debug_snapshot` (`compact`) every 500 ms and
+  re-renders only when the revision, pending flag, controller or error changes; a failed poll shows
+  "Debugger error" until the next one answers, a command's error until the next stop. The stop is a `▶`
   `accent` sign, its line number in `accent`, the line's `accent` band and a ` paused` note; a
   breakpoint is a `●` `error` sign with its number in `error` and a light `error` band (`○` and `warning` with the adapter's
-  message while unverified); where both fall on one line the stop wins. The caret jumps to each new
+  message while unverified; `○` muted, "not in the running target", for one set only here while a
+  target launched without it runs); where both fall on one line the stop wins. The caret jumps to each new
   stop and F7 returns to it. F9 toggles a breakpoint on the caret line: before a launch it is kept
   locally and passed to `project_debug_launch`; with a live target the file's replacement `lines`
   (mapped back to the launched text) go through `project_debug_request` `breakpoints`. Debug
@@ -543,7 +558,11 @@ Offsets are UTF-16 code units.
   `redo` F10, Step into `arrow-down` F11, Step out `arrow-up` ⇧F11), each with `aria`, a `title`
   naming the action and key, and a `disabled` reason. F6, F7, F10, F11 and ⇧F5 act only while a
   target exists. Test files launch in `test` mode, all with `stop_on_entry` false. Control needs
-  `controller == "you"`. Every command carries a fresh UUID and is resent with the same UUID and
+  `controller == "you"`; the editors of one project in a host share one attachment, so any of them
+  controls a target another launched. A stop whose top frame lies in another source file of the
+  project opens that file at the stop through `elide://source?…&overlay=debug`, once per stop and
+  only when no editor shows it in the Debug overlay already; the launching editor says
+  "Paused elsewhere". Every command carries a fresh UUID and is resent with the same UUID and
   payload only when no response arrived.
 - **Hotness** is hidden. Neither the broker nor
   `elide-project-session` keeps source-located profile samples, so a read-only
@@ -557,7 +576,8 @@ Offsets are UTF-16 code units.
 an `elide://source` link in an isolated desktop window and drives it by keys: go to line, typing,
 save (checked on disk), undo and redo, auto-indent, a reload after an outside write, find, a
 coverage run from the block with covered and uncovered marks and their behavior across an unsaved
-edit, a breakpoint with F9 and a launch with F5 checked against the broker's own snapshot, a large
+edit, a breakpoint with F9 and a launch with F5 checked against the broker's own snapshot, a step
+into another file opening that file at the stop, a large
 file taking edits without highlighting, and an oversized file's empty state. It takes light and
 dark screenshots, split beside a terminal and wide in a tab of its own.
 
@@ -570,7 +590,7 @@ always full-screen. Outside one it is `<runtime> test --surface=screen <subject>
 when the runtime takes `--surface`; an older runtime gets no flag.
 
 The window half reads `<runtime> --ignore-version --no-color <command> --help` once per runtime
-and command (`test`, `build`) and passes `--surface=screen` only when an option line lists
+and command (`test`, `build`, `run`, `install`) and passes `--surface=screen` only when an option line lists
 `--surface`; the answer is cached for the window. Runtimes built before the option existed
 print no such line and get no flag.
 

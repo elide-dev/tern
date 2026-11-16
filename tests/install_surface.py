@@ -4,6 +4,7 @@ the full page and the inline block, a failed resolution, and npm beside Maven. N
 access to Maven Central (and the npm registry for the npm part)."""
 import argparse
 import json
+import re
 import shlex
 import shutil
 import subprocess
@@ -70,7 +71,8 @@ with tempfile.TemporaryDirectory(prefix='install-') as temporary:
             raise AssertionError(tree())
 
         def status(value):
-            return value in tree('[data-role="install-status"]')
+            # The newest surface only: an inline block's badge stays in scrollback after it exits.
+            return value in json.dumps(nodes('[data-role="install-status"]')[-1:], ensure_ascii=False)
 
         def reports():
             return sorted(project.glob('.dev/reports/install/tern/run-*/install.json'), key=lambda p: p.stat().st_mtime)
@@ -81,6 +83,8 @@ with tempfile.TemporaryDirectory(prefix='install-') as temporary:
 
         def run(*extra):
             ctl('run', 'cd ' + shlex.quote(str(project)) + ' && ' + shlex.join([str(host), runtime, *extra]))
+            if '--surface=screen' in extra:
+                wait(lambda: nodes('.sf-dock'))
 
         def quit_page():
             ctl('key', 'q')
@@ -138,6 +142,33 @@ with tempfile.TemporaryDirectory(prefix='install-') as temporary:
             data = json.loads(reports()[-1].read_text())
             assert data['outcome'] == 'up-to-date', data
             shot('install-current-light')
+            # A tree item's toggle reaches the page: guava closed stays closed when the search
+            # below replaces the tree and then gives it back, which only the page can know.
+            twisty = '[data-role="install-tree"] .sf-tree-row:not(.leaf) .sf-tree-tw'
+            ctl('click', twisty)
+            wait(lambda: 'com.google.guava:failureaccess' not in tree('[data-role="install-tree"]'))
+            # Find a package: the match shows under the package that requires it; q is a letter
+            # while the field has the keyboard, and Escape gives the keyboard back.
+            search = '[data-role="install-search"]'
+            ctl('click', search)
+            wait(lambda: nodes(search + '.focused'))
+            ctl('type', 'failureq')
+            wait(lambda: 'failureq' in tree(search) and '0 matches' in tree('[data-role="install-graph"]'))
+            assert status('Up to date'), tree()
+            ctl('key', 'Backspace')
+            wait(lambda: '1 match' in tree('[data-role="install-graph"]'))
+            found = tree('[data-role="install-tree"]')
+            assert 'com.google.guava:guava' in found and 'com.google.guava:failureaccess' in found, found
+            assert 'junit' not in found, found
+            for _ in 'failure':
+                ctl('key', 'Backspace')
+            wait(lambda: 'match' not in tree('[data-role="install-graph"]'))
+            assert 'com.google.guava:guava' in tree('[data-role="install-tree"] .sf-tree-node.shut'), tree('[data-role="install-tree"]')
+            assert 'com.google.guava:failureaccess' not in tree('[data-role="install-tree"]'), tree('[data-role="install-tree"]')
+            ctl('key', 'Escape')
+            wait(lambda: not nodes(search + '.focused'))
+            ctl('click', twisty)
+            wait(lambda: 'com.google.guava:failureaccess' in tree('[data-role="install-tree"]'))
             quit_page()
 
             # Bare, the install draws inline and its block stays in scrollback after it exits.
@@ -154,6 +185,16 @@ with tempfile.TemporaryDirectory(prefix='install-') as temporary:
             ctl('appearance', 'dark')
             shot('install-inline-dark')
             ctl('appearance', 'light')
+
+            # Ctrl-C stops an inline install; its block stays in scrollback drawn as cancelled, with
+            # no Cancel left to press.
+            run('--fresh')
+            wait(lambda: status('Starting') or status('Installing'), timeout=60)
+            ctl('key', 'Control+c')
+            wait(lambda: not host_running(), timeout=60)
+            time.sleep(1)
+            assert status('Cancelled'), tree()
+            assert not nodes('[data-role="install-cancel"]'), tree()
 
             # A package that does not exist fails the install with a problem naming it.
             manifest.write_text(MANIFEST % 'com.example.missing:nope:0.0.1')
@@ -188,14 +229,36 @@ with tempfile.TemporaryDirectory(prefix='install-') as temporary:
                 assert any(r['type'] == 'dependencies' and r.get('ecosystem') == 'npm' and r.get('phase') == 'done'
                            for r in stream), streamed.stderr[-4000:]
                 (project / 'package.json').write_text(PACKAGE_JSON)
+                before = reports()[-1:]
                 run('--surface=screen', '--ecosystems=maven,npm')
                 wait(lambda: status('Installed') or status('Up to date'), timeout=300)
+                wait(lambda: reports()[-1:] != before)
                 lanes = tree('[data-role="install-ecosystems"]')
                 assert 'Maven' in lanes and 'npm' in lanes, lanes
                 shot('install-npm-light')
                 quit_page()
                 npm = 'npm records and lane'
-            print(f'PASS: dependency records, ecosystem table, downloads, dependency tree, report, up to date, page, inline block, failure, plain --surface ({npm})')
+
+            # PyPI, when this runtime carries the PyPI resolver: its lane gets the package count
+            # when its leg ends (pytools reports no live progress).
+            python = (state / 'pypi-only').resolve()
+            python.mkdir()
+            (python / 'elide.pkl').write_text('amends "elide:project.pkl"\n\nname = "pypi-example"\n\ndependencies {\n  pypi {\n    packages {\n      "six==1.17.0"\n    }\n  }\n}\n')
+            probe = subprocess.run([runtime, 'install', '--ecosystems=pypi'], cwd=python, capture_output=True, text=True, timeout=600)
+            if probe.returncode != 0:
+                pypi = 'PyPI skipped: this runtime could not install PyPI packages'
+                print('NOTE:', pypi, probe.stderr[-500:])
+            else:
+                ctl('run', 'cd ' + shlex.quote(str(python)) + ' && ' + shlex.join([str(host), runtime, '--surface=screen', '--ecosystems=pypi', '--fresh']))
+                wait(lambda: nodes('.sf-dock'))
+                wait(lambda: status('Installed'), timeout=300)
+                lane = tree('[data-role="install-ecosystems"]')
+                assert 'PyPI' in lane and 'Installed' in lane, lane
+                # State, then Packages: "PyPI Installed 1 — …" (no download size: pytools has none).
+                assert re.search(r'PyPI\s*Installed\s+1\s+—', lane), lane
+                quit_page()
+                pypi = 'PyPI lane count'
+            print(f'PASS: dependency records, ecosystem table, downloads, dependency tree, search, report, up to date, page, inline block, failure, plain --surface ({npm}; {pypi})')
             print('Shots:', *shots)
         finally:
             server.terminate()

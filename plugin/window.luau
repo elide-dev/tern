@@ -5,6 +5,7 @@ local source = require("./lib/source")
 local workspace = require("./lib/workspace")
 local android = require("./lib/android")
 local loopback = require("./lib/loopback")
+local shell = require("./lib/shell")
 
 local function path(value)
   if string.sub(value, 1, 1) == "/" then
@@ -53,8 +54,9 @@ local function launcher(config, kind)
   return { runtime_path(config), "--ignore-version", "tern", kind }
 end
 
--- Whether a runtime executable supports `elide tern`, by path. An older runtime would
--- otherwise resolve `tern` as a project script and run something unrelated.
+-- Runtime executables known to support `elide tern`, by path. An older runtime would otherwise
+-- resolve `tern` as a project script and run something unrelated. Only a yes is kept: a runtime
+-- updated in place is asked again.
 local supports_tern = {}
 
 -- Runs `open(cx, argv)` once the runtime is known to host surfaces. Explicit launcher
@@ -64,24 +66,29 @@ local function host(cx, config, kind, argv, open, opened)
     return open(cx, argv)
   end
   local runtime = argv[1]
-  local known = supports_tern[runtime]
-  if known == true then
+  if supports_tern[runtime] then
     return open(cx, argv)
-  elseif known == false then
-    cx:toast("error", "The configured runtime has no `elide tern`; update it or set a launcher in plugin/config.json.")
-    return nil
   end
   local ok, problem = pcall(function()
     tern.process.run(
       { runtime, "--ignore-version", "--no-color", "--help-all" },
       { timeout_ms = 15000 },
       function(result, current)
-        -- Cache only a clean exit; a timeout (status -1) or crash is probed again next time.
-        if result.status == 0 then
-          supports_tern[runtime] = string.find(result.stdout or "", "[\r\n]%s+tern%s+") ~= nil
+        -- A clean exit answers; a timeout (status -1) or crash says nothing about support.
+        local answered = result.status == 0
+        if answered and string.find(result.stdout or "", "[\r\n]%s+tern%s+") ~= nil then
+          supports_tern[runtime] = true
         end
-        if current and supports_tern[runtime] == nil then
-          current:toast("error", "Could not probe the runtime; try again.", runtime)
+        if current and not supports_tern[runtime] then
+          if answered then
+            current:toast(
+              "error",
+              "The configured runtime doesn't support `elide tern`; update it or set a launcher in plugin/config.json.",
+              runtime
+            )
+          else
+            current:toast("error", "Could not probe the runtime; try again.", runtime)
+          end
           if opened then
             opened(current, nil)
           end
@@ -113,7 +120,13 @@ end
 -- it. Enter closes the pane; a clean exit closes it at once, as usual.
 local HOLD = '"$@"; status=$?; [ "$status" -eq 0 ] && exit 0; '
   .. 'printf "\\n\\033[2mExited with status %d. Press Enter to close.\\033[0m" "$status"; read -r _; exit 0'
+-- Keeps an action's pane open whatever the exit, so its plain output can be read (issue #1).
+local HOLD_ALWAYS = '"$@"; status=$?; if [ "$status" -eq 0 ]; then note=Done; '
+  .. 'else note="Exited with status $status"; fi; '
+  .. 'printf "\\n\\033[2m%s. Press Enter to close.\\033[0m" "$note"; read -r _; exit 0'
 
+-- Opens `argv` in a terminal beside `target` (else a new tab). `hold`: true keeps the pane after a
+-- failure, "always" after any exit.
 local function terminal(cx, argv, cwd, target, hold, dir)
   local command = {}
   for _, value in argv do
@@ -121,16 +134,14 @@ local function terminal(cx, argv, cwd, target, hold, dir)
   end
   local line = table.concat(command, " ")
   if hold then
-    line = "/bin/sh -c " .. quote(HOLD) .. " elide " .. line
+    line = "/bin/sh -c " .. quote(if hold == "always" then HOLD_ALWAYS else HOLD) .. " elide " .. line
   end
   local spec = { cwd = cwd, command = "exec " .. line }
   local pane
-  if target then
-    if not cx.session:pane(target) then
-      return nil
-    end
+  if target and cx.session:pane(target) then
     pane = cx.layout:split(target, dir or "right", spec, { focus = true })
   else
+    -- The pane it was asked beside closed while the launch got ready: a tab of its own instead.
     pane = cx.layout:new_tab(spec)
   end
   if not pane then
@@ -178,8 +189,9 @@ local function launch(cx, language, context, target, opened)
   end, opened)
 end
 
--- Whether `<runtime> <command>` takes `--surface=inline|screen|auto`, by runtime and command:
--- `elide test|build|run --help` list the option on runtimes that have it.
+-- Runtimes and commands known to take `--surface=inline|screen|auto`: `elide test|build|run --help`
+-- list the option on runtimes that have it. Only a yes is kept: a runtime updated in place is asked
+-- again.
 local surface_support = {}
 
 -- Runs `run(cx, supported, later)` once `<runtime> <command> --surface` support is known;
@@ -187,8 +199,8 @@ local surface_support = {}
 -- called from the probe's callback, where its result reaches no caller.
 local function with_surface(cx, runtime, command, run)
   local key = runtime .. "\0" .. command
-  if surface_support[key] ~= nil then
-    return run(cx, surface_support[key])
+  if surface_support[key] then
+    return run(cx, true)
   end
   local ok = pcall(function()
     tern.process.run(
@@ -198,9 +210,8 @@ local function with_surface(cx, runtime, command, run)
         local text = "\n" .. (result.stdout or "") .. "\n" .. (result.stderr or "")
         -- An option line (`  --surface <MODE>  …`), not a mention in prose.
         local supported = result.status == 0 and string.find(text, "\n%s+%-%-surface[%s=<%[]") ~= nil
-        -- Only a clean exit answers for good; a timeout or crash is asked again next time.
-        if result.status == 0 then
-          surface_support[key] = supported
+        if supported then
+          surface_support[key] = true
         end
         if current then
           run(current, supported, true)
@@ -335,7 +346,9 @@ local function runtime_action(cx, context, command, target, opened, options)
     for _, value in options.args or {} do
       table.insert(argv, value)
     end
-    local pane = terminal(current, argv, options.cwd or context.root, target)
+    -- A full page stays until it is closed; plain output (an older runtime) would close with
+    -- its program, so its pane waits for Enter.
+    local pane = terminal(current, argv, options.cwd or context.root, target, if screen then nil else "always")
     if later and opened then
       opened(current, pane)
     end
@@ -380,6 +393,34 @@ local function run_project(cx, context, target, opened, bottom)
     end
   end)
   return false
+end
+
+-- The page each project's Build, Run and Install opened from the project menu or the palette, by
+-- root and command (`true` while it opens): asking again focuses it while it is open, instead of
+-- starting a second, concurrent one.
+local action_panes = {}
+
+local function project_action(cx, context, command)
+  local key = context.root .. "\0" .. command
+  local pane = action_panes[key]
+  if pane == true then
+    return
+  end
+  local info = type(pane) == "number" and cx.session:pane(pane)
+  if info and info.exited == nil then
+    cx.layout:focus(pane)
+    return
+  end
+  action_panes[key] = true
+  local function opened(_, page)
+    action_panes[key] = page or nil
+  end
+  local result = if command == "run"
+    then run_project(cx, context, nil, opened)
+    else runtime_action(cx, context, command, nil, opened)
+  if result ~= false then
+    action_panes[key] = result or nil
+  end
 end
 
 -- Opens the `elide.source` block on `path` (absolute, inside `root`), beside `target` or the
@@ -482,13 +523,24 @@ local function publish_native(root, documents, problem, cx)
       end
       -- One post per session in flight; a newer snapshot goes out on the next poll.
       session.posting = true
-      loopback.request(url .. "documents", body, 10000, function(status)
+      loopback.request(url .. "documents", body, 10000, function(status, answer, current, timed_out)
         session.posting = false
         if status == 200 then
           session.snapshot = snapshot
-        elseif status == 404 or status == 410 or status == 0 then
+        elseif status == 404 or status == 410 or (status == 0 and not timed_out) then
+          -- The service is gone (or refuses connections): the page has ended.
           native_sessions[url] = nil
+        elseif status ~= 0 then
+          -- Rejected: the page shows why. The same snapshot is not sent again; the next edit is.
+          session.snapshot = snapshot
+          local ok, reply = pcall(tern.json.decode, answer)
+          local reason = ok and type(reply) == "table" and type(reply.error) == "string" and reply.error or answer
+          if current and session.rejected ~= reason then
+            current:toast("error", "The Compose preview did not take the editor's text.", reason)
+          end
+          session.rejected = reason
         end
+        -- A timeout leaves the snapshot unsent: the next poll sends it again.
       end)
     end
   end
@@ -696,7 +748,10 @@ local function prompt_compose(cx, context)
 end
 
 workspace.install({
-  debug = launch_debug,
+  -- The fifth argument is the project terminal (Run's), not a file: Debug takes the editor's.
+  debug = function(cx, context, target, opened)
+    return launch_debug(cx, context, target, opened)
+  end,
   android = function(cx, context, target)
     return android.open(cx, context, target)
   end,
@@ -798,6 +853,8 @@ local function project_menu(context, cx)
     return
   end
   local items = {
+    { label = "Build project", value = "build", icon = "wrench" },
+    { label = "Run project", value = "run", icon = "run" },
     { label = "Run tests", value = "test", icon = "play" },
     { label = "Install dependencies", value = "install", icon = "download" },
     { label = "Open debugger", value = "debug", icon = "bug" },
@@ -823,8 +880,8 @@ local function project_menu(context, cx)
     elseif current and item then
       if item.value == "test" then
         launch_job(current, "test", context.root, context.root)
-      elseif item.value == "install" then
-        runtime_action(current, context, "install")
+      elseif item.value == "build" or item.value == "run" or item.value == "install" then
+        project_action(current, context, item.value)
       elseif item.value == "debug" then
         launch_debug(current, context)
       elseif item.value == "source" then
@@ -861,14 +918,29 @@ local function project_menu(context, cx)
   end)
 end
 
-local function detect(cx, callback, explicit)
+-- Detects the project of the focused pane (or `explicit`) and calls `callback` with it. Without a
+-- callback (focus, cwd, a finished command) it stays quiet and reuses a recent answer for the same
+-- path; `recheck` asks again after a "no project" answer, since a command may have created one.
+local function detect(cx, callback, explicit, recheck)
   local context = explicit or project.context(cx)
-  local config = configuration()
-  if context and config then
-    project.probe(context, path(config.broker or "../dist/elide-tern-broker"), callback)
-  elseif callback then
-    cx:toast("info", "Open a local project directory first.")
+  local config = configuration(if callback then cx else nil)
+  if not config then
+    return
   end
+  if not context then
+    if callback then
+      cx:toast("info", "Open a local project directory first.")
+    end
+    return
+  end
+  local broker = path(config.broker or "../dist/elide-tern-broker")
+  if not tern.fs.exists(broker) then
+    if callback then
+      cx:toast("error", "No broker at the `broker` path in plugin/config.json; run `make build`.", broker)
+    end
+    return
+  end
+  project.probe(context, broker, callback, recheck)
 end
 
 tern.command({
@@ -925,13 +997,29 @@ tern.command({
   run = function(cx)
     detect(cx, function(context, current)
       if context then
-        runtime_action(current, context, "install")
+        project_action(current, context, "install")
       else
         current:toast("info", "Open a local project directory first.")
       end
     end)
   end,
 })
+for _, action in { { "build", "Build project", "wrench" }, { "run", "Run project", "run" } } do
+  tern.command({
+    id = action[1],
+    title = action[2],
+    icon = action[3],
+    run = function(cx)
+      detect(cx, function(context, current)
+        if context then
+          project_action(current, context, action[1])
+        else
+          current:toast("info", "Open a local project directory first.")
+        end
+      end)
+    end,
+  })
+end
 tern.command({
   id = "debug",
   title = "Debug project source",
@@ -985,38 +1073,6 @@ if tern.chrome.program_icon then
   tern.chrome.program_icon("elide", "bolt")
 end
 
--- `elide test|build|run|install …` as a shell reported it: the subcommand and its subject words.
--- Leading `VAR=value` assignments are skipped; quoting is not interpreted.
-local function elide_command(line)
-  local words = {}
-  for word in string.gmatch(line, "%S+") do
-    table.insert(words, word)
-  end
-  local index = 1
-  while words[index] and string.find(words[index], "^[%a_][%w_]*=") do
-    index += 1
-  end
-  local program = words[index] and string.match(words[index], "([^/]+)$")
-  if program ~= "elide" then
-    return nil
-  end
-  local command, subject = nil, {}
-  for position = index + 1, #words do
-    local word = words[position]
-    if string.sub(word, 1, 1) ~= "-" then
-      if command then
-        table.insert(subject, word)
-      else
-        command = word
-      end
-    end
-  end
-  if command ~= "test" and command ~= "build" and command ~= "run" and command ~= "install" then
-    return nil
-  end
-  return command, if #subject > 0 then table.concat(subject, " ") else nil
-end
-
 -- No process starts here: window event handlers share a 50 ms budget.
 -- Report runs (`run-*` under the project's `.dev/reports/<kind>/tern`) present when an
 -- `elide build|install` line started in a pane; the one new run with a report when it finishes
@@ -1065,31 +1121,48 @@ local function fresh_report(pane)
   return ok and decoded or nil
 end
 
--- "3 errors, 1 warning" from the report the build in `pane` wrote, or nil.
-local function build_counts(pane)
-  local report = diagnostics.report(fresh_report(pane))
-  return report and diagnostics.phrase(report.errors, report.warnings, report.notes) or nil
+-- The shell status the report the command in `pane` wrote stands for, or nil without one: what
+-- the command itself did, which past a pipe or `;` the shell's `status` does not say.
+local function report_status(report, status, compound)
+  if type(report) ~= "table" or type(report.outcome) ~= "string" then
+    return nil
+  end
+  if report.outcome == "success" or report.outcome == "up-to-date" then
+    return 0
+  end
+  if not compound and status ~= 0 then
+    return status
+  end
+  local code = report.exit_code
+  return if type(code) == "number" and code ~= 0 then code else 1
 end
 
--- "12 packages, 3 downloaded" from the report the install in `pane` wrote, or nil.
-local function install_detail(pane)
-  local report = fresh_report(pane)
+-- "3 errors, 1 warning" from a build's report, or nil.
+local function build_counts(report)
+  local counts = diagnostics.report(report)
+  return counts and diagnostics.phrase(counts.errors, counts.warnings, counts.notes) or nil
+end
+
+-- "12 packages, 3 downloaded" from an install's report, or nil. Downloads count packages, as the
+-- page does; a runtime without `downloaded_packages` reports files only.
+local function install_detail(report)
   local packages = type(report) == "table" and report.packages or nil
   if type(packages) ~= "number" or packages <= 0 then
     return nil
   end
   local text = packages .. " package" .. (if packages == 1 then "" else "s")
-  if type(report.downloads) == "number" and report.downloads > 0 then
-    text ..= ", " .. report.downloads .. " downloaded"
+  local downloaded = report.downloaded_packages
+  if type(downloaded) ~= "number" then
+    downloaded = report.downloads
+  end
+  if type(downloaded) == "number" and downloaded > 0 then
+    text ..= ", " .. downloaded .. " downloaded"
   end
   return text
 end
 
 tern.on("command_started", function(ev, cx)
-  local command = elide_command(ev.line)
-  if command == "run" then
-    android.typed_run(cx, ev.pane)
-  end
+  local command = shell.elide(ev.line)
   if not REPORTS[command] then
     return
   end
@@ -1102,21 +1175,36 @@ tern.on("pane_closed", function(ev)
 end)
 
 tern.on("command_finished", function(ev, cx)
-  android.typed_run_ended(ev.pane)
-  local command, subject = elide_command(ev.line)
+  local command, subject, compound = shell.elide(ev.line)
   if not command then
     return
   end
-  local detail = nil
-  if command == "build" then
-    detail = build_counts(ev.pane)
-  elseif command == "install" then
-    detail = install_detail(ev.pane)
+  local report = if REPORTS[command] then fresh_report(ev.pane) else nil
+  local status = report_status(report, ev.status, compound)
+  if not status then
+    if compound then
+      -- `elide build | cat`, `elide test; echo`, `elide run &`: the status is not the command's,
+      -- and no report says how it ended.
+      project.finished(ev.pane, nil)
+      tern.chrome.refresh()
+      return
+    end
+    status = ev.status
   end
-  project.finished(ev.pane, command, ev.status, detail)
+  local detail, success = nil, nil
+  if command == "build" then
+    detail = build_counts(report)
+  elseif command == "install" then
+    detail = install_detail(report)
+    -- The page says "Up to date" when nothing needed fetching; so does the bar.
+    if type(report) == "table" and report.outcome == "up-to-date" then
+      success = "Up to date"
+    end
+  end
+  project.finished(ev.pane, command, status, detail, success)
   tern.chrome.refresh()
   -- Statuses from 128 up are signals (an interrupt), not failing tests.
-  if command == "test" and ev.status ~= 0 and ev.status < 128 then
+  if command == "test" and status ~= 0 and status < 128 then
     if not subject then
       local pane = cx.session:pane(ev.pane)
       subject = pane and pane.cwd ~= "" and pane.cwd or nil
@@ -1181,10 +1269,28 @@ local function publish_sessions()
   tern.kv.set(SESSIONS, all)
 end
 
+-- What each page of this window previews, by session URL, kept in kv: after a plugin reload a page
+-- whose service has stopped is taken over from it, so its buttons still work.
+local function pages_key()
+  return "compose:pages:" .. tostring(this_window)
+end
+
+local function remember_pages()
+  if not this_window then
+    return
+  end
+  local saved = {}
+  for url, page in live_pages do
+    saved[url] = { root = page.root, path = page.path }
+  end
+  tern.kv.set(pages_key(), if next(saved) then saved else nil)
+end
+
 local function forget_page(url)
   live_pages[url] = nil
   native_sessions[url] = nil
   publish_sessions()
+  remember_pages()
 end
 
 -- Ends the preview: its session, and its pane.
@@ -1209,27 +1315,50 @@ local poll_page, watch_stopped
 
 -- Takes over the page `block` showing session `url` of workspace `root` (previewing `file`):
 -- its workspace bounds the native editors posted to it, and its requests are carried out here.
-local function adopt(cx, url, block, root, file)
+-- `asked`: the newest pane action already carried out (a page taken over after a reload).
+local function adopt(cx, url, block, root, file, asked)
   native_sessions[url] = { url = url, pane = block, root = root }
   local page = {
     url = url,
     pane = block,
     root = root,
     path = if file and links.within(file, root) then file else nil,
-    asked = 0,
+    asked = if type(asked) == "number" then asked else 0,
   }
   live_pages[url] = page
   publish_sessions()
+  remember_pages()
   poll_native(cx)
   native_tick(cx)
   poll_page(page)
 end
 
+-- A stopped page whose Start failed: its address says so (`#failed-<n>`, a fragment change, so the
+-- page stays), which the page reads to offer Start again; its buttons are read again.
+local function restart_failed(cx, page)
+  page.starting = nil
+  if cx.session:pane(page.pane) then
+    cx.browser:call({ op = "goto", block = page.pane, url = page.url .. "#failed-" .. os.time() })
+  end
+  watch_stopped(page)
+end
+
 -- Starts a session previewing `file` and shows its page: in `page`'s pane when given (a stopped
 -- preview starting again), else beside `target`.
 start_preview = function(cx, file, root, target, page)
+  -- One start per stopped page: a second would retire the first's session, and its 410 would close
+  -- the pane both share.
+  if page then
+    if page.starting then
+      return
+    end
+    page.starting = true
+  end
   local config = configuration(cx)
   if not config then
+    if page then
+      restart_failed(cx, page)
+    end
     return
   end
   local keep_alive = if type(config.compose_keep_alive_minutes) == "number"
@@ -1269,13 +1398,23 @@ start_preview = function(cx, file, root, target, page)
   -- native editors follow through `poll_native`.
   local ok, problem = pcall(function()
     tern.process.run(argv, { cwd = root, stdin = '{"documents":[]}', timeout_ms = 30000 }, function(result, current)
+      if page then
+        page.starting = nil
+      end
       if not current then
         return
       end
       local decoded, response = pcall(tern.json.decode, result.stdout or "")
       response = decoded and type(response) == "table" and response or {}
       local url, session_root = live_url(response.url), links.absolute(response.root)
-      if not url or url ~= response.url or not session_root or not links.within(file, session_root) then
+      -- The service resolves symlinks: its root holds its form of the file (a project under
+      -- `/tmp` is `/private/tmp` to it). Older runtimes answer no file.
+      local resolved = links.absolute(response.file) or file
+      if not url or url ~= response.url or not session_root or not links.within(resolved, session_root) then
+        -- A session that opened but is not used would outlive the page nobody shows.
+        if url and url == response.url then
+          loopback.request(url .. "close", "", 5000, function() end)
+        end
         local message = type(response.error) == "string" and response.error ~= "" and response.error
           or (
             "The runtime could not start Compose previews (exit "
@@ -1284,7 +1423,7 @@ start_preview = function(cx, file, root, target, page)
           )
         current:toast("error", "Could not start Compose previews.", string.sub(message, 1, 8192))
         if page then
-          watch_stopped(page)
+          restart_failed(current, page)
         end
         return
       end
@@ -1320,6 +1459,9 @@ start_preview = function(cx, file, root, target, page)
   end)
   if not ok then
     cx:toast("error", "Could not start Compose previews.", tostring(problem))
+    if page then
+      restart_failed(cx, page)
+    end
   end
 end
 
@@ -1335,8 +1477,11 @@ end
 -- `#close-<n>`, a fresh `n` per click), the service being gone; it is read every second until the
 -- pane closes or starts again.
 watch_stopped = function(page)
+  -- One loop per page: a newer call ends the one before.
+  local loop = {}
+  page.watch = loop
   tern.timer(1000, function(cx)
-    if not cx or live_pages[page.url] ~= page then
+    if not cx or live_pages[page.url] ~= page or page.watch ~= loop then
       return
     end
     if not cx.session:pane(page.pane) then
@@ -1395,6 +1540,7 @@ poll_page = function(page)
           local file = links.absolute(value.file)
           if file and links.within(file, page.root) and source.extension(file) == "kt" then
             page.path = file
+            remember_pages()
           end
         end
       end
@@ -1428,6 +1574,7 @@ tern.timer(0, function(cx)
     return
   end
   this_window = cx:window_key()
+  android.watch_started(cx)
   publish_sessions()
   cx.browser:call({ op = "blocks" }):next(function(result, err, current)
     if not current or err or not (result and result.ok and type(result.ok.blocks) == "table") then
@@ -1437,16 +1584,30 @@ tern.timer(0, function(cx)
       local url = type(block) == "table" and live_url(block.url)
       if url and type(block.block) == "number" and not live_pages[url] then
         loopback.request(url .. "info", nil, 5000, function(status, body, latest)
+          if not latest or not latest.session:pane(block.block) or live_pages[url] then
+            return
+          end
           local decoded, info = pcall(tern.json.decode, body)
           local root = status == 200 and decoded and type(info) == "table" and links.absolute(info.root)
-          if
-            latest
-            and root
-            and not string.find(root, "%c")
-            and latest.session:pane(block.block)
-            and not live_pages[url]
-          then
-            adopt(latest, url, block.block, root, links.absolute(info.file))
+          if root and not string.find(root, "%c") then
+            adopt(latest, url, block.block, root, links.absolute(info.file), info.action)
+            return
+          end
+          -- Its service is gone: the page shows it stopped, and what it previewed is remembered.
+          local saved = tern.kv.get(pages_key())
+          local was = type(saved) == "table" and saved[url]
+          local was_root = type(was) == "table" and links.absolute(was.root)
+          if was_root then
+            local page = {
+              url = url,
+              pane = block.block,
+              root = was_root,
+              path = links.absolute(was.path),
+              asked = 0,
+              stopped = true,
+            }
+            live_pages[url] = page
+            watch_stopped(page)
           end
         end)
       end
@@ -1515,8 +1676,12 @@ tern.route.link(function(request, cx)
     end
     if root and source.lang(target.path) and configuration() then
       local args = { target.path, root }
-      if target.line then
-        table.insert(args, tostring(target.line))
+      if target.line or target.overlay then
+        table.insert(args, target.line and tostring(target.line) or "")
+      end
+      -- The overlay the block opens in, e.g. Debug when it follows a paused target into this file.
+      if target.overlay then
+        table.insert(args, target.overlay)
       end
       -- The block attaches to the project, so a root the link named must be one this window knows.
       if target.root and not links.known(target.root, project.roots()) then
@@ -1559,11 +1724,14 @@ end)
 tern.on("window_start", function(cx)
   detect(cx)
 end)
-for _, event in { "focus", "cwd", "command_finished" } do
+for _, event in { "focus", "cwd" } do
   tern.on(event, function(_, cx)
     detect(cx)
   end)
 end
+tern.on("command_finished", function(_, cx)
+  detect(cx, nil, nil, true)
+end)
 tern.on("pane_closed", function(ev)
   project.remove(ev.pane)
 end)

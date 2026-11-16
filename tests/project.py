@@ -9,6 +9,7 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
+from tern_config import config_dir, daemon_command
 from urllib.request import build_opener, ProxyHandler
 
 root = Path(__file__).resolve().parents[1]
@@ -71,9 +72,9 @@ with tempfile.TemporaryDirectory(prefix='tp-', dir='/tmp') as temporary:
     with (out / 'tern.log').open('w') as log:
         environment = {**os.environ, 'STENCIL_FIXTURE_ROOT': str(fixture_root),
             'TERN_PLUGIN_DATA': str(state / 'data'), 'TERN_DAEMON_SOCKET': str(state / 'daemon.sock'),
-            'TERN_CONFIG_DIR': str(state / 'config')}
+            'TERN_CONFIG_DIR': config_dir(state / 'config')}
         subprocess.run(['tern', 'plugin', 'link', str(package)], env=environment, check=True, stdout=log, stderr=log)
-        daemon = subprocess.Popen(['tern', 'daemon', '--socket', str(state / 'daemon.sock')], stdout=log, stderr=log, env=environment)
+        daemon = subprocess.Popen(daemon_command(state / 'daemon.sock'), stdout=log, stderr=log, env=environment)
         server = subprocess.Popen(['tern', '--control', str(socket), '--out', str(out), '--dir', str(nested)],
             stdout=log, stderr=log, env=environment)
         def ctl(command, *args):
@@ -114,12 +115,13 @@ with tempfile.TemporaryDirectory(prefix='tp-', dir='/tmp') as temporary:
             ctl('click', f'#pick .tn-pk-item:nth-child({index})')
         try:
             wait(socket.exists)
-            ctl('status-bar', 'on')
-            wait(lambda: project.name in tree('.sl-plugin'))
-            ctl('click', '.sl-plugin')
+            ctl('widgets', 'classic')
+            wait(lambda: project.name in tree('.wg-status-chip'))
+            ctl('click', '.wg-status-chip')
             wait(lambda: 'Run tests' in tree('#pick'))
             ctl('shot', 'project-actions')
-            ctl('key', 'Enter')
+            # The menu leads with Build and Run (U3); pick the test action by its label.
+            choose('Run tests')
             wait(lambda: 'Passed' in tree('[data-role="run-status"]'))
             native_panel('elide-tern-project')
             assert str(project.resolve()) in tree('[data-role="subject"]')
@@ -218,7 +220,7 @@ with tempfile.TemporaryDirectory(prefix='tp-', dir='/tmp') as temporary:
             manifest.unlink()
             ctl('plugins', 'run', 'plugin.elide.project')
             wait(lambda: 'No elide.pkl' in tree('.toast'))
-            wait(lambda: not ctl('tree', '.sl-plugin').get('nodes'))
+            wait(lambda: not ctl('tree', '.wg-status-chip').get('nodes'))
             assert 'exceeded its budget' not in (out / 'tern.log').read_text()
             print('PASS: inert/nested/symlink discovery, automatic status, native tests/REPL/static serving, cwd, defaults, Files action, invalidation')
         finally:

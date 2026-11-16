@@ -1,3 +1,5 @@
+local broker = require("./broker")
+
 local M = {}
 
 function M.install(configuration, path, project)
@@ -26,31 +28,40 @@ function M.install(configuration, path, project)
       or (config.state and (config.state .. "-projects"))
       or (tern.plugin.data .. "/projects")
     local pending = call:wait(20000)
-    local ok, problem = pcall(function()
-      tern.process.run({ path(config.broker or "../dist/elide-tern-broker"), "request", state }, {
-        stdin = tern.json.encode(body),
-        timeout_ms = 18000,
-      }, function(result)
-        if call.cancelled then
-          return
-        end
-        if result.status ~= 0 then
-          call:fail("Project request failed: " .. string.sub(result.stderr, 1, 1024))
-          return
-        end
-        local decoded, response = pcall(tern.json.decode, result.stdout)
-        if not decoded or type(response) ~= "table" then
-          call:fail("Invalid project response")
-        elseif not response.ok then
-          call:fail(response.error or "Project request failed")
-        else
-          call:reply(response.result)
-        end
+    local binary = path(config.broker or "../dist/elide-tern-broker")
+    local function send()
+      local ok, problem = pcall(function()
+        tern.process.run({ binary, "request", state }, {
+          stdin = tern.json.encode(body),
+          timeout_ms = 18000,
+        }, function(result)
+          if call.cancelled then
+            return
+          end
+          if result.status ~= 0 then
+            call:fail("Project request failed: " .. string.sub(result.stderr, 1, 1024))
+            return
+          end
+          local decoded, response = pcall(tern.json.decode, result.stdout)
+          if not decoded or type(response) ~= "table" then
+            call:fail("Invalid project response")
+          elseif not response.ok then
+            call:fail(response.error or "Project request failed")
+          else
+            call:reply(response.result)
+          end
+        end)
       end)
-    end)
-    if not ok then
-      call:fail(tostring(problem))
+      if not ok then
+        call:fail(tostring(problem))
+      end
     end
+    -- The same protocol check as the plugin's own requests (lib/broker.luau).
+    broker.check(binary, function(_, err)
+      if not call.cancelled then
+        call:fail(err)
+      end
+    end, send)
     return pending
   end
 

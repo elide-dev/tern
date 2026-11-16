@@ -14,12 +14,16 @@ remain follow-up work.
 
 macOS Apple Silicon users can install the self-contained
 [preview release](https://github.com/elide-dev/tern/releases), including its matched
-runtime and SDK. See [installation instructions](docs/manual-install.md).
+runtime and SDK. See [installation instructions](docs/manual-install.md). To pack one:
+`make build`, then `scripts/package-release.py --runtime <elide distribution> --sdk <embedded
+SDK> --out <dir> --runtime-revision <elide commit>` writes the archive and its `SHA256SUMS`
+(`tests/install.py` installs what it packs).
 
 ## Development
 
 Requires Rust via rustup (this checkout pins the nightly required by `../elide`), Cap'n Proto
-(capnp compiler), Python 3, Tern, Bun, and StyLua 2.5.2 (`mise install`). Native SDK execution
+(capnp compiler), Python 3, Tern, Bun, StyLua 2.5.2 and Lua 5.4 (`mise install` provides both).
+Native SDK execution
 supports macOS arm64 and Linux amd64, subject to the selected SDK's deployment requirements.
 The configured runtime must support `elide tern`; `make link` builds the helpers and links the plugin. The broker links
 the runtime crates `elide-embed-host` and `elide-project-session` from a sibling `../elide`
@@ -34,7 +38,7 @@ display) into `dist/elide-tern-android`; releases also require this executable.
 
 ```sh
 make build
-make test
+make test-unit   # Lua, Bun and Rust unit tests, broker and release-installer checks (also `make test`)
 make check
 cp plugin/config.example.json plugin/config.json
 # Set sdk to a complete extracted embedded SDK directory.
@@ -74,7 +78,8 @@ when another file opens over them. The bottom terminal launches in the project
 root; reopening a workspace preserves an existing shell's current directory.
 Editing, undo, saving, and dirty buffers belong to Tern's native editor. Test/REPL/server
 results open beside the editor; clicking their action again focuses the existing pane.
-Build and Run currently use the runtime's terminal output and normal Tern process lifetime.
+Build, Run and Install open the runtime's full pages where it has them (its `<command> --help` lists `--surface`);
+on an older runtime their plain output stays in the pane until Enter.
 This does not yet register Elide LSP providers, debugger decorations, or coverage gutters.
 
 `make test-workspace` verifies native file routing, unsaved edits, project isolation
@@ -89,7 +94,8 @@ Kotlin supports module declarations, not bare expressions or automatic `main`
 execution. TypeScript and Wasm still need execution adapters.
 
 `make repl` builds the shared frontend from the sibling `../elide` checkout through
-its Makefile. Override `ELIDE_SOURCE` for another checkout. `make test-surface` opens
+its Makefile. Override `ELIDE_SOURCE` for another checkout of the shims; the broker always builds against
+`../elide` (its path dependencies in `crates/broker/Cargo.toml`). `make test-surface` opens
 an isolated headless Tern renderer and tests real kernels, icons, pointer/keyboard
 switching, preserved drafts/bindings and teardown. Captures go in `.dev/scratch/`.
 The launcher currently supports local hosts; remote hosts require their own native
@@ -97,12 +103,14 @@ launcher and SDK installation.
 
 `plugin/config.json` is ignored. The default broker is `../dist/elide-tern-broker`;
 keep `elide-tern-worker` beside it. Every native surface launches as
-`<runtime> test|serve <subject>` or `<runtime> tern <repl|project|debug>`, so a runtime built from a branch with
-that command needs no separate launchers. The plugin probes each runtime path once with
-`tern --help` before its first launch and reports a runtime that lacks the command
-instead of letting an older runtime resolve `tern` as a project script. The optional `repl`, `serve`, `test`,
+`<runtime> test|serve|build|run|install|help …` or `<runtime> tern <repl|project|debug|compose>`, so a runtime built
+from a branch with those commands needs no separate launchers. The plugin probes each runtime path once with
+`--help-all` before its first `tern` launch and reports a runtime that lacks the command
+instead of letting an older runtime resolve `tern` as a project script; `test`, `build`, `run` and `install` read
+their own `--help` for `--surface`. The optional `repl`, `serve`, `test`,
 `project` and `debug` settings name an explicit launcher executable for one surface,
-which the `dist/elide-tern-*` development shims built by `make link` provide. An optional `state` setting selects a short,
+which the `dist/elide-tern-*` development shims provide (`make testing`, `make project`, `make debugging` and so on;
+`make link` builds only the broker, worker and Android helper). An optional `state` setting selects a short,
 private broker directory if Tern's plugin-data path exceeds Unix socket limits.
 Never store SDK binaries or machine-specific configuration in source control.
 The native SDK is user-supplied; no archive is downloaded automatically.
@@ -138,8 +146,8 @@ running preview's pane. The workspace's preview service (the Komodo language ser
 compiler and the hosted cards) stays warm for 10 minutes after its pane closes, so the next
 preview paints at once; it starts nothing before the first preview. **Stop renderer** stops it
 at once; the pane stays, and its first button becomes **Start previews**. Closing the pane ends
-its session at once. Plugin reload ends the session (the service stays warm) and never
-automatically executes previews.
+its session at once. A plugin reload takes over the open preview panes (the service stays warm)
+and never automatically executes previews.
 
 Requires an Android-capable Elide runtime that provides `elide tern compose`, the project's
 Android SDK/dependencies, a JDK 17+ and a Komodo editor bundle with its Compose compiler plugins
@@ -165,6 +173,10 @@ installed Komodo/layoutlib host; the tested Komodo build can stall infinite tran
 cycle boundary even while coroutine timers advance. Source refreshes reuse the session but may
 reset composition state. IME composition and clipboard paste are not supported by the live
 keyboard protocol.
+Run `make test-compose RUNTIME=/path/to/elide COMPOSE_PROJECT=/path/to/compose-project
+COMPOSE_FILE=relative/path/Previews.kt` for the preview service as the plugin drives it, on a copy
+of the project under `/tmp`: canonical paths, previews going live, a rejected editor post
+suspending the preview, a project whose first load fails, and closing a session.
 
 Only one page controls a session. Its loopback URL contains a temporary access token; do not
 share it. The page follows Tern's light or dark theme setting, or the system's appearance.
@@ -294,7 +306,7 @@ previous owner. Closing the controlling view starts a 30-second grace period for
 another attachment to take over, then stops the target. Stop ends it immediately.
 Debug-test runs cannot overlap ordinary tests writing to the same project output.
 
-Build the development shim with `make debugging` (`make link` includes it).
+Build the development shim with `make debugging` (`make link` does not build shims).
 `config.debug` can override the launcher; runtime and project-state settings are shared with Tests.
 `make test-debug RUNTIME=/path/to/elide` validates JavaScript and Python in a real
 Tern desktop, including value browsing, source navigation, agent/UI handoff, stale
@@ -359,8 +371,8 @@ run's coverage option; earlier measurements remain unchanged. JavaScript fingerp
 come from the text evaluated by Truffle. These panels show measured source versions;
 they do not claim live buffer freshness or install native editor gutters.
 
-Build the development shim with `make project` (`make link` includes it). `config.project`
-can override the launcher and `config.project_state` selects a short private host
+Build the development shim with `make project` (`make link` does not build shims). `config.project`
+can override the launcher and `config.project_state` selects a private host
 directory. Development builds currently consume the shared `elide-project-session`
 crate from the sibling Elide checkout, alongside the existing surface build dependency.
 
@@ -385,23 +397,27 @@ from the palette opens that project's workspace.
 On older runtimes, and for `elide javac` and `elide kotlinc`, the build lens shows the
 compiler's errors and warnings as cards grouped by file, with counts and an **Open** link to
 each location; `elide test --reporter=tap` shows a pass/fail summary with a table of results.
-Both fall back to the raw output when nothing parses or the output is very large. After a
+The build lens falls back to the raw output when nothing parses or the output is very large; the
+TAP lens lists at most 5,000 results and counts the rest ("… N more"). After a
 typed `elide build`, the status bar reads, for example, "Build failed · 3 errors, 1 warning",
-and the workspace's Build button opens the full Build page when the runtime has one.
+and the workspace's Build button opens the full Build page when the runtime has one, as do
+**Build project** and **Run project** in the project menu and the palette. Choosing Build, Run or
+Install dependencies again while its page for that project is open focuses that page instead of
+starting another. On a runtime without these pages the plain output stays until Enter.
 
 `elide install` in a Tern terminal draws Elide's Install surface on runtimes that have one: a
 row per ecosystem with its packages and how many came from the cache, a bar per download, and
 the resolved Maven graph as a tree. **Install dependencies**, in the project menu and the
 palette, opens the full Install page in a new tab. After a typed `elide install` the status bar
 reads, for example, "Installed · 12 packages, 3 downloaded". Run
-`make installing && make test-installing RUNTIME=/path/to/elide` for the Install page in an
+`make test-installing RUNTIME=/path/to/elide` for the Install page in an
 isolated window (it needs network access to Maven Central).
 
 The workspace's Run button opens the full Run page (`elide run --surface=screen`) at the bottom,
 beside the project terminal (beside the editor once that terminal is closed): status,
 the build's tasks and compile errors, the program's output (kept in
 `.dev/reports/run/tern/run-*/output.log`), **Stop** and **Run again**. The tasks sit above the
-output and fold when the program writes its first line; the log takes the height the pane has
+output and fold when the program writes its first line to standard output; the log takes the height the pane has
 left and scrolls inside it, so the page itself stays put. An Android run's output, the app's
 logcat, is drawn as records: time, thread, level, tag and the message in the level's colour,
 wrapped to the pane; a narrow pane puts the message under its tag. Runtimes without the
@@ -418,15 +434,17 @@ preview closes. A failed build shows no device pane. The project's AVD deploys w
 `--emulator`, so Elide waits for the emulator Tern started; any other device with
 `--device=<serial>`. Elide never opens an emulator window of its own. Runtimes without the Run
 page show the device pane a few seconds after their output starts. Run
-`make running && make test-running RUNTIME=/path/to/elide` for the Run page in an isolated
+`make test-running RUNTIME=/path/to/elide` for the Run page in an isolated
 window.
-A typed `elide run` in an Android project gets its device pane too: every new shell names the
-plugin's helper in `ELIDE_ANDROID_EMULATOR_LAUNCHER`, so any Elide command there that boots an
-emulator starts it without a window; once the run's block names its device, that device's pane
-opens beside the terminal and takes focus. Shells opened before the plugin loaded keep Elide's
-own emulator window. Run `make test-android-run RUNTIME=/path/to/elide
+An `elide run` typed or scripted in an Android project gets its device pane too: every new shell
+names the plugin's helper in `ELIDE_ANDROID_EMULATOR_LAUNCHER`, so any Elide command there that
+boots an emulator (a typed run, a wrapper script, `elide build android-emulator`) starts it without
+a window, and the helper tells the plugin which pane asked; that device's pane opens beside it and
+takes focus once the emulator shows a display. Shells opened before the plugin loaded keep Elide's
+own emulator window, and an emulator already running when the command starts gets no new pane.
+Run `make test-android-run RUNTIME=/path/to/elide
 ANDROID_PROJECT=/path/to/android-project` for this in an isolated window (a Tern window, not
-`tern serve`, whose shells run no `spawn` hook and raise no `command_started`).
+`tern serve`, whose shells run no `spawn` hook).
 
 `elide://source`, `elide://debug`, `elide://tests` and `elide://help` links open a source line (in the
 [source editor](#source-editor) for project sources), the debugger, project test runs or a help topic. Elide prints them; any program can, as OSC 8 hyperlinks.
@@ -444,7 +462,9 @@ editor: Tern's highlighting, undo and redo, auto-indent, indent and comment togg
 disk. Overlays appear when they can act: **Coverage** tints covered, uncovered and
 partially covered rows from the newest coverage run (F5 runs one) while you keep editing, and **Debug** sets breakpoints with F9 and launches with F5,
 then shows Resume, Pause, Stop and stepping controls (F5, F6, ⇧F5, F10, F11, ⇧F11) only
-while a debug session exists, with breakpoint and paused rows tinted. Switching overlays only
+while a debug session exists, with breakpoint and paused rows tinted. Every editor of a project
+controls the same target, and a pause in another file of the project opens that file at the
+paused line in the Debug overlay. Switching overlays only
 fades colors; no text moves. A hotness overlay will appear once
 the project session records source-located profile samples. Files over 600 lines are shown without highlighting
 to keep typing fast. `elide://source` links open this editor for sources inside a project.

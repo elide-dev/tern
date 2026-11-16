@@ -1,7 +1,10 @@
 ELIDE_SOURCE ?= ../elide
+# Lua 5.4 from mise (`.mise.toml`) when the shell has not activated it.
+LUA ?= $(or $(shell command -v lua 2>/dev/null),mise exec -- lua)
 
-.PHONY: build test fmt check types smoke link repl test-surface android test-android test-android-unit
-build: android
+.PHONY: build broker test test-unit fmt check types smoke link repl test-surface android test-android test-android-unit
+build: android broker
+broker:
 	cargo build --release -p elide-tern-broker
 	mkdir -p dist
 	cp target/release/elide-tern-broker dist/.elide-tern-broker.new
@@ -11,7 +14,7 @@ build: android
 android:
 	bun scripts/build-android.ts
 test-android-unit:
-	bun test tests/android-elide.test.ts
+	bun test tests/android-elide.test.ts tests/android-sdk.test.ts
 test-android: android
 	python3 tests/android.py --image "$(ANDROID_IMAGE)" $(if $(ANDROID_SDK),--sdk "$(ANDROID_SDK)")
 .PHONY: test-android-run
@@ -23,9 +26,20 @@ previewing:
 	mkdir -p dist
 	cp "$(ELIDE_SOURCE)/target/debug/examples/compose_preview" dist/.elide-tern-compose.new
 	mv dist/.elide-tern-compose.new dist/elide-tern-compose
-test: build
+.PHONY: test-compose
+test-compose: previewing
+	python3 -u tests/compose.py --runtime "$(RUNTIME)" --project "$(COMPOSE_PROJECT)" --file "$(COMPOSE_FILE)"
+test: test-unit
+test-unit: broker
+	$(LUA) tests/links.lua
+	$(LUA) tests/source.lua
+	$(LUA) tests/diagnostics.lua
+	$(LUA) tests/shell.lua
+	$(LUA) tests/broker.lua
+	$(MAKE) test-android-unit
 	cargo test --workspace
 	python3 tests/broker.py
+	python3 tests/install.py
 fmt:
 	cargo fmt -p elide-tern-broker
 	stylua plugin/host.luau plugin/window.luau plugin/lib
@@ -61,7 +75,7 @@ test-serve: serve
 	python3 tests/serve.py $(if $(RUNTIME),--runtime "$(RUNTIME)")
 
 .PHONY: test-telemetry
-test-telemetry:
+test-telemetry: serve
 	python3 tests/telemetry.py --runtime "$(RUNTIME)"
 
 .PHONY: testing test-testing
@@ -71,7 +85,7 @@ testing:
 	cp "$(ELIDE_SOURCE)/target/debug/examples/test_surface" dist/.elide-tern-test.new
 	mv dist/.elide-tern-test.new dist/elide-tern-test
 
-test-testing:
+test-testing: testing
 	python3 tests/testing.py --runtime "$(RUNTIME)"
 
 .PHONY: test-project
@@ -89,7 +103,7 @@ test-sessions: build project
 	python3 tests/sessions.py $(if $(RUNTIME),--runtime "$(RUNTIME)")
 
 .PHONY: test-coverage
-test-coverage: build
+test-coverage: build project
 	python3 -u tests/coverage.py $(if $(RUNTIME),--runtime "$(RUNTIME)")
 
 .PHONY: debugging test-debug
@@ -109,7 +123,7 @@ building:
 	cp "$(ELIDE_SOURCE)/target/debug/examples/build_surface" dist/.elide-tern-build.new
 	mv dist/.elide-tern-build.new dist/elide-tern-build
 
-test-building:
+test-building: building
 	python3 -u tests/build.py --runtime "$(RUNTIME)"
 
 .PHONY: running test-running
@@ -119,7 +133,7 @@ running:
 	cp "$(ELIDE_SOURCE)/target/debug/examples/run_surface" dist/.elide-tern-run.new
 	mv dist/.elide-tern-run.new dist/elide-tern-run
 
-test-running:
+test-running: running
 	python3 -u tests/run.py --runtime "$(RUNTIME)"
 
 .PHONY: installing test-installing
@@ -129,7 +143,7 @@ installing:
 	cp "$(ELIDE_SOURCE)/target/debug/examples/install_surface" dist/.elide-tern-install.new
 	mv dist/.elide-tern-install.new dist/elide-tern-install
 
-test-installing:
+test-installing: installing
 	python3 -u tests/install_surface.py --runtime "$(RUNTIME)"
 
 .PHONY: help test-help
@@ -139,7 +153,7 @@ help:
 	cp "$(ELIDE_SOURCE)/target/debug/examples/help_surface" dist/.elide-tern-help.new
 	mv dist/.elide-tern-help.new dist/elide-tern-help
 
-test-help:
+test-help: help
 	python3 tests/help.py --runtime "$(RUNTIME)"
 
 .PHONY: test-workspace

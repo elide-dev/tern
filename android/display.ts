@@ -33,6 +33,8 @@ export interface Device {
 }
 
 const ESC = "\x1b";
+/** Appended to the view's title when it could not open its device (the window half matches it). */
+const FAILED_TITLE = " (failed)";
 const FRAME_ID = 1;
 const QUERY_ID = 31;
 /** Toolbar images: buttons from ICON_ID (by their index in ACTS), then the panel behind them. */
@@ -44,6 +46,8 @@ const SEGMENT_ID = 71;
 /** The toolbar's height in rows: room for Tern-sized buttons with padding around them. */
 const BAR_ROWS = 3;
 const SCREEN_OFF = "The screen is off. Press Power to wake it.";
+/** Times a dropped connection to a device that is still there is opened again. */
+const RECONNECTS = 3;
 type Act = ToolbarButton | "close";
 /** The device's navigation buttons sit in the middle, hardware keys left of them, rotation right; Close ends the bar. */
 const NAVIGATION: Act[] = ["back", "home", "recents"];
@@ -115,8 +119,11 @@ export async function runDisplay(title: string, connect: Connect): Promise<void>
   /** The step in progress, shown with an animated bar until the first frame; and the latest notice. */
   let step: string | undefined = `Connecting to ${title}…`, message = "";
   const started = Date.now();
-  let stopping = false, restored = false;
-  const { promise: finished, resolve: finish } = Promise.withResolvers<string | undefined>();
+  // `closing`: the user closed the view; a wait for a dropped emulator to exit ends at once.
+  let stopping = false, restored = false, closing = false;
+  // Resolved by `stop` with why the view ends; replaced (`rearm`) when a dropped connection is
+  // tried again.
+  let { promise: finished, resolve: finish } = Promise.withResolvers<string | undefined>();
   const directory = mkdtempSync(path.join(os.tmpdir(), "elide-tern-display-"));
   const framePath = path.join(directory, "frame.rgb");
 
@@ -124,6 +131,13 @@ export async function runDisplay(title: string, connect: Connect): Promise<void>
     if (stopping) return;
     stopping = true;
     finish(reason);
+  }
+
+  /** Lets the view run again after a stop: for a reconnect to a device that is still there. */
+  function rearm(): void {
+    ({ promise: finished, resolve: finish } = Promise.withResolvers<string | undefined>());
+    stopping = false;
+    streamSize = "";
   }
 
   // ── Terminal output ────────────────────────────────────────────────────────────
@@ -352,11 +366,12 @@ export async function runDisplay(title: string, connect: Connect): Promise<void>
     } else status(`Terminal rejected a frame: ${detail}`);
     pump();
   };
+  // Streams frames at the current box size; false when that size already streams.
   const subscribe = () => {
-    if (!geometry || stopping || !device) return;
+    if (!geometry || stopping || !device) return false;
     const box = area();
     const size = `${box.width}x${box.height}`;
-    if (size === streamSize) return;
+    if (size === streamSize) return false;
     streamSize = size;
     device.stream(box.width, box.height, next => {
       if (stopping) return;
@@ -370,6 +385,7 @@ export async function runDisplay(title: string, connect: Connect): Promise<void>
       frame = next;
       pump();
     });
+    return true;
   };
 
   // ── Input ──────────────────────────────────────────────────────────────────────
@@ -386,7 +402,7 @@ export async function runDisplay(title: string, connect: Connect): Promise<void>
     if (touching) { device?.touch("up", touching.u, touching.v, touching.pinch); touching = undefined; }
   };
   const act = (button: Act) => {
-    if (button === "close") stop();
+    if (button === "close") { closing = true; stop(); }
     else device?.press(button);
   };
   const mouse = (code: number, x: number, y: number, release: boolean) => {
@@ -545,14 +561,24 @@ export async function runDisplay(title: string, connect: Connect): Promise<void>
   const onData = (chunk: Buffer) => { pending += decoder.decode(chunk, { stream: true }); parse(); };
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────────
+  let resizing: Timer | undefined;
   const onResize = () => {
     out(`${ESC}[16t`);
-    setTimeout(() => {
+    // Dragging a divider sends a burst of resizes: redraw once, after the last.
+    clearTimeout(resizing);
+    resizing = setTimeout(() => {
+      resizing = undefined;
       if (!geometry || stopping) return;
       geometry = { ...geometry, cols: process.stdout.columns, rows: process.stdout.rows };
       hovered = pressed = undefined;
+      const last = drawn;
       redraw();
-      subscribe();
+      // The same box size streams on and sends nothing until the screen changes: draw the last
+      // frame again rather than leave the pane blank.
+      if (!subscribe() && last) {
+        frame ??= last;
+        pump();
+      }
     }, 80);
   };
   let hungUp = false;
@@ -584,8 +610,10 @@ export async function runDisplay(title: string, connect: Connect): Promise<void>
     const abort = new AbortController();
     const connecting = connect(text => { if (!stopping) setStep(text); }, abort.signal);
     const connected = await Promise.race([connecting, finished.then(() => undefined)]).catch((error: unknown) => {
-      // A failed connection stays on screen until the view is closed.
+      // A failed connection stays on screen until the view is closed. Its title says it failed,
+      // so Show and Start open a fresh view in its place instead of focusing this one.
       setStep(undefined);
+      out(`${ESC}]2;${title}${FAILED_TITLE}\x07`);
       status(`Could not open ${title}.\n${error instanceof Error ? error.message : String(error)}`);
       return null;
     });
@@ -601,9 +629,27 @@ export async function runDisplay(title: string, connect: Connect): Promise<void>
       setStep("Waiting for the screen…");
       subscribe();
       failure = await finished;
-      if (failure && !hungUp) {
+      // A dropped connection to a device that is still there (its gRPC server restarted, a
+      // blip) is opened again, a few times; a device that went away ends the view.
+      for (let retry = 1; failure && !hungUp && !closing && retry <= RECONNECTS; retry++) {
         status(failure);
-        gone = await device.ended(() => !hungUp);
+        const settle = Date.now() + 2_000;
+        gone = await device.ended(() => !hungUp && !closing && Date.now() < settle);
+        if (gone || hungUp || closing) break;
+        status(`${failure}\nReconnecting (${retry} of ${RECONNECTS})…`);
+        await device.close().catch(() => {});
+        rearm();
+        const again = await connect(text => { if (!stopping) setStep(text); }, abort.signal).catch(() => undefined);
+        if (!again) continue;
+        device = again;
+        await device.open({ status: text => { if (!stopping) status(text); }, stop });
+        status("");
+        subscribe();
+        failure = await finished;
+      }
+      if (failure && !hungUp && !gone) {
+        status(failure);
+        gone = await device.ended(() => !hungUp && !closing);
       }
     }
   } catch (error) {
@@ -629,7 +675,7 @@ export async function runDisplay(title: string, connect: Connect): Promise<void>
     process.stdin.pause();
     rmSync(directory, { recursive: true, force: true });
   }
-  if (failure) {
+  if (failure && !closing) {
     // The device stopping or leaving is the normal end of a view, not an error.
     if (!gone) throw new Error(failure);
     console.log(gone);
