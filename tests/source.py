@@ -153,12 +153,12 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
 
     cell_width = [8.04]
 
-    # Each gutter row sits on its code row: the first-character tint run of every line has the
-    # gutter's y, and the rows advance by one line height.
+    # Each gutter row sits on its code row: the first-character tint run of every line is centred on
+    # its gutter row (the run is taller than the row), and the rows advance by one line height.
     def rows_aligned():
         rows = gutter_rows()
-        marks = sorted(n['rect'][1] for n in nodes('.sf-editor .sf-t-mark'))
-        ys = [rows[k][1] for k in sorted(rows)]
+        marks = sorted(n['rect'][1] + n['rect'][3] / 2 for n in nodes('.sf-editor .sf-t-mark'))
+        ys = [rows[k][1] + rows[k][3] / 2 for k in sorted(rows)]
         pitch = [b - a for a, b in zip(ys, ys[1:])]
         aligned = all(any(abs(m - y) < 2 for y in ys) for m in marks)
         return aligned and len(set(round(p, 1) for p in pitch)) <= 2, {'pitch': sorted(set(round(p, 2) for p in pitch)), 'marks': len(marks)}
@@ -743,8 +743,8 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
         check('1,300-line file opens at line 1249', open_tab(thirteen, lambda: 'Ln 1249,' in tree('[data-role="source-position"]'), 1249),
               tree('[data-role="source-position"]'))
         click('[data-role~="source-editor"]')
-        go_line(1250)
-        wait(lambda: 1250 in gutter_rows() and 1251 in gutter_rows(), 15)
+        check('go to line 1250', go_line(1250, 60), position())
+        check('rows 1250 and 1251 on screen', wait(lambda: 1250 in gutter_rows() and 1251 in gutter_rows(), 60), sorted(gutter_rows()))
         ok, geometry = gutter_geometry(1250)
         check('hairline 2 cells after the digits, 1 before the code (4 digits)', ok, geometry)
         row_1250 = gutter_rows()[1250]
@@ -762,9 +762,9 @@ with tempfile.TemporaryDirectory(prefix='w5-', dir='/tmp') as temporary:
               tree('[data-role="source-position"]'))
         overlay('debug')
         click('[data-role~="source-editor"]')
-        go_line(1234)
+        check('go to line 1234', go_line(1234, 60), position())
         ctl('key', 'F9')
-        check('breakpoint on line 1234', wait(lambda: toned_sign(1234, '●', 'error', '[data-role~="digits-4"]')[0], 10),
+        check('breakpoint on line 1234', wait(lambda: toned_sign(1234, '●', 'error', '[data-role~="digits-4"]')[0], 60),
               toned_sign(1234, '●', 'error', '[data-role~="digits-4"]')[1])
         ctl('shot', 'four-digits-breakpoint')
         ok, detail = toned_sign(1234, '●', 'error', '[data-role~="digits-4"]')

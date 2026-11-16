@@ -1,8 +1,13 @@
 ELIDE_SOURCE ?= ../elide
 # Lua 5.4 from mise (`.mise.toml`) when the shell has not activated it.
 LUA ?= $(or $(shell command -v lua 2>/dev/null),mise exec -- lua)
+ELIDE_REVISION := $(strip $(shell cat .elide-revision 2>/dev/null))
+# The broker's Cargo path dependencies name ../elide; the helpers must come from the same checkout.
+ifneq ($(realpath $(ELIDE_SOURCE)),$(realpath ../elide))
+$(error ELIDE_SOURCE ($(ELIDE_SOURCE)) is not ../elide, the checkout crates/broker/Cargo.toml builds against; link it there instead)
+endif
 
-.PHONY: build broker test test-unit fmt check types smoke link repl test-surface android test-android test-android-unit
+.PHONY: build broker test test-unit test-plain fmt check check-elide types smoke link repl test-surface android test-android test-android-unit
 build: android broker
 broker:
 	cargo build --release -p elide-tern-broker
@@ -30,20 +35,24 @@ previewing:
 test-compose: previewing
 	python3 -u tests/compose.py --runtime "$(RUNTIME)" --project "$(COMPOSE_PROJECT)" --file "$(COMPOSE_FILE)"
 test: test-unit
-test-unit: broker
+test-plain:
 	$(LUA) tests/links.lua
 	$(LUA) tests/source.lua
 	$(LUA) tests/diagnostics.lua
 	$(LUA) tests/shell.lua
 	$(LUA) tests/broker.lua
 	$(MAKE) test-android-unit
+	python3 tests/install.py
+test-unit: broker test-plain
 	cargo test --workspace
 	python3 tests/broker.py
-	python3 tests/install.py
 fmt:
 	cargo fmt -p elide-tern-broker
 	stylua plugin/host.luau plugin/window.luau plugin/lib
-check:
+check-elide:
+	@git -C "$(ELIDE_SOURCE)" merge-base --is-ancestor "$(ELIDE_REVISION)" HEAD 2>/dev/null || { \
+	  echo "../elide does not contain the pinned runtime revision $(ELIDE_REVISION) (.elide-revision); fetch and check out elide-dev/runtime at or after it" >&2; exit 1; }
+check: check-elide
 	cargo fmt -p elide-tern-broker --check
 	cargo clippy -p elide-tern-broker --all-targets -- -D warnings
 	stylua --check plugin/host.luau plugin/window.luau plugin/lib

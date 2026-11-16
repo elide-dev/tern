@@ -1,6 +1,6 @@
 """Browse `elide help` as a native Tern page: landing page, nav, search, back, themes.
 
-Runs the dev host `dist/elide-tern-help` (`make help ELIDE_SOURCE=<elide>`) in a
+Runs the dev host `dist/elide-tern-help` (`make help`) in a
 headless Tern, and checks that `elide help --format markdown` into a file never
 carries Tern protocol bytes.
 """
@@ -21,7 +21,7 @@ out = root / '.dev/scratch/help-test'
 out.mkdir(parents=True, exist_ok=True)
 runtime = str(Path(args.runtime).resolve())
 host = root / 'dist/elide-tern-help'
-assert host.exists(), f'{host} is missing: run make help ELIDE_SOURCE=<elide checkout>'
+assert host.exists(), f'{host} is missing: run make help'
 tern = shutil.which('tern')
 
 # Redirected output is Markdown and nothing else: no Tern probe, no surface bytes.

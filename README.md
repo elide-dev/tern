@@ -27,7 +27,9 @@ Native SDK execution
 supports macOS arm64 and Linux amd64, subject to the selected SDK's deployment requirements.
 The configured runtime must support `elide tern`; `make link` builds the helpers and links the plugin. The broker links
 the runtime crates `elide-embed-host` and `elide-project-session` from a sibling `../elide`
-checkout of `elide-dev/runtime`, so building needs access to that repository.
+checkout of `elide-dev/runtime`, so building needs access to that repository. `.elide-revision`
+names the oldest runtime revision the plugin builds against; `make check` verifies that `../elide`
+contains it.
 
 Compose previews are hosted by the runtime (`elide tern compose`). To try an unreleased
 runtime, `make previewing` builds its development host from `../elide` into
@@ -94,8 +96,9 @@ Kotlin supports module declarations, not bare expressions or automatic `main`
 execution. TypeScript and Wasm still need execution adapters.
 
 `make repl` builds the shared frontend from the sibling `../elide` checkout through
-its Makefile. Override `ELIDE_SOURCE` for another checkout of the shims; the broker always builds against
-`../elide` (its path dependencies in `crates/broker/Cargo.toml`). `make test-surface` opens
+its Makefile. To use another runtime checkout, link it at `../elide`: the broker builds
+against that directory (its path dependencies in `crates/broker/Cargo.toml`), so `make` refuses
+an `ELIDE_SOURCE` that is elsewhere. `make test-surface` opens
 an isolated headless Tern renderer and tests real kernels, icons, pointer/keyboard
 switching, preserved drafts/bindings and teardown. Captures go in `.dev/scratch/`.
 The launcher currently supports local hosts; remote hosts require their own native

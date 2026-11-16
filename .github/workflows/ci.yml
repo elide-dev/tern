@@ -1,0 +1,55 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      HAS_RUNTIME: ${{ secrets.ELIDE_RUNTIME_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: tern
+          persist-credentials: false
+      - uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d # v5.2.9
+        with:
+          working_directory: tern
+      - uses: step-security/setup-bun@f6f5dadeac34f70c7828f731569e8d6e8330b8fb # v2.1.3
+        with:
+          bun-version: 1.4.4
+      - name: Plugin checks
+        working-directory: tern
+        run: |
+          make test-plain
+          stylua --check plugin/host.luau plugin/window.luau plugin/lib
+      - name: Read the runtime pin
+        id: pin
+        if: env.HAS_RUNTIME == 'true'
+        run: echo "rev=$(cat tern/.elide-revision)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.HAS_RUNTIME == 'true'
+        with:
+          repository: elide-dev/runtime
+          ref: ${{ steps.pin.outputs.rev }}
+          token: ${{ secrets.ELIDE_RUNTIME_TOKEN }}
+          path: elide
+          submodules: false
+          persist-credentials: false
+      - name: Broker checks
+        if: env.HAS_RUNTIME == 'true'
+        working-directory: tern
+        run: |
+          brew install capnp
+          make check
+          make test-unit
+      - name: Runtime source unavailable
+        if: env.HAS_RUNTIME != 'true'
+        run: echo "::notice::ELIDE_RUNTIME_TOKEN is not set; the Rust and broker checks were skipped"
