@@ -64,6 +64,91 @@ exits after two minutes without clients. The native host closes sessions on exit
 crash. Runtime handles are not persisted; a new process starts new kernels.
 History is stored by the shared REPL in SQLite; drafts live in the frontend.
 
+## Compose preview block
+
+`plugin/lib/compose.luau` defines `elide.compose`, a host block rather than a window
+canvas: canvases reject image nodes. Explicit palette/menu/workspace actions pass a
+saved `.kt` path and project root. The block starts `dist/elide-tern-compose` through
+`tern.process.run`; `compose/main.ts` resolves the enclosing workspace, selects the
+source's consuming APK, builds JVM/resource targets once, then retains a `ComposeBackend`.
+Its incremental compiler, worker pool, renderer and exact-input image cache are the same
+implementation used by VSCode. The model, classpath/version selection, runtime installer,
+backend and three Java helpers are bundled unchanged by `scripts/build-compose.ts`;
+VSCode APIs are not loaded. Source refreshes call `preview`/`verify`, not `elide build`.
+
+Each session has a unique `compose-jobs/<uuid>` directory. Atomic `status.json` reports
+progress; atomic `gallery.json` publishes a revision and bounded PNG metadata while the
+helper remains running. PNG basenames include the revision. The block loads new revisions
+as native `cx:blob` images and acknowledges them through `gallery-ack`; only acknowledged,
+superseded PNGs are removed. Errors retain the last gallery; successful empty galleries
+remove obsolete cards. Closing the session removes its job directory.
+
+`compose/changes.ts` watches workspace directories (including atomic saves, source creation
+and deletion) and the job's refresh/document inputs, ignoring generated `.dev` output.
+Changes debounce for 200 ms and serialize; edits during a compile queue another pass.
+Superseded work is not published. Supported source edits reuse the compiler; resource,
+unsupported-source and Pkl changes build and reconfigure the inputs. A build superseded by
+an edit warms its private compiler before publishing, rather than trusting stale seeded classes.
+
+The host publishes dirty Elide source buffers to `documents.json`. Native file editors belong
+to the window VM: the host writes `registration.json` and opens the validated
+`elide://compose-documents/<uuid>` route. The window reads dirty Kotlin/Java documents through
+`cx.docs:read` and publishes `native-documents.json`; helper launch waits for that first
+capture. Native buffers poll once per second (no native edit event/revision is exposed),
+Elide buffers debounce for 200 ms. Saved/closed buffers drop their overlays; neither path
+writes source files. Canonical workspace-root updates widen capture to sibling libraries.
+Malformed/oversized captures report errors instead of silently previewing disk contents.
+
+The block renews a lease every second. Cancel/close writes `cancel`; the helper checks
+it and the 15-second lease every 500 ms, aborts CLI work and disposes renderer JVMs.
+Both modes keep their compiler/renderer until cancellation. Reload restores no images and
+starts no build: it cancels a recorded job and waits for its post-cleanup `done` marker.
+A bounded restore wait permits another explicit attempt. `.dev/elide-tern-compose.lock`
+serializes model preparation, builds and compiler configuration, not entire sessions;
+other panes can render with their private inputs concurrently. A forced kill may leave
+detached Elide children, so abandoned locks are not automatically reclaimed. This lock
+coordinates these preview helpers, not builds started by other tools.
+
+The helper exports at most 32 cards / 32 MiB, at most 8 MiB per PNG and 4096 pixels
+per side. Upstream rendering materializes the gallery before these export limits.
+Individual render errors remain cards; build failures publish no images. As with
+the other project actions, previews execute trusted project code, not sandboxed code.
+Live mode uses `compose/live.ts` and the shared `KomodoBackend`, including its private
+compiler inputs and retirement rules. `compose/komodo.ts` resolves the managed Komodo
+distribution (or an explicit launcher), writes a temporary project manifest using the
+shared project model, and owns a bounded stdio LSP connection. The language server
+opens an authenticated protocol-2 `workspace-fir` preview session. Disposal closes
+scenes and the language server, then terminates its process group before removing the
+temporary manifest.
+`compose/clock.ts` adds an authenticated, single-client loopback bridge around that
+session. It requests a frame after 100 ms without a pushed frame, with one outstanding
+request per hosted card, and pauses requests during configuration/compilation. This keeps
+delayed coroutines and animation clocks advancing when layoutlib's dirty-frame heuristic
+goes idle at identical pixels. It forwards the shared protocol unchanged with stream
+backpressure and closes both sockets with the backend.
+
+Tern native image nodes expose zoom but no raw pointer coordinates or key releases.
+The native block therefore opens a browser pane through `elide://compose-live/<port>/<token>`
+and `cx.browser:call({op="open", how="beside"})`. `compose/server.ts` binds only
+127.0.0.1 on an ephemeral port, requires the random 256-bit URL token and exact Host,
+and checks the WebSocket Origin. The self-contained page has a restrictive CSP and no
+third-party content. This link carries no build or file commands.
+
+One browser connection controls the session. Frames are coalesced by card, bounded by
+the gallery limits, and paced at 20 Hz with transport backpressure. Input carries a
+scene epoch; refresh/reset rejects old events and releases held pointers and keys.
+Browser blur/visibility changes release input too. Pointer capture retains drags outside
+the image; displayed coordinates are scaled to PNG pixels. Android layoutlib accepts
+touch events, so wheel bursts become paced touch drags. Keyboard support is capability-gated.
+Disconnect releases input immediately and cancels the helper after a five-second reload
+grace period. The native pane lease remains authoritative even without a browser.
+
+Live refresh synchronizes saved compiler sources and dirty editor overlays with discovery
+and the daemon. Only edited Kotlin dependencies join the live program; untouched dependencies
+remain on the built classpath, avoiding a cold compile of unrelated project code.
+Resource/model changes recreate the live backend after building; ordinary edits keep it.
+Inspector and agent protocols are not exposed.
+
 ## Window integration points
 
 The window half also plugs into Tern's chrome, events and routes. None of these

@@ -28,6 +28,13 @@ Run `tern` in a directory containing `elide.pkl`, or any child directory, and ch
 native editor, a project terminal, and the Build/Test/Run/Debug toolbar. **Open REPL**
 also works without a project.
 
+Compose-enabled bundles also include `dist/elide-tern-compose` and its `.LICENSE`
+notice. Choose **Open Compose preview** on a saved Kotlin file, or **Preview** in
+the workspace toolbar. This additionally requires an Android-capable runtime,
+the project's Android SDK/dependencies and a JDK 17+; layoutlib downloads on first
+use. Bun and VSCode are not required. See [Compose previews](../README.md#compose-previews)
+for the supported snapshot subset and configuration.
+
 To remove the integration, run `tern plugin unlink elide`. Install a later preview into
 a separate directory and run its installer to switch versions; keep the old directory
 until its running sessions have closed.

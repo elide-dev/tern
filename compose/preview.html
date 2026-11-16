@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Live Compose preview</title>
+<style>
+:root { color-scheme: light dark; font: 14px system-ui, sans-serif; }
+body { margin: 0; padding: 16px; }
+header { position: sticky; top: 0; background: Canvas; padding: 8px 0; z-index: 1; }
+button { font: inherit; padding: 6px 12px; cursor: pointer; }
+#status { white-space: pre-wrap; overflow-wrap: anywhere; }
+#gallery { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16px; }
+article { border: 1px solid GrayText; border-radius: 8px; padding: 12px; max-width: 100%; }
+h2 { font-size: 15px; margin: 0 0 6px; }
+.detail, .hint { color: GrayText; font-size: 12px; }
+img { display: block; max-width: 100%; height: auto; touch-action: none; user-select: none; }
+img:focus { outline: 2px solid Highlight; outline-offset: 2px; }
+.error { white-space: pre-wrap; max-width: 600px; }
+</style>
+</head>
+<body>
+<header>
+<button id="refresh" disabled>Refresh</button>
+<button id="stop">Stop</button>
+<p id="status" role="status">Connecting…</p>
+<p class="hint">Click a preview to focus it. Drag, scroll and type to interact. Escape releases input. Editor and saved-source changes refresh automatically; saved resources and project configuration rebuild the preview inputs.</p>
+</header>
+<main id="gallery"></main>
+<script src="./client.js"></script>
+</body>
+</html>
