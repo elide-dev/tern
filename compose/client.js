@@ -1,30 +1,52 @@
 "use strict";
+// Tern passes its pinned appearance (#light or #dark); otherwise the page follows the system's.
+const scheme = location.hash.slice(1);
+if (scheme === "light" || scheme === "dark") document.documentElement.style.colorScheme = scheme;
 const status = document.querySelector("#status");
 const gallery = document.querySelector("#gallery");
 const refresh = document.querySelector("#refresh");
 const progress = document.querySelector("#progress");
 const activity = document.querySelector("#activity");
+const latest = document.querySelector("#latest");
+const summary = document.querySelector("#summary");
 const diagnostics = document.querySelector("#diagnostics");
 const detail = document.querySelector("#detail");
+const actions = document.querySelectorAll("#stop, #source, #close");
 const phases = {
   starting: "Starting previews…",
   resolving: "Loading project…",
-  waiting: "Waiting for workspace build…",
   runtime: "Preparing renderer…",
   building: "Building preview inputs…",
   refreshing: "Updating previews…",
   rendering: "Rendering previews…",
   cancelling: "Stopping previews…",
+  closing: "Closing preview…",
 };
+// Busy phases show their label over a bar and the renderer's latest line; a running session only
+// its summary in the bar; a failure its first line, with the rest (compiler output) behind a disclosure.
 function showStatus(phase, message) {
   const label = phases[phase];
-  status.textContent = label || message;
-  progress.hidden = !label;
+  const text = (message || "").trimEnd();
+  if (phase === "live") summary.textContent = text;
+  activity.hidden = phase === "live";
+  activity.classList.toggle("failed", phase === "error");
   activity.setAttribute("aria-busy", String(!!label));
-  detail.textContent = label ? message : "";
+  progress.hidden = !label;
+  const [first, ...rest] = text.split("\n");
+  status.textContent = label || first;
+  latest.textContent = label ? text.split("\n").pop() : "";
+  latest.hidden = !latest.textContent;
+  detail.textContent = label ? "" : rest.join("\n").trim();
   diagnostics.hidden = !detail.textContent;
+  diagnostics.open = !diagnostics.hidden;
 }
 const cards = new Map();
+// The gallery's card order, the cards its session hosts and those that take keys. No card is
+// interactive between an `invalidate` and the next `gallery`.
+let order = [];
+let hosted = new Set();
+let keyed = new Set();
+let interactive = false;
 let epoch = 0;
 let focused;
 let socket;
@@ -47,6 +69,13 @@ function reset() {
   for (const card of cards.values()) release(card);
   document.activeElement?.blur();
 }
+function update(card) {
+  const live = interactive && hosted.has(card.id) && card.frame && !card.failed;
+  if (card.live && !live) release(card);
+  card.live = live;
+  card.keyboard = live && keyed.has(card.id);
+  card.detail.textContent = card.text + (card.keyboard ? " · Type to interact" : "");
+}
 function position(card, event) {
   const box = card.image.getBoundingClientRect();
   card.x = Math.max(0, Math.min(card.width - 1, (event.clientX - box.left) * card.width / box.width));
@@ -60,12 +89,13 @@ function makeCard(id) {
   detail.className = "detail";
   const image = document.createElement("img");
   image.draggable = false;
+  image.decoding = "sync";
   image.tabIndex = 0;
   const error = document.createElement("p");
   error.className = "error";
   element.append(name, detail, image, error);
   gallery.append(element);
-  const card = { id, element, name, detail, image, error, live: false, keyboard: false, x: 0, y: 0 };
+  const card = { id, element, name, detail, image, error, text: "", frame: false, failed: false, live: false, keyboard: false, x: 0, y: 0 };
   image.addEventListener("pointerdown", event => {
     if (!card.live || event.button !== 0 || card.pointer !== undefined) return;
     event.preventDefault();
@@ -76,8 +106,9 @@ function makeCard(id) {
     image.setPointerCapture(event.pointerId);
     send({ type: "pointer", id, action: "down", ...position(card, event) });
   });
+  // Moves reach the preview only while this card holds the pointer: a drag, not a hover.
   image.addEventListener("pointermove", event => {
-    if (!card.live || (card.pointer !== undefined && card.pointer !== event.pointerId)) return;
+    if (!card.live || card.pointer !== event.pointerId) return;
     send({ type: "pointer", id, action: "move", ...position(card, event) });
   });
   image.addEventListener("pointerup", event => {
@@ -112,32 +143,48 @@ function connect() {
     const data = JSON.parse(event.data);
     if (data.type === "reset") {
       reset(); epoch = data.epoch;
-      for (const card of cards.values()) card.live = false;
-    } else if (data.type === "status") {
+    } else if (data.type === "invalidate") {
+      reset(); epoch = data.epoch; interactive = false;
+      for (const card of cards.values()) update(card);
+    } else if (data.type === "file") {
+      document.querySelector("#name").textContent = data.name;
+      document.querySelector("#name").title = data.path;
+      document.querySelector("#path").textContent = data.path;
+      document.title = "Compose · " + data.name;
+    } else if (data.type === "status" && !stopped) {
+      // Once the page asked to stop or leave, the renderer's own status no longer applies.
       showStatus(data.phase, data.message);
       refresh.disabled = data.phase !== "live" && data.phase !== "error";
     } else if (data.type === "gallery") {
-      reset(); epoch = data.epoch;
-      const keep = new Set(data.ids);
-      for (const [id, card] of cards) if (!keep.has(id)) { card.element.remove(); cards.delete(id); }
+      epoch = data.epoch; interactive = true;
+      order = data.ids; hosted = new Set(data.live); keyed = new Set(data.keyboard);
+      const keep = new Set(order);
+      for (const [id, card] of cards) if (!keep.has(id)) { release(card); card.element.remove(); cards.delete(id); }
+      for (const card of cards.values()) update(card);
     } else if (data.type === "image" && data.epoch === epoch) {
       const value = data.image;
-      const card = cards.get(value.id) || makeCard(value.id);
+      let card = cards.get(value.id);
+      if (!card) {
+        card = makeCard(value.id);
+        for (const id of order) if (cards.has(id)) gallery.append(cards.get(id).element);
+      }
       card.name.textContent = value.name;
-      card.detail.textContent = value.detail + (value.keyboard ? " · Type to interact" : "");
+      card.text = value.detail;
       card.error.textContent = value.error || "";
-      card.live = !!value.live && !value.error;
-      card.keyboard = value.keyboard;
-      if (!card.live) release(card);
+      card.frame = !!value.data;
+      card.failed = !!value.error;
       card.width = value.width; card.height = value.height;
-      card.image.hidden = !value.data || !!value.error;
+      // A failing card keeps its last good pixels beside its error.
+      card.image.hidden = !value.data;
       if (value.data) { card.image.src = "data:image/png;base64," + value.data; card.image.alt = value.name; card.image.width = value.width; card.image.height = value.height; }
+      update(card);
     }
   };
   socket.onclose = () => {
-    reset(); refresh.disabled = true;
-    for (const card of cards.values()) card.live = false;
-    showStatus("stopped", stopped ? "Preview stopped." : "Disconnected. Reopen Live preview from the Compose pane.");
+    reset(); refresh.disabled = true; interactive = false;
+    for (const button of actions) button.disabled = true;
+    for (const card of cards.values()) update(card);
+    showStatus("stopped", stopped ? "Preview stopped." : "Disconnected from the renderer.");
   };
 }
 refresh.onclick = () => {
@@ -150,6 +197,18 @@ document.querySelector("#stop").onclick = () => {
   showStatus("cancelling", "");
   send({ type: "stop" });
 };
+// The Compose pane carries these out: it opens the file or closes itself.
+function request(action, phase) {
+  reset();
+  if (phase) {
+    stopped = true; refresh.disabled = true;
+    for (const button of actions) button.disabled = true;
+    showStatus(phase, "");
+  }
+  send({ type: "request", action });
+}
+document.querySelector("#source").onclick = () => request("source");
+document.querySelector("#close").onclick = () => request("close", "closing");
 window.addEventListener("blur", reset);
 document.addEventListener("visibilitychange", () => { if (document.hidden) reset(); });
 window.addEventListener("pagehide", () => { reset(); socket?.close(); });
