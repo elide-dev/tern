@@ -1,7 +1,9 @@
 """Exercise the native Build surface in real Tern: javac and kotlinc diagnostics as cards,
-counts, source links, the bounded report, layout stability, the full page and the inline block."""
+counts, source links, the bounded report, layout stability, the task timeline and skip
+reasons, the full page and the inline block."""
 import argparse
 import json
+import re
 import shlex
 import shutil
 import subprocess
@@ -104,6 +106,8 @@ with tempfile.TemporaryDirectory(prefix='build-') as temporary:
             run('--surface=screen', '--no-cache')
             wait(lambda: status('Failed'))
             assert_cards()
+            assert nodes('[data-role="build-task-table"]'), tree()
+            assert 'failed' in tree('[data-role="build-task-summary"]'), tree('[data-role="build-tasks"]')
             wait(lambda: reports() and 'diagnostics.json' in tree('[data-role="build-summary"]'))
             report = reports()[-1]
             data = json.loads(report.read_text())
@@ -157,6 +161,7 @@ with tempfile.TemporaryDirectory(prefix='build-') as temporary:
             assert not nodes('.sf-dock'), 'inline has no dock'
             assert not nodes('[data-role="build-rerun"]'), 'inline has no rebuild'
             assert_cards()
+            assert nodes('[data-role="build-tasks"]'), 'the task section left scrollback'
             ctl('appearance', 'light')
             ctl('shot', 'build-inline-light')
             ctl('appearance', 'dark')
@@ -170,6 +175,16 @@ with tempfile.TemporaryDirectory(prefix='build-') as temporary:
             assert 'No problems' in tree('[data-role="build-empty"]'), tree()
             ctl('key', 'q')
             wait(lambda: not host_running())
+            # Again with the cache: the tasks that did not need to run say why, in the engine's words.
+            run('--surface=screen')
+            wait(lambda: status('Succeeded'))
+            summary = tree('[data-role="build-task-summary"]')
+            assert re.search(r'[1-9]\d* skipped', summary), summary
+            assert nodes('[data-role="build-skips"]'), tree('[data-role="build-tasks"]')
+            assert 'Skipped' in tree('[data-role="build-stats"]')
+            ctl('shot', 'build-incremental-light')
+            ctl('key', 'q')
+            wait(lambda: not host_running())
             # A runtime that advertises --surface accepts it on a plain run outside Tern.
             usage = subprocess.run([runtime, 'build', '--help'], capture_output=True, text=True, timeout=120).stdout
             if '--surface' in usage:
@@ -178,8 +193,8 @@ with tempfile.TemporaryDirectory(prefix='build-') as temporary:
                 flag = 'plain run accepts --surface'
             else:
                 flag = 'runtime predates --surface; plain-run check skipped'
-            print(f'PASS: javac and kotlinc cards, counts, elide://source links, report, stable layout, page, inline block, empty state ({flag})')
-            print('Shots:', *(str(out / 'serve' / f'{name}.png') for name in ['build-screen-light', 'build-screen-dark', 'build-inline-light', 'build-inline-dark']))
+            print(f'PASS: javac and kotlinc cards, counts, elide://source links, report, stable layout, page, inline block, empty state, task timeline, skip reasons ({flag})')
+            print('Shots:', *(str(out / 'serve' / f'{name}.png') for name in ['build-screen-light', 'build-screen-dark', 'build-inline-light', 'build-inline-dark', 'build-incremental-light']))
         finally:
             server.terminate()
             try: server.wait(timeout=10)
