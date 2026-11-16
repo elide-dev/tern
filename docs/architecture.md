@@ -324,8 +324,10 @@ disk no probe starts; palette commands then say what is missing.
   warning and note counts) holding `tern.ui.diagnostic` cards (excerpt, notes and
   suggestions) and an `Open File:line` link to `elide://source?path&line&col`; 200 cards
   at most, then "… N more". With no diagnostic it shows raw output. Under a runtime with the
-  native Build surface, `elide build` in Tern draws that surface instead, and the lens only
-  sees plain output (older runtimes, `elide javac`, `elide kotlinc`). `tap` shows
+  native Build surface, `elide build` in Tern draws that surface instead (`elide build
+  --inspect` its task list: projects, then tasks folding their options, each with a play
+  button that opens `elide://build` inline or builds in place on the full page), and the
+  lens only sees plain output (older runtimes, `elide javac`, `elide kotlinc`). `tap` shows
   `tern.ui.test_summary` and a table of top-level `ok` / `not ok` lines (5,000 rows at most)
   with each failure's YAML `message`.
 
@@ -341,6 +343,7 @@ contract Elide emits against:
 | `elide://debug?root=<abs>&path=<abs>[&line=<n>]` | Launches the project debugger for `root` with `path` as its source. |
 | `elide://tests?root=<abs>` | Opens the project's test runs for `root`. |
 | `elide://help?topic=<slug>` | Runs `<runtime> --ignore-version help elide://help?topic=<slug>` in a new pane beside the link's pane (a new tab when the link came from no pane); `elide help` resolves the URL to its topic. |
+| `elide://build?root=<abs>&target=<task>` | Runs `<runtime> --ignore-version build [--surface=screen] <task>` for `root` in a new pane beside the link's pane (a new tab when the link came from no pane): the task's Build page, or its plain output on a runtime without one. The task rows of `elide build --inspect` link here. |
 
 Rules, implemented by the pure parser `plugin/lib/links.luau` (unit-tested by
 `lua tests/links.lua`) and checked by the window route:
@@ -356,8 +359,8 @@ Rules, implemented by the pure parser `plugin/lib/links.luau` (unit-tested by
 - `path` must lie strictly inside `root`. A `root` must contain `elide.pkl`, and it is
   trusted only when this window detected that project itself (`links.known`): a link's
   text can be anything, such as an OSC 8 hyperlink in `cat`'s output. For any other root,
-  `debug`, `tests` and a `source` link that would attach the source block show a picker
-  naming the root, and act only when the user chooses to open it. Without `root`
+  `debug`, `tests`, `build` and a `source` link that would attach the source block show a
+  picker naming the root, and act only when the user chooses to open it. Without `root`
   (`source` only), `path` must lie inside a project this window already detected. The
   linked file must exist. Links act on local hosts only.
 - A rejected `elide://` URL is claimed and dropped with an info toast, so it never
@@ -368,6 +371,8 @@ Rules, implemented by the pure parser `plugin/lib/links.luau` (unit-tested by
   the URL as received, and the runtime is the one `config.runtime` names. Elide's native
   help surface puts these links on its internal `href`s, so its own navigation arrives
   here rather than at the program.
+- `build`'s `target` is at most 256 bytes after percent-decoding, holds no whitespace and
+  does not start with `-`, so it reaches the command line as one task, never an option.
 - Limits of this version: `col` is validated but not applied (`cx.docs:open` takes a
   line only), `debug`'s `line` is validated but not applied (the debug launcher takes
   no breakpoint), and confinement is lexical: `tern.fs` cannot resolve symlinks, so a

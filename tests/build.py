@@ -3,6 +3,7 @@ counts, source links, the bounded report, layout stability, the task timeline an
 reasons, the full page and the inline block."""
 import argparse
 import json
+import os
 import re
 import shlex
 import shutil
@@ -185,6 +186,62 @@ with tempfile.TemporaryDirectory(prefix='build-') as temporary:
             ctl('shot', 'build-incremental-light')
             ctl('key', 'q')
             wait(lambda: not host_running())
+            # The task list: its names as the engine prints them, then the page and the inline block.
+            listing = subprocess.run([runtime, 'build', '--inspect'], cwd=project, capture_output=True, text=True, timeout=120,
+                                     env={**os.environ, 'NO_COLOR': '1', 'LANG': 'en_US.UTF-8'}).stdout
+            names, optioned, listed = [], None, False
+            for line in listing.splitlines():
+                if re.match(r'^\d+ tasks? available:$', line):
+                    listed = True
+                elif listed and line and not line.startswith(' '):
+                    break
+                elif listed and (found := re.match(r'^  (\S+)', line)):
+                    names.append(found.group(1))
+                elif listed and line.startswith('    -') and optioned is None:
+                    optioned = len(names) - 1
+            assert names, listing
+            run('--inspect', '--surface=screen')
+            wait(lambda: nodes('[data-role="inspect-task"]'))
+            assert 'Build tasks' in tree('[data-role="inspect-heading"]'), tree()
+            listed_names = tree('[data-role="inspect-task-name"]')
+            assert all(name in listed_names for name in names), (names, listed_names)
+            assert len(nodes('[data-role="inspect-run"]')) == len(names), tree('[data-role="inspect-project"] *')
+            assert 'elide://build' not in tree('[data-role="inspect-project"] *'), 'the page runs tasks in place, it links none'
+            assert 'quit' in tree('[data-role="inspect-keys"]')
+            assert not nodes('[data-role="inspect-option-table"]'), 'options start folded'
+            ctl('appearance', 'light')
+            ctl('shot', 'inspect-screen-light')
+            ctl('appearance', 'dark')
+            ctl('shot', 'inspect-screen-dark')
+            ctl('appearance', 'light')
+            # A task's head opens its options.
+            assert optioned is not None, listing
+            ctl('click', f'[data-role="inspect-task"]:nth-of-type({optioned + 1}) [data-role="inspect-task-name"]')
+            wait(lambda: nodes('[data-role="inspect-option-table"]'))
+            ctl('shot', 'inspect-screen-open-light')
+            # Run builds the first task on the Build page; q goes back to the list, q again quits.
+            ctl('click', '[data-role="inspect-run"]')
+            # Tasks shows once the build ended; an older inline block in scrollback may also say Failed.
+            wait(lambda: nodes('[data-role="build-back"]') and (status('Succeeded') or status('Failed')))
+            assert names[0] in tree('[data-role="build-project"]'), tree('[data-role="build-heading"]')
+            ctl('key', 'q')
+            wait(lambda: nodes('[data-role="inspect-task"]') and not nodes('[data-role="build-back"]'))
+            ctl('key', 'q')
+            wait(lambda: not host_running())
+            # Inline, the list stays in scrollback; each task's play button links its Build page
+            # (the click itself is exercised through the plugin's route in tests/integration.py).
+            run('--inspect')
+            wait(lambda: nodes('[data-role="inspect-task"]'))
+            wait(lambda: not host_running())
+            buttons = nodes('[data-role="inspect-run"]')
+            assert [button.get('title') for button in buttons] == ['Build ' + name for name in names], buttons
+            assert nodes('.sf-main'), 'the inline list left scrollback'
+            assert not nodes('.sf-dock'), 'inline has no dock'
+            ctl('appearance', 'light')
+            ctl('shot', 'inspect-inline-light')
+            ctl('appearance', 'dark')
+            ctl('shot', 'inspect-inline-dark')
+            ctl('appearance', 'light')
             # A runtime that advertises --surface accepts it on a plain run outside Tern.
             usage = subprocess.run([runtime, 'build', '--help'], capture_output=True, text=True, timeout=120).stdout
             if '--surface' in usage:
@@ -193,8 +250,8 @@ with tempfile.TemporaryDirectory(prefix='build-') as temporary:
                 flag = 'plain run accepts --surface'
             else:
                 flag = 'runtime predates --surface; plain-run check skipped'
-            print(f'PASS: javac and kotlinc cards, counts, elide://source links, report, stable layout, page, inline block, empty state, task timeline, skip reasons ({flag})')
-            print('Shots:', *(str(out / 'serve' / f'{name}.png') for name in ['build-screen-light', 'build-screen-dark', 'build-inline-light', 'build-inline-dark', 'build-incremental-light']))
+            print(f'PASS: javac and kotlinc cards, counts, elide://source links, report, stable layout, page, inline block, empty state, task timeline, skip reasons, folded task list page with play in place and inline with elide://build links ({flag})')
+            print('Shots:', *(str(out / 'serve' / f'{name}.png') for name in ['build-screen-light', 'build-screen-dark', 'build-inline-light', 'build-inline-dark', 'build-incremental-light', 'inspect-screen-light', 'inspect-screen-dark', 'inspect-screen-open-light', 'inspect-inline-light', 'inspect-inline-dark']))
         finally:
             server.terminate()
             try: server.wait(timeout=10)

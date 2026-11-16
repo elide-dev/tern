@@ -1701,6 +1701,11 @@ tern.route.link(function(request, cx)
     with_root(cx, target.root, function(current)
       view_tests({ root = target.root }, current)
     end)
+  elseif target.action == "build" then
+    -- A task row of `elide build --inspect`: that task's Build page, right of the link's pane.
+    with_root(cx, target.root, function(current)
+      runtime_action(current, { root = target.root }, "build", request.pane, nil, { args = { target.target } })
+    end)
   end
   return { handled = true }
 end)

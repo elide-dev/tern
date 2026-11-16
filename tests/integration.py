@@ -1,6 +1,6 @@
 """Window integration points in an isolated desktop window: the build and tap lenses, elide:// links,
 project chrome and command_finished. Usage: python3 tests/integration.py --runtime /path/to/elide"""
-import argparse, json, os, shlex, shutil, subprocess, sys, tempfile, time, uuid
+import argparse, json, os, re, shlex, shutil, subprocess, sys, tempfile, time, uuid
 from pathlib import Path
 from tern_config import config_dir, daemon_command
 
@@ -222,6 +222,46 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
             return next((line for line in listing.splitlines()
                          if line.startswith(runtime + ' --ignore-version help elide://help?topic=getting-started')), None)
         check('help pane runs elide help', pane and wait(help_process, 30), pane)
+        # elide://build opens the task's Build page beside the link's pane; an option as target is refused.
+        listing = subprocess.run([runtime, 'build', '--inspect'], cwd=build, capture_output=True, text=True, timeout=120,
+                                 env={**os.environ, 'NO_COLOR': '1', 'LANG': 'en_US.UTF-8'}).stdout
+        names, listed = [], False
+        for line in listing.splitlines():
+            if re.match(r'^\d+ tasks? available:$', line):
+                listed = True
+            elif listed and line and not line.startswith(' '):
+                break
+            elif listed and (found := re.match(r'^  (\S+)', line)):
+                names.append(found.group(1))
+        check('build fixture lists tasks', names, listing)
+        check('option as build target rejected', toast_after('elide://build?root=' + str(build) + '&target=-x', 'malformed'), tree('.toast'))
+        if names:
+            ctl('open-url', 'elide://build?root=' + str(build) + '&target=' + names[0])
+            # A root this window has not detected asks first, as for tests and debug.
+            if wait(lambda: 'buildp' in tree('#pick'), 10):
+                ctl('key', 'Enter')
+            def build_process():
+                listing = subprocess.run(['ps', '-axo', 'args'], capture_output=True, text=True).stdout
+                return next((line for line in listing.splitlines()
+                             if line.startswith(runtime + ' --ignore-version build') and line.endswith(' ' + names[0])), None)
+            check("build link opens the task's page", wait(build_process, 30), names[0])
+            # The inline task list's play button: a click hands its elide://build link to the
+            # plugin's route, which opens the task's page. Needs the dev host (`make building`).
+            host = ROOT / 'dist/elide-tern-build'
+            if host.exists():
+                def build_processes():
+                    listing = subprocess.run(['ps', '-axo', 'args'], capture_output=True, text=True).stdout
+                    return sum(line.startswith(runtime + ' --ignore-version build') and line.endswith(' ' + names[0])
+                               for line in listing.splitlines())
+                before = build_processes()
+                command = shlex.join(['/bin/sh', '-c', shlex.join([str(host), runtime, '--inspect']) + '; sleep 600'])
+                lua('cx.layout:new_tab({ cwd = ' + json.dumps(str(build)) + ', command = ' + json.dumps('exec ' + command) + ' })')
+                listed = wait(lambda: ctl('tree', '[data-role="inspect-run"]').get('nodes'), 120)
+                check('inline task list shows play buttons', listed, tree('.sf-main'))
+                ctl('click', '[data-role="inspect-run"]')
+                if wait(lambda: 'buildp' in tree('#pick'), 10):
+                    ctl('key', 'Enter')
+                check('inline play button opens the task\'s page', wait(lambda: build_processes() > before, 30), before)
         ctl('shot', 'routes')
     finally:
         ctl('quit')
