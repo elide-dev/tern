@@ -1,10 +1,3 @@
-mod upstream {
-  include!("../../../third_party/studio-embed/src/main.rs");
-  pub fn entry() {
-    main();
-  }
-}
-
 fn main() {
   // SAFETY: establish our own process group before creating any threads or SDK children.
   if unsafe { libc::setpgid(0, 0) } != 0 {
@@ -27,5 +20,5 @@ fn main() {
       }
     }
   });
-  upstream::entry();
+  elide_embed_host::worker_main();
 }

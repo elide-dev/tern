@@ -3,6 +3,7 @@ mod debug;
 mod project;
 mod protocol;
 
+use elide_embed_host::{MAX_REQUEST, MAX_RESPONSE, Worker, read_frame, write_frame};
 use fs2::FileExt;
 use protocol::Request;
 use serde_json::{Value, json};
@@ -24,7 +25,6 @@ use std::{
   thread,
   time::{Duration, Instant},
 };
-use studio_embed::{MAX_REQUEST, MAX_RESPONSE, Worker, read_frame, write_frame};
 
 /// Coverage line entries shared across a file's pages (see `coverage::Inferred`).
 static INFERRED: std::sync::LazyLock<Mutex<coverage::Inferred>> =

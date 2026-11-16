@@ -1,6 +1,6 @@
+use elide_embed_host::embedding_capnp as wire;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use studio_embed::embedding_capnp as wire;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
@@ -207,10 +207,10 @@ pub fn decode(bytes: &[u8]) -> Result<Value, String> {
         let value = value?;
         json!({"value": value.get_value()?.to_str()?, "stdout": String::from_utf8_lossy(value.get_stdout()?),
         "stderr": String::from_utf8_lossy(value.get_stderr()?), "truncated": value.get_truncated(), "display": match value.get_display()? {
-          studio_embed::embedding_capnp::evaluation_result::Display::Legacy => "legacy",
-          studio_embed::embedding_capnp::evaluation_result::Display::None => "none",
-          studio_embed::embedding_capnp::evaluation_result::Display::Text => "text",
-          studio_embed::embedding_capnp::evaluation_result::Display::Json => "json",
+          wire::evaluation_result::Display::Legacy => "legacy",
+          wire::evaluation_result::Display::None => "none",
+          wire::evaluation_result::Display::Text => "text",
+          wire::evaluation_result::Display::Json => "json",
         }})
       }
       Which::Messages(messages) => {
