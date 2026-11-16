@@ -277,8 +277,14 @@ local DEBUG_WORDS = {
   exited = { "Exited", "muted" },
   failed = { "Failed", "error" },
 }
-local LANG_NAMES =
-  { javascript = "JavaScript", typescript = "TypeScript", python = "Python", kotlin = "Kotlin", java = "Java" }
+local LANG_NAMES = {
+  javascript = "JavaScript",
+  typescript = "TypeScript",
+  python = "Python",
+  kotlin = "Kotlin",
+  java = "Java",
+  pkl = "Pkl",
+}
 local FIELDS = { find = "dock.find.query", go = "dock.go.line" }
 
 math.randomseed(math.floor(tern.now() * 1000) % 2147483647)

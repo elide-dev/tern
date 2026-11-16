@@ -20,7 +20,9 @@ sh ./install.sh
 ```
 
 The installer checks the bundle, writes its local configuration if absent, and registers
-the plugin with Tern. It preserves an existing configuration. Keep the directory in place:
+the plugin with Tern. It preserves an existing configuration. It also links the plugin's
+Pkl grammar into Tern's Syntaxes folder (unless a `Pkl.sublime-syntax` of your own is
+already there); restart Tern once to get Pkl highlighting. Keep the directory in place:
 Tern links to it rather than copying the runtime and SDK into its plugin folder.
 
 Run `tern` in a directory containing `elide.pkl`, or any child directory, and choose

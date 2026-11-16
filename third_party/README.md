@@ -22,3 +22,10 @@ exposes them through `elide-tern-compose --licenses`, and writes
 Google's renderer/layoutlib artifacts are downloaded on first use, not embedded
 in the binary. The upstream installer pins versions and SHA-256 hashes, retains
 the original jars and their notices, and preserves licenses during extraction.
+
+## Elide mark
+
+`plugin/assets/elide-light.svg` and `elide-dark.svg` are `packages/vscode/media/elide.svg` from
+`../elide-vscode` (MIT, Elide Technologies, Inc.), with its comment dropped and `currentColor`
+replaced by a fixed ink per theme kind. `plugin/styles/icons.css` draws them in place of Tern
+icons on Elide-owned elements.

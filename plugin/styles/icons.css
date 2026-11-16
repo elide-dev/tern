@@ -1,0 +1,24 @@
+/* The monochrome Elide mark (`assets/elide-{light,dark}.svg`, elide-vscode's `media/elide.svg`) in place of Tern's
+   stock icon where the element is ours: `elide` program faces on tabs, pane rows and parked cards
+   (`tern.chrome.program_icon` gives them `bolt`), the project and Workspace status segments, the Files Project
+   button and the workspace toolbar. Tern's style sheets load plugin images only as backgrounds (an
+   image mask draws nothing) and `prefers-color-scheme` ignores the theme, so each theme kind
+   (`html[data-theme]`) gets a file filled with Tern's icon ink. Pickers and the
+   palette name no item in their markup, so their rows keep Tern icons. */
+[data-program][data-icon="bolt"] svg.ico,
+.sl-plugin[data-plugin="elide"]:is([title="plugin.elide.project"], [title="plugin.elide.workspace"]) svg.ico,
+.ft-plugin[data-plugin="elide"][data-id="project"] svg.ico,
+[data-role="project-mark"] {
+  background: url("assets/elide-light.svg") center / contain no-repeat;
+}
+html[data-theme="dark"] :is([data-program][data-icon="bolt"] svg.ico,
+  .sl-plugin[data-plugin="elide"]:is([title="plugin.elide.project"], [title="plugin.elide.workspace"]) svg.ico,
+  .ft-plugin[data-plugin="elide"][data-id="project"] svg.ico,
+  [data-role="project-mark"]) {
+  background-image: url("assets/elide-dark.svg");
+}
+[data-program][data-icon="bolt"] svg.ico > *,
+.sl-plugin[data-plugin="elide"]:is([title="plugin.elide.project"], [title="plugin.elide.workspace"]) svg.ico > *,
+.ft-plugin[data-plugin="elide"][data-id="project"] svg.ico > * {
+  display: none;
+}

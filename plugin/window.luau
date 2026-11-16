@@ -104,12 +104,25 @@ end
 
 require("./lib/agents").install(configuration, path, project)
 
-local function terminal(cx, argv, cwd, target)
+local function quote(value)
+  return "'" .. string.gsub(value, "'", "'\"'\"'") .. "'"
+end
+
+-- Keeps a failed program's pane open with its output readable: Tern's exit dialog would cover
+-- it. Enter closes the pane; a clean exit closes it at once, as usual.
+local HOLD = '"$@"; status=$?; [ "$status" -eq 0 ] && exit 0; '
+  .. 'printf "\\n\\033[2mExited with status %d. Press Enter to close.\\033[0m" "$status"; read -r _; exit 0'
+
+local function terminal(cx, argv, cwd, target, hold)
   local command = {}
   for _, value in argv do
-    table.insert(command, "'" .. string.gsub(value, "'", "'\"'\"'") .. "'")
+    table.insert(command, quote(value))
   end
-  local spec = { cwd = cwd, command = "exec " .. table.concat(command, " ") }
+  local line = table.concat(command, " ")
+  if hold then
+    line = "/bin/sh -c " .. quote(HOLD) .. " elide " .. line
+  end
+  local spec = { cwd = cwd, command = "exec " .. line }
   local pane
   if target then
     if not cx.session:pane(target) then
@@ -137,6 +150,17 @@ local function launch(cx, language, context, target, opened)
     cx:toast("error", "Set the embedded SDK directory in plugin/config.json.")
     return
   end
+  -- The broker accepts only a complete SDK, and the runtime reports a missing one without its path.
+  local sdk = path(config.sdk)
+  if not tern.fs.exists(sdk .. "/embedder.json") then
+    cx:toast("error", "No embedded SDK at the `sdk` path in plugin/config.json.", sdk)
+    return
+  end
+  local broker = path(config.broker or "../dist/elide-tern-broker")
+  if not tern.fs.exists(broker) then
+    cx:toast("error", "No broker at the `broker` path in plugin/config.json; run `make build`.", broker)
+    return
+  end
   context = context or project.current(cx)
   local state = config.state or (tern.plugin.data .. "/repl")
   if context then
@@ -144,12 +168,12 @@ local function launch(cx, language, context, target, opened)
       or (tern.plugin.data .. "/p/" .. context.session_key)
   end
   local argv = launcher(config, "repl")
-  table.insert(argv, path(config.broker or "../dist/elide-tern-broker"))
-  table.insert(argv, path(config.sdk))
+  table.insert(argv, broker)
+  table.insert(argv, sdk)
   table.insert(argv, state)
   table.insert(argv, language)
   return host(cx, config, "repl", argv, function(current, command)
-    return terminal(current, command, context and context.root, target)
+    return terminal(current, command, context and context.root, target, true)
   end, opened)
 end
 
@@ -658,16 +682,6 @@ workspace.install({
   serve = function(cx, context, target, opened)
     return launch_job(cx, "serve", context.root, context.root, target, opened)
   end,
-  -- Not remembered as the toolbar's result pane: each click opens the editor's current file.
-  source = function(cx, context, target)
-    local file = source_in(cx, target, context.root)
-    if not file then
-      cx:toast("info", "Open a project source file in the editor first.")
-    else
-      open_source(cx, file, context.root, nil, target)
-    end
-    return nil
-  end,
 })
 
 local function view_tests(context, cx)
@@ -745,7 +759,7 @@ local function project_menu(context, cx)
     { label = "Run tests", value = "test", icon = "play" },
     { label = "Open debugger", value = "debug", icon = "bug" },
     { label = "Open Elide source…", value = "source", icon = "file" },
-    { label = "Open Compose preview", value = "compose", icon = "file" },
+    { label = "Open Compose preview", value = "compose", icon = "eye" },
     { label = "Show device manager", value = "android", icon = "smartphone" },
     { label = "Open REPL", value = "repl", icon = "terminal" },
     { label = "Serve static files", value = "static", icon = "server" },
@@ -890,7 +904,7 @@ tern.command({
 tern.command({
   id = "compose",
   title = "Open Compose preview",
-  icon = "file",
+  icon = "eye",
   run = function(cx)
     if local_host(cx) then
       detect(cx, function(context, current)
