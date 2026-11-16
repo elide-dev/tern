@@ -14,6 +14,9 @@ test-android-unit:
 	bun test tests/android-elide.test.ts
 test-android: android
 	python3 tests/android.py --image "$(ANDROID_IMAGE)" $(if $(ANDROID_SDK),--sdk "$(ANDROID_SDK)")
+.PHONY: test-android-run
+test-android-run: android
+	python3 -u tests/android_run.py --runtime "$(RUNTIME)" --project "$(ANDROID_PROJECT)"
 .PHONY: previewing
 previewing:
 	$(MAKE) -C "$(ELIDE_SOURCE)" build-compose-preview
@@ -118,6 +121,16 @@ running:
 
 test-running:
 	python3 -u tests/run.py --runtime "$(RUNTIME)"
+
+.PHONY: installing test-installing
+installing:
+	$(MAKE) -C "$(ELIDE_SOURCE)" build-install-surface
+	mkdir -p dist
+	cp "$(ELIDE_SOURCE)/target/debug/examples/install_surface" dist/.elide-tern-install.new
+	mv dist/.elide-tern-install.new dist/elide-tern-install
+
+test-installing:
+	python3 -u tests/install_surface.py --runtime "$(RUNTIME)"
 
 .PHONY: help test-help
 help:

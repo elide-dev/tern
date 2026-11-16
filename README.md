@@ -235,7 +235,7 @@ scroll with a short swipe). The rotation buttons lock the orientation, turning a
 off on the device. Unauthorized or offline devices are listed without **Show**.
 
 When an emulator's pane closes, through its Close button or Tern's, Tern asks whether to
-stop the emulator too, unless it already stopped; **Keep it running** or Escape leaves it
+stop the emulator too, unless it already stopped; **Keep the emulator running** or Escape leaves it
 running. **Stop** terminates only the selected emulator; its pane then closes, as does a
 mirror whose device disconnects.
 Emulators started elsewhere (for example by Android Studio) expose no token-authenticated
@@ -377,7 +377,7 @@ navigation, editing, reruns and paged agent reads in an isolated desktop window.
 
 Inside a detected project, tabs take the project's name (names you give a tab win)
 and the status bar shows the project, **Workspace**, and how the pane's last
-`elide test`, `build` or `run` ended. Click the project segment for the project menu.
+`elide test`, `build`, `run` or `install` ended. Click the project segment for the project menu.
 A failing `elide test` typed in a terminal toasts "Tests failed". Choosing `elide.pkl`
 from the palette opens that project's workspace.
 
@@ -389,6 +389,14 @@ Both fall back to the raw output when nothing parses or the output is very large
 typed `elide build`, the status bar reads, for example, "Build failed · 3 errors, 1 warning",
 and the workspace's Build button opens the full Build page when the runtime has one.
 
+`elide install` in a Tern terminal draws Elide's Install surface on runtimes that have one: a
+row per ecosystem with its packages and how many came from the cache, a bar per download, and
+the resolved Maven graph as a tree. **Install dependencies**, in the project menu and the
+palette, opens the full Install page in a new tab. After a typed `elide install` the status bar
+reads, for example, "Installed · 12 packages, 3 downloaded". Run
+`make installing && make test-installing RUNTIME=/path/to/elide` for the Install page in an
+isolated window (it needs network access to Maven Central).
+
 The workspace's Run button opens the full Run page (`elide run --surface=screen`) at the bottom,
 beside the project terminal (beside the editor once that terminal is closed): status,
 the build's tasks and compile errors, the program's output (kept in
@@ -397,7 +405,8 @@ output and fold when the program writes its first line; the log takes the height
 left and scrolls inside it, so the page itself stays put. An Android run's output, the app's
 logcat, is drawn as records: time, thread, level, tag and the message in the level's colour,
 wrapped to the pane; a narrow pane puts the message under its tag. Runtimes without the
-page print plain `elide run` output instead. A typed `elide run` stays plain, keeping stdin.
+page print plain `elide run` output instead. A typed `elide run` in a project draws inline too,
+on a terminal of its own, so the program keeps stdin.
 In an Android project, Run first picks the device: the only attached one; with none, the
 project's AVD, started headless (created from the project when missing; the Run page opens
 as soon as the emulator holds the AVD, about a second, and Elide adopts it); with several, the project's AVD if it runs,
@@ -411,6 +420,13 @@ preview closes. A failed build shows no device pane. The project's AVD deploys w
 page show the device pane a few seconds after their output starts. Run
 `make running && make test-running RUNTIME=/path/to/elide` for the Run page in an isolated
 window.
+A typed `elide run` in an Android project gets its device pane too: every new shell names the
+plugin's helper in `ELIDE_ANDROID_EMULATOR_LAUNCHER`, so any Elide command there that boots an
+emulator starts it without a window; once the run's block names its device, that device's pane
+opens beside the terminal and takes focus. Shells opened before the plugin loaded keep Elide's
+own emulator window. Run `make test-android-run RUNTIME=/path/to/elide
+ANDROID_PROJECT=/path/to/android-project` for this in an isolated window (a Tern window, not
+`tern serve`, whose shells run no `spawn` hook and raise no `command_started`).
 
 `elide://source`, `elide://debug`, `elide://tests` and `elide://help` links open a source line (in the
 [source editor](#source-editor) for project sources), the debugger, project test runs or a help topic. Elide prints them; any program can, as OSC 8 hyperlinks.

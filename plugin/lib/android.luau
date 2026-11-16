@@ -424,11 +424,12 @@ local function offer_stop(cx, name)
     end
     current
       :pick({
-        placeholder = name .. " is still running",
+        -- An AVD is often named after its app: the prompt says it is the emulator.
+        placeholder = "Emulator " .. name .. " is still running",
         icon = "smartphone",
         items = {
-          { label = "Stop " .. name, value = "stop", icon = "stop" },
-          { label = "Keep it running", value = "keep", icon = "play" },
+          { label = "Stop emulator " .. name, value = "stop", icon = "stop" },
+          { label = "Keep the emulator running", value = "keep", icon = "play" },
         },
       })
       :next(function(item, err, fresh)
@@ -811,6 +812,86 @@ function M.followed(cx, pane)
   watch(cx)
 end
 
+-- Typed `elide run` lines whose Run block may name its device: pane -> { live, ended }.
+local typed = {}
+local DEVICE_NODE = "main.head.end.device"
+
+-- The serial the Run block in `pane` names (the device node's title), or nil.
+local function named_device(cx, pane)
+  local tree = cx.session:surface(pane, { root = DEVICE_NODE, depth = 0 })
+  local node = type(tree) == "table" and (tree.k and tree or tree.main) or nil
+  local serial = type(node) == "table" and type(node.p) == "table" and node.p.title
+  return type(serial) == "string" and serial ~= "" and serial or nil
+end
+
+-- Shows `serial` once its emulator advertises a display: an emulator with a window of its own,
+-- or a phone, gets no pane. The advertisement can trail adb by a moment, hence `tries`.
+local function show_named(cx, pane, serial, tries)
+  request(cx, {}, "list", {}, function(current, value)
+    for _, avd in value.avds or {} do
+      if avd.serial == serial then
+        if avd.embeddable then
+          show(current, { name = avd.name, serial = serial }, nil, nil, pane, true)
+        elseif tries > 1 then
+          tern.timer(1000, function(fresh)
+            if fresh then
+              show_named(fresh, pane, serial, tries - 1)
+            end
+          end)
+        end
+        return
+      end
+    end
+  end, function() end)
+end
+
+local function attend(cx, pane, state)
+  if typed[pane] ~= state then
+    return
+  end
+  if not cx.session:pane(pane) then
+    typed[pane] = nil
+    return
+  end
+  -- A block an earlier run left in scrollback shows its summary; the bar is this run's.
+  state.live = state.live or shown(cx, pane, "main.activity.progress") or shown(cx, pane, "main.activity.program")
+  local serial = state.live and named_device(cx, pane)
+  if serial then
+    typed[pane] = nil
+    show_named(cx, pane, serial, 5)
+    return
+  end
+  if state.ended then
+    typed[pane] = nil
+    return
+  end
+  tern.timer(500, function(current)
+    if current then
+      attend(current, pane, state)
+    end
+  end)
+end
+
+-- A typed `elide run` started in `pane`: once its Run block names a device, that device's pane opens.
+function M.typed_run(cx, pane)
+  if cx.hosts:current().kind ~= "local" then
+    return
+  end
+  local state = {}
+  typed[pane] = state
+  tern.timer(500, function(current)
+    if current then
+      attend(current, pane, state)
+    end
+  end)
+end
+
+function M.typed_run_ended(pane)
+  if typed[pane] then
+    typed[pane].ended = true
+  end
+end
+
 function M.open(cx, context, target)
   if not local_host(cx) then
     return nil
@@ -961,6 +1042,7 @@ function M.install(config, path, runtime)
     M.followed(cx, event.pane)
   end)
   tern.on("pane_closed", function(event, cx)
+    typed[event.pane] = nil
     if entries[event.pane] then
       entries[event.pane].closed = true
       entries[event.pane] = nil

@@ -331,6 +331,24 @@ tern.on("pane_exited", function(ev)
   end
 end)
 
+-- New shells name this plugin's helper as Elide's emulator launcher (ELIDE_ANDROID_EMULATOR_LAUNCHER):
+-- an Elide command that boots an emulator there gets one without a window, which a device pane can show.
+tern.on("spawn", function(spec)
+  local ok, config = pcall(function()
+    return tern.json.decode(tern.fs.read(tern.plugin.dir .. "/config.json", 65536))
+  end)
+  local helper = ok and type(config) == "table" and type(config.android) == "string" and config.android
+    or "../dist/elide-tern-android"
+  if string.sub(helper, 1, 1) ~= "/" then
+    helper = tern.plugin.dir .. "/" .. helper
+  end
+  if not tern.fs.exists(helper) then
+    return nil
+  end
+  spec.env.ELIDE_ANDROID_EMULATOR_LAUNCHER = tern.json.encode({ helper, "start", "--held", "--name" })
+  return spec
+end)
+
 -- A command operation under docs/protocol.md's retry contract: one UUID per intent, and the same
 -- UUID and exact payload again only when no response arrived.
 local function command(state, body, done)

@@ -799,6 +799,7 @@ local function project_menu(context, cx)
   end
   local items = {
     { label = "Run tests", value = "test", icon = "play" },
+    { label = "Install dependencies", value = "install", icon = "download" },
     { label = "Open debugger", value = "debug", icon = "bug" },
     { label = "Open Elide source…", value = "source", icon = "file" },
     { label = "Open Compose preview", value = "compose", icon = "eye" },
@@ -822,6 +823,8 @@ local function project_menu(context, cx)
     elseif current and item then
       if item.value == "test" then
         launch_job(current, "test", context.root, context.root)
+      elseif item.value == "install" then
+        runtime_action(current, context, "install")
       elseif item.value == "debug" then
         launch_debug(current, context)
       elseif item.value == "source" then
@@ -916,6 +919,20 @@ tern.command({
   end,
 })
 tern.command({
+  id = "install",
+  title = "Install dependencies",
+  icon = "download",
+  run = function(cx)
+    detect(cx, function(context, current)
+      if context then
+        runtime_action(current, context, "install")
+      else
+        current:toast("info", "Open a local project directory first.")
+      end
+    end)
+  end,
+})
+tern.command({
   id = "debug",
   title = "Debug project source",
   icon = "bug",
@@ -968,7 +985,7 @@ if tern.chrome.program_icon then
   tern.chrome.program_icon("elide", "bolt")
 end
 
--- `elide test|build|run …` as a shell reported it: the subcommand and its subject words.
+-- `elide test|build|run|install …` as a shell reported it: the subcommand and its subject words.
 -- Leading `VAR=value` assignments are skipped; quoting is not interpreted.
 local function elide_command(line)
   local words = {}
@@ -994,21 +1011,23 @@ local function elide_command(line)
       end
     end
   end
-  if command ~= "test" and command ~= "build" and command ~= "run" then
+  if command ~= "test" and command ~= "build" and command ~= "run" and command ~= "install" then
     return nil
   end
   return command, if #subject > 0 then table.concat(subject, " ") else nil
 end
 
 -- No process starts here: window event handlers share a 50 ms budget.
--- Build report runs (`run-*` under the project's `.dev/reports/build/tern`) present when an
--- `elide build` line started in a pane; the one new run with a report when it finishes is that
--- build's. A directory listing and one bounded read: no process inside the 50 ms budget.
+-- Report runs (`run-*` under the project's `.dev/reports/<kind>/tern`) present when an
+-- `elide build|install` line started in a pane; the one new run with a report when it finishes
+-- is that command's. A directory listing and one bounded read: no process inside the 50 ms budget.
 local REPORT_BYTES = 8 * 1024 * 1024
-local build_runs = {}
+-- The report each kind of run writes.
+local REPORTS = { build = "diagnostics.json", install = "install.json" }
+local runs_before = {}
 
-local function report_runs(root)
-  local dir = root .. "/.dev/reports/build/tern"
+local function report_runs(root, kind)
+  local dir = root .. "/.dev/reports/" .. kind .. "/tern"
   local ok, names = pcall(tern.fs.list, dir)
   local runs = {}
   for _, name in (ok and names or {}) do
@@ -1019,17 +1038,18 @@ local function report_runs(root)
   return runs, dir
 end
 
--- "3 errors, 1 warning" from the report the build in `pane` wrote, or nil.
-local function build_counts(pane)
-  local before = build_runs[pane]
-  build_runs[pane] = nil
+-- The decoded report of the one run the command in `pane` wrote, or nil.
+local function fresh_report(pane)
+  local before = runs_before[pane]
+  runs_before[pane] = nil
   if not before then
     return nil
   end
-  local runs, dir = report_runs(before.root)
+  local file = REPORTS[before.kind]
+  local runs, dir = report_runs(before.root, before.kind)
   local fresh = nil
   for name in runs do
-    if not before.runs[name] and tern.fs.exists(dir .. "/" .. name .. "/diagnostics.json") then
+    if not before.runs[name] and tern.fs.exists(dir .. "/" .. name .. "/" .. file) then
       if fresh then
         return nil
       end
@@ -1040,30 +1060,60 @@ local function build_counts(pane)
     return nil
   end
   local ok, decoded = pcall(function()
-    return tern.json.decode(tern.fs.read(dir .. "/" .. fresh .. "/diagnostics.json", REPORT_BYTES))
+    return tern.json.decode(tern.fs.read(dir .. "/" .. fresh .. "/" .. file, REPORT_BYTES))
   end)
-  local report = ok and diagnostics.report(decoded) or nil
+  return ok and decoded or nil
+end
+
+-- "3 errors, 1 warning" from the report the build in `pane` wrote, or nil.
+local function build_counts(pane)
+  local report = diagnostics.report(fresh_report(pane))
   return report and diagnostics.phrase(report.errors, report.warnings, report.notes) or nil
 end
 
-tern.on("command_started", function(ev)
-  if elide_command(ev.line) ~= "build" then
+-- "12 packages, 3 downloaded" from the report the install in `pane` wrote, or nil.
+local function install_detail(pane)
+  local report = fresh_report(pane)
+  local packages = type(report) == "table" and report.packages or nil
+  if type(packages) ~= "number" or packages <= 0 then
+    return nil
+  end
+  local text = packages .. " package" .. (if packages == 1 then "" else "s")
+  if type(report.downloads) == "number" and report.downloads > 0 then
+    text ..= ", " .. report.downloads .. " downloaded"
+  end
+  return text
+end
+
+tern.on("command_started", function(ev, cx)
+  local command = elide_command(ev.line)
+  if command == "run" then
+    android.typed_run(cx, ev.pane)
+  end
+  if not REPORTS[command] then
     return
   end
   local root = project.root_of(ev.pane)
-  build_runs[ev.pane] = root and { root = root, runs = (report_runs(root)) } or nil
+  runs_before[ev.pane] = root and { root = root, kind = command, runs = (report_runs(root, command)) } or nil
 end)
 
 tern.on("pane_closed", function(ev)
-  build_runs[ev.pane] = nil
+  runs_before[ev.pane] = nil
 end)
 
 tern.on("command_finished", function(ev, cx)
+  android.typed_run_ended(ev.pane)
   local command, subject = elide_command(ev.line)
   if not command then
     return
   end
-  project.finished(ev.pane, command, ev.status, command == "build" and build_counts(ev.pane) or nil)
+  local detail = nil
+  if command == "build" then
+    detail = build_counts(ev.pane)
+  elseif command == "install" then
+    detail = install_detail(ev.pane)
+  end
+  project.finished(ev.pane, command, ev.status, detail)
   tern.chrome.refresh()
   -- Statuses from 128 up are signals (an interrupt), not failing tests.
   if command == "test" and ev.status ~= 0 and ev.status < 128 then

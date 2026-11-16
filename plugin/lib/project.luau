@@ -112,6 +112,12 @@ local OUTCOMES = {
   },
   build = { ok = "Built", failed = "Build failed", interrupted = "Build interrupted", command = "plugin.elide.project" },
   run = { ok = "Ran", failed = "Run failed", interrupted = "Run interrupted", command = "plugin.elide.project" },
+  install = {
+    ok = "Installed",
+    failed = "Install failed",
+    interrupted = "Install interrupted",
+    command = "plugin.elide.project",
+  },
 }
 
 local function outcome(pane)
