@@ -176,7 +176,7 @@ class Connection {
     if (object(value.error)) {
       const code = typeof value.error.code === "number" ? value.error.code : "rpc";
       const message = code === -32601
-        ? `This Komodo does not implement ${pending.method}. Install a compatible Komodo with preview protocol 2; live previews have no snapshot fallback.`
+        ? `Komodo requires preview protocol 2. Install a compatible version to use live previews.`
         : String(value.error.message ?? "Komodo request failed.");
       pending.reject(new KomodoError(message, code, pending.method, value.error.data));
     } else pending.resolve(value.result);

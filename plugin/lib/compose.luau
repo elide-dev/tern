@@ -8,6 +8,16 @@ local MAX_IMAGES = 32
 local MAX_PNG = 8 * 1024 * 1024
 local MAX_GALLERY = 64 * 1024 * 1024
 local TERMINAL = { ready = true, error = true, cancelled = true }
+local PROGRESS = {
+  starting = "Starting previews…",
+  resolving = "Loading project…",
+  waiting = "Waiting for workspace build…",
+  runtime = "Preparing renderer…",
+  building = "Building preview inputs…",
+  refreshing = "Updating previews…",
+  rendering = "Rendering previews…",
+  cancelling = "Stopping previews…",
+}
 local images
 local documents = {}
 local documents_revision = 0
@@ -198,7 +208,7 @@ local function watch(state, cx)
       pcall(publish_documents, state, job)
     end
     if state.restoring and tern.fs.exists(job .. "/done") then
-      state.phase, state.message = "idle", "Previous renderer stopped. Refresh to preview editor sources."
+      state.phase, state.message = "idle", "Renderer stopped. Refresh to restart."
       finish_job(state, cx, job)
       return
     end
@@ -206,8 +216,7 @@ local function watch(state, cx)
       -- A killed helper cannot publish done. Its expired lease and PID-checked workspace
       -- lock make another explicit attempt safe; do not remove a possibly live job here.
       state.job, state.cancelling, state.restoring = nil, nil, nil
-      state.phase, state.message =
-        "idle", "Previous helper did not report exit. Refresh checks that its workspace lock is released."
+      state.phase, state.message = "idle", "Renderer did not report exit. Refresh to retry."
       cx:save()
       cx:render()
       return
@@ -288,7 +297,7 @@ local function start(state, cx, mode)
   if state.job or state.invalid or not alive(state) then
     return
   end
-  state.log, state.url, state.opened, state.revision = "", nil, nil, nil
+  state.log, state.url, state.opened, state.revision, state.details = "", nil, nil, nil, false
   state.mode = mode or "snapshot"
   state.phase, state.message =
     "starting", state.mode == "live" and "Building live previews…" or "Starting editor previews…"
@@ -356,7 +365,7 @@ local function start(state, cx, mode)
         state.log = string.sub(result.stderr or "", -8192)
         local decoded, response = pcall(tern.json.decode, result.stdout or "")
         if state.cancelling then
-          state.phase, state.message = "cancelled", "Preview cancelled. Refresh to try again."
+          state.phase, state.message = "cancelled", "Preview cancelled."
         elseif decoded and type(response) == "table" and TERMINAL[response.phase] then
           state.phase, state.message = response.phase, text(response.message)
           if response.phase == "ready" and result.status == 0 then
@@ -385,7 +394,7 @@ local function start(state, cx, mode)
         return
       end
       if state.cancelling then
-        state.phase, state.message = "cancelled", "Preview cancelled. Refresh to try again."
+        state.phase, state.message = "cancelled", "Preview cancelled."
         complete()
         return
       end
@@ -429,7 +438,7 @@ local function request(state, cx, mode)
   elseif state.mode ~= mode then
     cancel(state)
     state.pending_mode = mode
-    state.message = "Switching preview mode; waiting for the renderer to exit…"
+    state.message = "Switching preview mode…"
     cx:render()
   elseif mode == "snapshot" then
     local ok, problem = pcall(tern.fs.write, state.job .. "/refresh", source.uuid(math.random))
@@ -452,7 +461,7 @@ tern.block.define("compose", {
       root = root or "",
       name = path and string.match(path, "([^/]+)$") or "Compose",
       phase = "idle",
-      message = "Editor previews update automatically, including unsaved source changes and saved resources. Refresh executes this project's preview code.",
+      message = "Refresh to start previews. Preview code runs with your permissions.",
       images = {},
       log = "",
     }
@@ -468,7 +477,7 @@ tern.block.define("compose", {
       then
         state.job, state.restoring, state.restored_at = saved.job, true, tern.now()
         cancel(state)
-        state.message = "Restored without rebuilding; waiting for the previous renderer to stop…"
+        state.message = "Stopping previous renderer…"
         watch(state, cx)
       end
     elseif saved == nil then
@@ -483,6 +492,7 @@ tern.block.define("compose", {
     return "Compose · " .. state.name
   end,
   view = function(state)
+    local progress = PROGRESS[state.phase]
     local cards = {}
     for index, card in ipairs(state.images) do
       local children = {
@@ -534,19 +544,31 @@ tern.block.define("compose", {
         ),
         ui.button("Close", { key = "close", role = "compose-close", actions = { click = "close" } }),
       }),
-      ui.el("div", {
-        key = "snapshot",
-        role = "compose-snapshot",
-        text = state.mode == "live"
-            and "Live input runs in a browser pane. Editor changes and saved resources refresh automatically."
-          or "Editor changes and saved resources refresh automatically · Live preview opens interactive compositions in a browser pane.",
+      ui.node("col", { key = "status", role = "compose-status", gap = "sm" }, {
+        progress and ui.progress(nil, progress) or ui.el("div", {
+          role = state.phase == "error" and "compose-card-error" or "compose-summary",
+          text = state.message,
+        }),
       }),
       ui.el("div", { key = "path", role = "compose-path", text = state.path }),
-      ui.el("div", { key = "status", role = "compose-status", text = state.phase .. ": " .. state.message }),
       ui.node("col", { key = "gallery", role = "compose-gallery", gap = "md" }, cards),
     }
-    if state.log ~= "" then
-      table.insert(children, ui.el("pre", { key = "log", role = "compose-log", text = state.log }))
+    if (progress and state.message ~= "") or state.log ~= "" then
+      table.insert(
+        children,
+        ui.button(state.details and "Hide details" or "Show details", {
+          key = "details",
+          role = "compose-details",
+          actions = { click = "details" },
+        })
+      )
+      if state.details then
+        local detail = progress and state.message or ""
+        if state.log ~= "" then
+          detail ..= (detail ~= "" and "\n" or "") .. state.log
+        end
+        table.insert(children, ui.el("pre", { key = "log", role = "compose-log", text = detail }))
+      end
     end
     return { main = ui.node("col", { role = "compose-preview", gap = "md", grow = 1 }, children) }
   end,
@@ -560,6 +582,10 @@ tern.block.define("compose", {
       request(state, cx, "live")
     elseif event.act == "cancel" then
       cancel(state)
+      cx:render()
+    elseif event.act == "details" then
+      state.details = not state.details
+      cx:render()
     elseif event.act == "source" and not state.invalid then
       cx:open(source.file_url(state.path))
     elseif event.act == "close" then

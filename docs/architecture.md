@@ -149,6 +149,93 @@ remain on the built classpath, avoiding a cold compile of unrelated project code
 Resource/model changes recreate the live backend after building; ordinary edits keep it.
 Inspector and agent protocols are not exposed.
 
+## Android devices
+
+`plugin/lib/android.luau` owns a window canvas and the standalone palette commands.
+Project menu/workspace actions pass their explicit root; global commands deliberately
+omit it. The manager calls the bundled `elide-tern-android` executable with argument
+arrays and JSON responses. Project resolution evaluates manifests through Elide and
+uses shared core decoding/SDK lookup; it does not resolve classpaths or build application
+code. Ambiguous Android workspaces return structured member choices for the native picker.
+Configured AVD creation delegates to Elide's inspected `android-avd` target.
+
+`android/sdk.ts` invokes SDK-local `emulator`, `adb` and `avdmanager`. Creation uses
+installed images and known hardware profiles, never `--force` or automatic SDK installation.
+Running instances are associated with AVD names through `adb -s SERIAL emu avd name`;
+`list` also reports non-emulator `adb devices` entries, named from `ro.product.*` once ready.
+Stop targets one serial; a provided name must match. Delete rejects running, unidentified
+or locked AVDs. Emulator launch detaches with an owned diagnostic log, detects startup
+failure and leaves successful instances running independently of the UI.
+
+`android/display.ts` runs in a terminal pane and draws a `Device`: frames, touches as
+fractions of the latest frame, wheel notches, keys, paste and toolbar buttons. It takes a
+`Connect` function and calls it only once the terminal is set up, so connecting (and with
+`display --start`, starting the emulator) runs inside the view: until the first frame it
+centers the device's name, an indeterminate bar, the reported step with elapsed seconds, and
+wrapped notices. The bar is a track and a segment image sent once; a 16 ms timer re-places the
+segment at a pixel offset (`X=`) along an eased sweep, and text redraws only when the elapsed
+seconds change. A failed connection stays on screen until the view closes,
+then exits 0; closing while connecting aborts it, and `AndroidSdk.start` then kills the
+emulator it launched. The display queries the terminal for kitty graphics, SGR pixel mouse
+(1016), the kitty keyboard, cell/window pixel sizes and its foreground/background colors
+(OSC 10/11); without graphics or pixel sizes it exits with a message and the pane stays
+open. Each frame is one kitty `t=f` temp-file transmission (inline base64 when the terminal
+cannot read the file), with one frame in flight until acknowledged. Tern gets cell reports:
+it reports a rounded cell size but lays images out in its real cells. Keys go to the device
+as whole presses with their modifiers, so no terminal release report is needed and no key
+stays down.
+
+The bottom three rows are a toolbar. Back, Home and Recent apps sit in the pane's center,
+Power and the volume keys left of them, then rotation and Close right, groups set off by
+separators; notices take the middle row left of the bar. Behind the buttons lies one panel
+image, only as wide as they are plus a column each side and placed under them (`z=-1`): a
+translucent rounded fill with a thin outline, the separators drawn into it.
+Each button is one kitty image spanning the rows: `android/icons.ts` draws Tern-sized quiet
+buttons (28 px box, 6 px radius, 16 px line icon at Tern's 17 px cell, scaled by the reported
+cell height) in the terminal's foreground color, stroking 24-unit polylines with round caps
+and joins, and adds the rounded background for hover and press. Any-event mouse tracking
+(1003) drives those states; a button acts on release over itself. A rewritten slot is placed
+again, since terminals may drop an image whose cells change. Close, SIGHUP or the device's
+exit restore the terminal; a device that stopped or left ends with status 0.
+
+`android/emulator.ts` drives emulators started by this helper. `android/grpc.ts` finds the
+emulator by its own `pid_<PID>.ini` advertisement, whose gRPC port and console token exist
+because `start` passes `-grpc-use-token` (with `-no-window`), and speaks plaintext loopback
+HTTP/2 gRPC with the token as bearer. `streamScreenshot` sends RGB888 frames scaled to the
+pane; touches map to the native portrait display through the frame's rotation. Keys use
+`streamInputEvent`; paste sets the device clipboard, then sends Ctrl+V. Toolbar buttons send
+hardware keys and `setPhysicalModel` rotations. An AVD without `hw.keyboard` has no guest
+keyboard device, so the view drops keys and says why; `create` enables the setting.
+
+`android/mirror.ts` mirrors any other serial over adb, installing nothing. `screenrecord
+--output-format=frames` writes length-prefixed RGB888 frames (width, height, stride, depth
+header) when the screen changes, scaled on the device to the pane; it stops after its
+three-minute limit and is restarted. A once-a-second `dumpsys display` poll reads display 0's
+logical size and rotation and restarts the recording when the shape changes. Input runs as
+`input` commands in one `adb shell`, whose exit ends the view. Every command starts a process
+on the device, so a press becomes one `tap` or `swipe` on release; typed text is coalesced
+into `input text`; Android 13+ gets `keycombination` and `mouse scroll`. Rotation uses
+`wm user-rotation lock`, else the `user_rotation` setting after auto-rotate is turned off.
+
+The plugin opens one display pane per device (`exec` of the helper), split beside the pane
+it replaces. `cx.layout:split` is synchronous, and the first pane a Tern process launches with
+a command waits there while Tern reads the login shell's environment (about a second for an
+interactive zsh; with `SHELL=/bin/sh` the same split takes 25 ms). That can exceed the
+`canvas_action` wall budget, and Tern then aborts the handler as the split returns; the plugin
+records the pending launch before splitting and finishes it from the new pane's `pane_created`
+event (recording it, closing the replaced panes). The pane replaces an open
+Compose preview block (`elide.compose`, the current tab's first), else the manager it was
+chosen in; showing a device that already has a pane swaps that pane into the place. **Start** opens
+`display --name NAME --start` (with the manager's `--sdk`, `--root` and `--runtime`), so the
+pane appears before the emulator does. Display panes are recorded per AVD name or physical
+serial (pane, name, serial) in plugin kv, so a reload still knows them; panes are matched by
+the title the display sets (`NAME`, `SERIAL`, then `NAME · SERIAL`), and a saved id whose pane
+now carries another title is dropped. On `pane_closed` for an emulator's pane, the plugin
+runs `list` and, if that AVD still runs, offers to stop it. No plugin code closes display
+panes. The manager uses quiet icon-only `ui.button`s with tooltips; below the list one line
+counts virtual devices (and running ones) and connected physical devices, or says how a phone
+appears. Other text shows only for warnings and errors.
+
 ## Window integration points
 
 The window half also plugs into Tern's chrome, events and routes. None of these

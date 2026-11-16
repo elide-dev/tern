@@ -3,6 +3,7 @@ local links = require("./lib/links")
 local project = require("./lib/project")
 local source = require("./lib/source")
 local workspace = require("./lib/workspace")
+local android = require("./lib/android")
 
 local function path(value)
   if string.sub(value, 1, 1) == "/" then
@@ -39,6 +40,8 @@ local function runtime_path(config)
   end
   return runtime
 end
+
+android.install(configuration, path, runtime_path)
 
 -- The argv prefix that hosts a broker-backed surface (repl, project, debug): an explicit
 -- per-surface launcher from config, or the runtime's own `elide tern <kind>` host.
@@ -626,6 +629,9 @@ end
 
 workspace.install({
   debug = launch_debug,
+  android = function(cx, context, target)
+    return android.open(cx, context, target)
+  end,
   -- Like Source, Preview is deliberately not cached by action: a second Kotlin file
   -- must open its own persistent preview rather than focusing the first file's result.
   preview = function(cx, context, target)
@@ -740,6 +746,7 @@ local function project_menu(context, cx)
     { label = "Open debugger", value = "debug", icon = "bug" },
     { label = "Open Elide source…", value = "source", icon = "file" },
     { label = "Open Compose preview", value = "compose", icon = "file" },
+    { label = "Show device manager", value = "android", icon = "smartphone" },
     { label = "Open REPL", value = "repl", icon = "terminal" },
     { label = "Serve static files", value = "static", icon = "server" },
     { label = "Serve a script…", value = "script", icon = "server" },
@@ -765,6 +772,8 @@ local function project_menu(context, cx)
         prompt_source(current, context)
       elseif item.value == "compose" then
         prompt_compose(current, context)
+      elseif item.value == "android" then
+        android.open(current, context)
       elseif item.value == "repl" then
         launch(current, "js", context)
       elseif item.value == "static" then

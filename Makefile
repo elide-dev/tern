@@ -1,8 +1,8 @@
 ELIDE_SOURCE ?= ../elide
 ELIDE_VSCODE_SOURCE ?= ../elide-vscode
 
-.PHONY: build test fmt check types smoke link repl test-surface compose test-compose
-build: compose
+.PHONY: build test fmt check types smoke link repl test-surface compose test-compose android test-android
+build: compose android
 	cargo build --release -p elide-tern-broker
 	mkdir -p dist
 	cp target/release/elide-tern-broker dist/.elide-tern-broker.new
@@ -11,6 +11,10 @@ build: compose
 	mv dist/.elide-tern-worker.new dist/elide-tern-worker
 compose:
 	ELIDE_VSCODE_SOURCE="$(ELIDE_VSCODE_SOURCE)" bun scripts/build-compose.ts
+android:
+	ELIDE_VSCODE_SOURCE="$(ELIDE_VSCODE_SOURCE)" bun scripts/build-android.ts
+test-android: android
+	python3 tests/android.py --image "$(ANDROID_IMAGE)" $(if $(ANDROID_SDK),--sdk "$(ANDROID_SDK)")
 test-compose:
 	bun test tests/compose-clock.test.ts tests/compose-changes.test.ts
 test: build

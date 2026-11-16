@@ -52,6 +52,7 @@ local function controls(context, file)
     button("Open REPL", "repl", "terminal"),
     button("Serve project files", "serve", "server"),
     button("Show project files", "files", "folder"),
+    button("Show device manager", "android", "smartphone"),
   }
   if file and source.lang(file) then
     table.insert(tools, 1, button("Source", "source", "file"))

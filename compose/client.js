@@ -2,6 +2,28 @@
 const status = document.querySelector("#status");
 const gallery = document.querySelector("#gallery");
 const refresh = document.querySelector("#refresh");
+const progress = document.querySelector("#progress");
+const activity = document.querySelector("#activity");
+const diagnostics = document.querySelector("#diagnostics");
+const detail = document.querySelector("#detail");
+const phases = {
+  starting: "Starting previews…",
+  resolving: "Loading project…",
+  waiting: "Waiting for workspace build…",
+  runtime: "Preparing renderer…",
+  building: "Building preview inputs…",
+  refreshing: "Updating previews…",
+  rendering: "Rendering previews…",
+  cancelling: "Stopping previews…",
+};
+function showStatus(phase, message) {
+  const label = phases[phase];
+  status.textContent = label || message;
+  progress.hidden = !label;
+  activity.setAttribute("aria-busy", String(!!label));
+  detail.textContent = label ? message : "";
+  diagnostics.hidden = !detail.textContent;
+}
 const cards = new Map();
 let epoch = 0;
 let focused;
@@ -92,7 +114,7 @@ function connect() {
       reset(); epoch = data.epoch;
       for (const card of cards.values()) card.live = false;
     } else if (data.type === "status") {
-      status.textContent = data.message;
+      showStatus(data.phase, data.message);
       refresh.disabled = data.phase !== "live" && data.phase !== "error";
     } else if (data.type === "gallery") {
       reset(); epoch = data.epoch;
@@ -102,7 +124,7 @@ function connect() {
       const value = data.image;
       const card = cards.get(value.id) || makeCard(value.id);
       card.name.textContent = value.name;
-      card.detail.textContent = value.detail + (value.keyboard ? " · keyboard enabled" : "");
+      card.detail.textContent = value.detail + (value.keyboard ? " · Type to interact" : "");
       card.error.textContent = value.error || "";
       card.live = !!value.live && !value.error;
       card.keyboard = value.keyboard;
@@ -115,11 +137,19 @@ function connect() {
   socket.onclose = () => {
     reset(); refresh.disabled = true;
     for (const card of cards.values()) card.live = false;
-    status.textContent = stopped ? "Live preview stopped." : "Live preview disconnected. Start Live preview again in the Compose pane.";
+    showStatus("stopped", stopped ? "Preview stopped." : "Disconnected. Reopen Live preview from the Compose pane.");
   };
 }
-refresh.onclick = () => { reset(); refresh.disabled = true; send({ type: "refresh" }); };
-document.querySelector("#stop").onclick = () => { reset(); stopped = true; send({ type: "stop" }); };
+refresh.onclick = () => {
+  reset(); refresh.disabled = true;
+  showStatus("refreshing", "");
+  send({ type: "refresh" });
+};
+document.querySelector("#stop").onclick = () => {
+  reset(); stopped = true; refresh.disabled = true;
+  showStatus("cancelling", "");
+  send({ type: "stop" });
+};
 window.addEventListener("blur", reset);
 document.addEventListener("visibilitychange", () => { if (document.hidden) reset(); });
 window.addEventListener("pagehide", () => { reset(); socket?.close(); });
