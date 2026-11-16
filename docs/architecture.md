@@ -74,7 +74,8 @@ History is stored by the shared REPL in SQLite; drafts live in the frontend.
 A Compose preview is one browser pane on its session's loopback page, which draws the toolbar,
 the renderer's startup and failures, and the previews. Explicit palette/menu/workspace actions
 pass a saved `.kt` path and project root to the window half (`open_compose` in
-`plugin/window.luau`), which runs `dist/elide-tern-compose open` through `tern.process.run` and
+`plugin/window.luau`), which runs `<runtime> tern compose open` (or the `compose` launcher
+override) through `tern.process.run` and
 opens the page it prints beside the editor. A failure to start is a toast; there is no pane
 before the page.
 
@@ -88,48 +89,27 @@ JDK override and Komodo launcher. Its state file (`<cache>/compose-service/<hash
 state file) and retries for 15 seconds. `serve` claims the state file exclusively, so racing
 opens start one service, and exits if no session opens within 30 seconds.
 
-`compose/service.ts` holds the session state machine, a port of VS Code's `PreviewSession`
-(`schedule`, `suspend`, `refresh`, `show`, `pushImages`) for the shared `KomodoBackend`.
-`compose/live.ts` creates the stack: `compose/komodo.ts` resolves the managed Komodo distribution
-(or an explicit launcher), writes a temporary project manifest using the shared project model
-and owns a bounded stdio LSP connection; the language server opens an authenticated protocol-2
-`workspace-fir` preview session; the backend's key is the previewed application. The model,
-classpath/version selection, runtime installer, backend and three Java helpers are bundled
-unchanged by `scripts/build-compose.ts`; VSCode APIs are not loaded.
+The service is part of the Elide runtime (`crates/cli/src/tern/compose` in `elide-dev/runtime`);
+the plugin depends only on the `open`/`serve` command contract, the page URL and the loopback
+endpoints below. Elide owns the project inputs, the build and the layoutlib runtime; Komodo
+owns compilation, rendering and input. A refresh that needs inputs runs `elide build` of the
+application's preview targets, resolves its classpaths, then starts (or reuses) one Komodo
+language server per application and opens a protocol-2 `workspace-fir` preview session on it.
+Nothing is painted before the build has confirmed the inputs. Unsaved editor texts reach
+Komodo directly; an overlay of a source the live compiler does not compile suspends the
+preview until it is saved. Pkl/root changes re-resolve the models and restart the stack;
+resource, non-compilable and dependency saves rebuild; a save of the previewed file takes
+the live path.
 
-On open the service resolves the project models, the layoutlib runtime and the helper sources
-once. A refresh that builds starts `elide build` of the application's preview targets beside
-the Komodo session, paints from a warm compiler or the last build's classes (`verifying
-build…`), then configures the confirmed inputs and renders again only when they changed. A
-rebuild keeps the language server; another application of the workspace replaces only the
-backend. Edits call `backend.edit` at once and refresh without `selection`: the backend joins
-edited dependencies and discovers previews only when declarations change. A request's
-documents are the editor overlays, the saved texts handed to the backend before (so a saved
-dependency reaches the daemon's `sources`) and the previewed file. An overlay of a source the
-live compiler does not compile suspends the preview until it is saved. Pkl/root changes
-re-resolve the models and restart the stack; resource, non-compilable and dependency saves
-rebuild; a save of the previewed file takes the live path.
-
-When its session ends the service keeps the stack (language server, backend, hosted cards) for
-the keep-alive period (`--keep-alive`, default 10 minutes; `0` stops it with the session), so
-the next open paints from the running session. The idle frame clock pauses while no page is
-connected. **Stop renderer**, SIGINT/SIGTERM and the keep-alive expiry dispose the backend, its
-clock and the language server, remove the state file and exit.
-
-`compose/changes.ts` watches the workspace directories (including atomic saves, source creation
-and deletion), ignoring dot directories such as generated `.dev` output, and delivers bursts as
-one set after 50 ms. Previews execute trusted project code, not sandboxed code.
-
-`compose/clock.ts` adds an authenticated, single-client loopback bridge around the Komodo
-session. It requests a frame after 100 ms without a pushed frame, with one outstanding request
-per hosted card, and pauses requests during configuration/compilation and while no page is
-connected. This keeps delayed coroutines and animation clocks advancing when layoutlib's
-dirty-frame heuristic goes idle at identical pixels. It forwards the shared protocol unchanged
-with stream backpressure and closes both sockets with the backend.
+When its session ends the service keeps the stack for the keep-alive period (`--keep-alive`,
+default 10 minutes; `0` stops it with the session). An idle frame clock requests a frame after
+100 ms without one while a page is connected, so animation clocks keep advancing. **Stop
+renderer**, SIGINT/SIGTERM and the keep-alive expiry stop the Komodo process group, remove the
+state file and exit. Previews execute trusted project code, not sandboxed code.
 
 ### Page and pane protocol
 
-`compose/server.ts` binds one `Bun.serve` on 127.0.0.1 with an ephemeral port and checks the
+The service's page server binds 127.0.0.1 on an ephemeral port and checks the
 exact Host. The control path serves `open` and `ping`; each session has its own random
 256-bit token path, and a new session (another file, another pane) retires the previous token.
 Routes other than the page, its script and its WebSocket refuse requests carrying an `Origin`,

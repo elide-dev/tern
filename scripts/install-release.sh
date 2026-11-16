@@ -10,7 +10,7 @@ if ! command -v tern >/dev/null 2>&1; then
   echo "Install Tern and enable its command-line tool before running this installer." >&2
   exit 1
 fi
-for name in broker worker compose android; do
+for name in broker worker android; do
   if [ ! -x "$bundle_root/dist/elide-tern-$name" ]; then
     echo "Incomplete release: missing executable dist/elide-tern-$name" >&2
     exit 1

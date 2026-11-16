@@ -25,11 +25,9 @@ The configured runtime must support `elide tern`; `make link` builds the helpers
 the runtime crates `elide-embed-host` and `elide-project-session` from a sibling `../elide`
 checkout of `elide-dev/runtime`, so building needs access to that repository.
 
-Compose builds also consume `../elide-vscode` (`ELIDE_VSCODE_SOURCE` overrides it).
-Install that checkout's dependencies with its pinned pnpm first. `make compose` bundles its
-shared project model, layoutlib renderer/runtime installer and Java sources into
-`dist/elide-tern-compose`; Bun and the sibling checkout are not needed at runtime.
-Release bundles must include this executable and `dist/elide-tern-compose.LICENSE`.
+Compose previews are hosted by the runtime (`elide tern compose`). To try an unreleased
+runtime, `make previewing` builds its development host from `../elide` into
+`dist/elide-tern-compose`; set `compose` in `plugin/config.json` to that path.
 `make android` bundles the same checkout's SDK/manifest utilities into
 `dist/elide-tern-android`, including its embedded emulator display. Releases also require
 this executable and `dist/elide-tern-android.LICENSE`.
@@ -127,13 +125,12 @@ page's toolbar holds icon buttons, named in their tooltips: **Refresh previews**
 renderer**, **Open source** and **Close preview**.
 
 Opening a preview resolves the enclosing Elide workspace and selects the nearest Android APK
-consuming that source set. Cards from the last build appear at once while `elide build`
-confirms the inputs (`verifying build…` in the summary); a build that changed them renders
-again. Kotlin edits in native and Elide source editors, including unsaved buffers, reach the
-running composition without a build; saved dependency sources are watched too and refresh
-through an incremental build. Resource and project-configuration saves rebuild the required
-inputs automatically. Editing a source the live compiler cannot apply (Java, build-only
-processing) asks you to save it, as in VS Code.
+consuming that source set. `elide build` confirms the application's inputs first, then Komodo
+compiles and renders the cards. Kotlin edits in native and Elide source editors, including
+unsaved buffers, reach the running composition without a build; saved dependency sources are
+watched too and refresh through an incremental build. Resource and project-configuration saves
+rebuild the required inputs automatically. Editing a source the live compiler cannot apply
+(Java, build-only processing) asks you to save it, as in VS Code.
 Preview code executes locally with your permissions: open only projects you trust.
 
 One preview runs per workspace: previewing another file of the workspace shows it in the
@@ -144,18 +141,20 @@ at once; the pane stays, and its first button becomes **Start previews**. Closin
 its session at once. Plugin reload ends the session (the service stays warm) and never
 automatically executes previews.
 
-Requires an Android-capable Elide runtime, the project's Android SDK/dependencies, a JDK 17+
-and a compatible Komodo distribution with Compose compiler plugins; an unavailable or
-incompatible Komodo is an error in the page. On first render, the shared installer downloads
-the pinned, SHA-256-verified layoutlib runtime from Google Maven. Supported plugin hosts are
+Requires an Android-capable Elide runtime that provides `elide tern compose`, the project's
+Android SDK/dependencies, a JDK 17+ and a Komodo editor bundle with its Compose compiler plugins
+set as `compose_komodo`. On macOS, build the bundle from Komodo source with
+`bazel build --config=local //src/dev/elide/kotlin/editor/analysis/image:bundle`. An unavailable
+or incompatible Komodo is an error in the page. On first render, the runtime downloads the
+pinned, SHA-256-verified layoutlib runtime from Google Maven. Supported plugin hosts are
 macOS arm64/x64 and Linux x64.
 Optional `plugin/config.json` settings:
 
-- `compose`: helper executable; defaults to `../dist/elide-tern-compose`.
+- `compose`: an executable implementing `open`/`serve` (such as the development host from
+  `make previewing`); unset uses `<runtime> tern compose`.
 - `compose_java`: JDK's `java` executable; otherwise uses the resolved project JDK.
 - `compose_cache`: renderer cache directory; defaults to the plugin's data directory.
-- `compose_komodo`: compatible Komodo launcher override.
-  Otherwise the helper resolves Komodo from the Elide installation.
+- `compose_komodo`: the `komodo` executable of a Komodo editor bundle (required).
 - `compose_keep_alive_minutes`: how long the preview service stays warm after its pane closes;
   defaults to 10, and `0` stops it with its pane.
 

@@ -1185,20 +1185,24 @@ start_preview = function(cx, file, root, target, page)
   local keep_alive = if type(config.compose_keep_alive_minutes) == "number"
     then config.compose_keep_alive_minutes
     else 10
-  local argv = {
-    path(config.compose or "../dist/elide-tern-compose"),
-    "open",
-    "--runtime",
-    runtime_path(config),
-    "--root",
-    root,
-    "--file",
-    file,
-    "--cache",
-    path(config.compose_cache or (tern.plugin.data .. "/compose-cache")),
-    "--keep-alive",
-    tostring(keep_alive),
-  }
+  local argv = launcher(config, "compose")
+  for _, argument in
+    {
+      "open",
+      "--runtime",
+      runtime_path(config),
+      "--root",
+      root,
+      "--file",
+      file,
+      "--cache",
+      path(config.compose_cache or (tern.plugin.data .. "/compose-cache")),
+      "--keep-alive",
+      tostring(keep_alive),
+    }
+  do
+    table.insert(argv, argument)
+  end
   if type(config.compose_java) == "string" and config.compose_java ~= "" then
     local java = config.compose_java
     table.insert(argv, "--java")
@@ -1223,7 +1227,11 @@ start_preview = function(cx, file, root, target, page)
       local url, session_root = live_url(response.url), links.absolute(response.root)
       if not url or url ~= response.url or not session_root or not links.within(file, session_root) then
         local message = type(response.error) == "string" and response.error ~= "" and response.error
-          or ("Preview helper failed (exit " .. tostring(result.status) .. ").")
+          or (
+            "The runtime could not start Compose previews (exit "
+            .. tostring(result.status)
+            .. "). They need a runtime with `elide tern compose`."
+          )
         current:toast("error", "Could not start Compose previews.", string.sub(message, 1, 8192))
         if page then
           watch_stopped(page)
