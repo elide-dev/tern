@@ -114,7 +114,7 @@ end
 local HOLD = '"$@"; status=$?; [ "$status" -eq 0 ] && exit 0; '
   .. 'printf "\\n\\033[2mExited with status %d. Press Enter to close.\\033[0m" "$status"; read -r _; exit 0'
 
-local function terminal(cx, argv, cwd, target, hold)
+local function terminal(cx, argv, cwd, target, hold, dir)
   local command = {}
   for _, value in argv do
     table.insert(command, quote(value))
@@ -129,7 +129,7 @@ local function terminal(cx, argv, cwd, target, hold)
     if not cx.session:pane(target) then
       return nil
     end
-    pane = cx.layout:split(target, "right", spec, { focus = true })
+    pane = cx.layout:split(target, dir or "right", spec, { focus = true })
   else
     pane = cx.layout:new_tab(spec)
   end
@@ -179,7 +179,7 @@ local function launch(cx, language, context, target, opened)
 end
 
 -- Whether `<runtime> <command>` takes `--surface=inline|screen|auto`, by runtime and command:
--- `elide test --help` and `elide build --help` list the option on runtimes that have it.
+-- `elide test|build|run --help` list the option on runtimes that have it.
 local surface_support = {}
 
 -- Runs `run(cx, supported, later)` once `<runtime> <command> --surface` support is known;
@@ -314,7 +314,10 @@ local function launch_debug(cx, context, target, opened, file)
   end, opened)
 end
 
-local function runtime_action(cx, context, command, target, opened)
+-- Opens `<runtime> <command>` (build, run) for the project right of `target`: the command's full
+-- page when the runtime's `<command> --help` lists `--surface`, else its plain output.
+-- `options.args` follow the command, and `options.cwd` replaces the project root.
+local function runtime_action(cx, context, command, target, opened, options)
   if not local_host(cx) then
     return
   end
@@ -323,22 +326,60 @@ local function runtime_action(cx, context, command, target, opened)
     return
   end
   local runtime = runtime_path(config)
-  if command ~= "build" then
-    return terminal(cx, { runtime, command }, context.root, target)
-  end
-  -- Build opens the full Build page when the runtime has one; bare `elide build` under Tern
-  -- draws inline, and older runtimes print plain output (which the build lens reads).
-  return with_surface(cx, runtime, "build", function(current, screen, later)
-    local argv = { runtime, "--ignore-version", "build" }
+  options = options or {}
+  return with_surface(cx, runtime, command, function(current, screen, later)
+    local argv = { runtime, "--ignore-version", command }
     if screen then
       table.insert(argv, "--surface=screen")
     end
-    local pane = terminal(current, argv, context.root, target)
+    for _, value in options.args or {} do
+      table.insert(argv, value)
+    end
+    local pane = terminal(current, argv, options.cwd or context.root, target)
     if later and opened then
       opened(current, pane)
     end
     return pane
   end)
+end
+
+-- Run: the Run page for the project, right of the workspace's bottom terminal (`bottom`) when it
+-- is open, else right of `target`. An Android project first gets its device plan and deploys
+-- with `--device` or `--emulator` (the embedded emulator Tern starts), so Elide starts no
+-- emulator of its own. The page opens first and shows the build; once the build is done, the
+-- device pane opens beside the editor (`target`), in the place of the open Compose previews.
+local function run_project(cx, context, target, opened, bottom)
+  local below = bottom or target
+  if not android.declared(context.root) then
+    return runtime_action(cx, context, "run", below, opened)
+  end
+  android.run_device(cx, context, function(current, device)
+    if device == false then
+      opened(current, nil)
+      return
+    end
+    if not device then
+      local pane = runtime_action(current, context, "run", below, opened)
+      if pane ~= false then
+        opened(current, pane)
+      end
+      return
+    end
+    -- Armed before the split: Tern can abort this hook as the split returns.
+    if device.display then
+      device.beside = target
+      android.follow(current, device)
+    end
+    local pane = runtime_action(current, context, "run", below, function(fresh, page)
+      android.followed(fresh, page)
+      opened(fresh, page)
+    end, { args = device.args, cwd = device.root })
+    if pane ~= false then
+      android.followed(current, pane)
+      opened(current, pane)
+    end
+  end)
+  return false
 end
 
 -- Opens the `elide.source` block on `path` (absolute, inside `root`), beside `target` or the
@@ -369,8 +410,8 @@ local function source_in(cx, pane, root)
 end
 
 -- Window and host VMs do not share buffers: only this window can read native editors, including
--- their dirty text. Each Compose page shown over its pane (the compose-live route) registers its
--- session here; the dirty Kotlin/Java editors of the session's workspace are posted to it.
+-- their dirty text. Each open Compose page registers its session here; the dirty Kotlin/Java
+-- editors of the session's workspace are posted to it.
 local native_sessions = {}
 local native_roots = {}
 local native_busy = false
@@ -570,7 +611,15 @@ local function native_tick(cx)
   end)
 end
 
--- One preview per workspace: a running one shows `file` instead of opening another pane.
+-- Open Compose pages by session URL: `{ url, pane, root, path, asked, stopped?, fragment? }`.
+-- The window carries out each page's requests (open the source, close, retarget) from the
+-- session's pane long-poll; a stopped page stays, and its buttons then ask through the page's URL
+-- fragment. `start_preview` is set with the live pages below.
+local live_pages = {}
+local start_preview
+
+-- One preview per workspace: a running one shows `file` instead of opening another pane, and a
+-- stopped one starts again in its own pane.
 local function open_compose(cx, file, root, target)
   if not local_host(cx) then
     return nil
@@ -589,34 +638,32 @@ local function open_compose(cx, file, root, target)
   if not configuration(cx) then
     return nil
   end
-  local function create(current)
-    local pane = current:new_block("elide.compose", { file, root }, "beside", target and { target = target } or nil)
-    if not pane then
-      current:toast("error", "Could not open Compose preview.")
-    end
-    return pane
-  end
-  for url, session in native_sessions do
-    if links.within(file, session.root) and native_active(session, cx) then
+  for url, page in live_pages do
+    if links.within(file, page.root) and cx.session:pane(page.pane) then
+      if page.stopped then
+        start_preview(cx, file, root, nil, page)
+        cx.layout:focus(page.pane)
+        return page.pane
+      end
       local name = string.match(file, "([^/]+)$")
       loopback.request(url .. "retarget", tern.json.encode({ file = file }), 5000, function(status, _, current)
         if not current then
           return
         end
         if status ~= 200 then
-          native_sessions[url] = nil
-          create(current)
+          start_preview(current, file, root, target)
           return
         end
         local focused = current.session:focused()
-        if not focused or current.session:tab_of(focused) ~= current.session:tab_of(session.pane) then
+        if not focused or current.session:tab_of(focused) ~= current.session:tab_of(page.pane) then
           current:toast("info", "Compose preview now shows " .. name .. ".")
         end
       end)
-      return session.pane
+      return page.pane
     end
   end
-  return create(cx)
+  start_preview(cx, file, root, target)
+  return nil
 end
 
 local function prompt_compose(cx, context)
@@ -667,9 +714,7 @@ workspace.install({
   build = function(cx, context, target, opened)
     return runtime_action(cx, context, "build", target, opened)
   end,
-  run = function(cx, context, target)
-    return runtime_action(cx, context, "run", target)
-  end,
+  run = run_project,
   test = function(cx, context, target, opened)
     return launch_job(cx, "test", context.root, context.root, target, opened)
   end,
@@ -1050,101 +1095,312 @@ local function with_root(cx, root, act)
   end)
 end
 
--- Live Compose pages open over their Compose pane, in its place, until closed. Their website
--- data profile names them to styles/compose.css, which hides the browser's toolbar: the page
--- carries the pane's own.
+-- A Compose preview is one browser pane showing its session's loopback page, which draws the
+-- preview's toolbar, startup progress, failures and the previews. Its website data profile names
+-- it to styles/compose.css, which hides the browser's toolbar.
 local LIVE_PROFILE = "elide-compose"
--- Pages whose close arrived before their open finished.
-local live_closed = {}
+-- The sessions the host half posts its dirty Elide editors to, by window key: session URL to
+-- workspace root. `this_window` is this window's key, known from the first timer's `cx`.
+local SESSIONS = "compose:sessions"
+local this_window
 
-local function live_blocks(cx, url, act)
-  cx.browser:call({ op = "blocks" }):next(function(result, err, current)
-    if not current then
-      return
-    end
-    local found = {}
-    if not err and result and result.ok and type(result.ok.blocks) == "table" then
-      for _, block in result.ok.blocks do
-        if
-          type(block) == "table"
-          and type(block.url) == "string"
-          and string.sub(block.url, 1, #url) == url
-          and type(block.block) == "number"
-        then
-          table.insert(found, block.block)
-        end
-      end
-    end
-    act(current, found)
-  end)
+-- The `http://127.0.0.1:<port>/<token>/` session URL a page shows, nil for any other URL.
+local function live_url(url)
+  local base, token = string.match(url or "", "^(http://127%.0%.0%.1:%d+/(%x+)/)")
+  return token and #token == 64 and base or nil
 end
 
-local function show_live(cx, owner, url)
-  live_closed[url] = nil
-  live_blocks(cx, url, function(current, found)
-    if #found > 0 or live_closed[url] then
-      return
+-- A device pane takes a preview's place.
+android.previews(function(info)
+  return info.kind == "browser" and live_url(info.url) ~= nil
+end)
+
+local function publish_sessions()
+  if not this_window then
+    return
+  end
+  local sessions = {}
+  for url, page in live_pages do
+    if not page.stopped then
+      sessions[url] = page.root
     end
-    -- The page follows the system's appearance unless Tern's theme pins light or dark.
-    local theme = current.settings:get("theme")
-    local scheme = if theme == "Light" then "#light" elseif theme == "Dark" then "#dark" else ""
-    current.browser
-      :call({ op = "open", owner = owner, how = "over", url = url .. scheme, profile = LIVE_PROFILE })
-      :next(function(result, err, latest)
-        if not latest then
+  end
+  local all = tern.kv.get(SESSIONS)
+  all = type(all) == "table" and all or {}
+  all[this_window] = if next(sessions) then sessions else nil
+  tern.kv.set(SESSIONS, all)
+end
+
+local function forget_page(url)
+  live_pages[url] = nil
+  native_sessions[url] = nil
+  publish_sessions()
+end
+
+-- Ends the preview: its session, and its pane.
+local function close_page(cx, page)
+  forget_page(page.url)
+  if not page.stopped then
+    loopback.request(page.url .. "close", "", 5000, function() end)
+  end
+  if cx.session:pane(page.pane) then
+    cx.layout:close(page.pane)
+  end
+end
+
+-- The page's URL with Tern's pinned appearance (`#light`, `#dark`); otherwise the page follows
+-- the system's.
+local function themed(cx, url)
+  local theme = cx.settings:get("theme")
+  return url .. (if theme == "Light" then "#light" elseif theme == "Dark" then "#dark" else "")
+end
+
+local poll_page, watch_stopped
+
+-- Takes over the page `block` showing session `url` of workspace `root` (previewing `file`):
+-- its workspace bounds the native editors posted to it, and its requests are carried out here.
+local function adopt(cx, url, block, root, file)
+  native_sessions[url] = { url = url, pane = block, root = root }
+  local page = {
+    url = url,
+    pane = block,
+    root = root,
+    path = if file and links.within(file, root) then file else nil,
+    asked = 0,
+  }
+  live_pages[url] = page
+  publish_sessions()
+  poll_native(cx)
+  native_tick(cx)
+  poll_page(page)
+end
+
+-- Starts a session previewing `file` and shows its page: in `page`'s pane when given (a stopped
+-- preview starting again), else beside `target`.
+start_preview = function(cx, file, root, target, page)
+  local config = configuration(cx)
+  if not config then
+    return
+  end
+  local keep_alive = if type(config.compose_keep_alive_minutes) == "number"
+    then config.compose_keep_alive_minutes
+    else 10
+  local argv = {
+    path(config.compose or "../dist/elide-tern-compose"),
+    "open",
+    "--runtime",
+    runtime_path(config),
+    "--root",
+    root,
+    "--file",
+    file,
+    "--cache",
+    path(config.compose_cache or (tern.plugin.data .. "/compose-cache")),
+    "--keep-alive",
+    tostring(keep_alive),
+  }
+  if type(config.compose_java) == "string" and config.compose_java ~= "" then
+    local java = config.compose_java
+    table.insert(argv, "--java")
+    table.insert(argv, if string.find(java, "/") then path(java) else java)
+  end
+  if type(config.compose_komodo) == "string" and config.compose_komodo ~= "" then
+    table.insert(argv, "--komodo")
+    table.insert(argv, path(config.compose_komodo))
+  end
+  if not page then
+    cx:toast("info", "Starting Compose previews…")
+  end
+  -- The host half posts its dirty Elide editors once the session is listed; this half's
+  -- native editors follow through `poll_native`.
+  local ok, problem = pcall(function()
+    tern.process.run(argv, { cwd = root, stdin = '{"documents":[]}', timeout_ms = 30000 }, function(result, current)
+      if not current then
+        return
+      end
+      local decoded, response = pcall(tern.json.decode, result.stdout or "")
+      response = decoded and type(response) == "table" and response or {}
+      local url, session_root = live_url(response.url), links.absolute(response.root)
+      if not url or url ~= response.url or not session_root or not links.within(file, session_root) then
+        local message = type(response.error) == "string" and response.error ~= "" and response.error
+          or ("Preview helper failed (exit " .. tostring(result.status) .. ").")
+        current:toast("error", "Could not start Compose previews.", string.sub(message, 1, 8192))
+        if page then
+          watch_stopped(page)
+        end
+        return
+      end
+      if page then
+        if not current.session:pane(page.pane) then
+          loopback.request(url .. "close", "", 5000, function() end)
           return
         end
-        if err or (result and result.error) then
-          latest:toast("error", "Could not open live Compose preview.", tostring(err or result.error.message))
-        elseif live_closed[url] and result and result.ok then
-          live_closed[url] = nil
-          latest.browser:call({ op = "close", block = result.ok.block })
-        end
-      end)
+        live_pages[page.url] = nil
+        current.browser:call({ op = "goto", block = page.pane, url = themed(current, url) })
+        adopt(current, url, page.pane, session_root, file)
+        return
+      end
+      local owner = target and current.session:pane(target) and target or current.session:focused()
+      current.browser
+        :call({ op = "open", owner = owner, how = "beside", url = themed(current, url), profile = LIVE_PROFILE })
+        :next(function(opened, err, latest)
+          if not latest then
+            return
+          end
+          if err or not (opened and opened.ok) then
+            loopback.request(url .. "close", "", 5000, function() end)
+            latest:toast(
+              "error",
+              "Could not open Compose preview.",
+              tostring(err or (opened and opened.error and opened.error.message))
+            )
+            return
+          end
+          adopt(latest, url, opened.ok.block, session_root, file)
+        end)
+    end)
+  end)
+  if not ok then
+    cx:toast("error", "Could not start Compose previews.", tostring(problem))
+  end
+end
+
+-- The service stopped (Stop renderer, keep-alive expiry, a crash): the page says so and stays.
+local function page_stopped(page)
+  native_sessions[page.url] = nil
+  page.stopped = true
+  publish_sessions()
+  watch_stopped(page)
+end
+
+-- A stopped page's buttons ask through its URL fragment (`#start-<n>`, `#source-<n>`,
+-- `#close-<n>`, a fresh `n` per click), the service being gone; it is read every second until the
+-- pane closes or starts again.
+watch_stopped = function(page)
+  tern.timer(1000, function(cx)
+    if not cx or live_pages[page.url] ~= page then
+      return
+    end
+    if not cx.session:pane(page.pane) then
+      forget_page(page.url)
+      return
+    end
+    cx.browser:call({ op = "state", block = page.pane }):next(function(result, _, current)
+      if not current or live_pages[page.url] ~= page then
+        return
+      end
+      local fragment = result
+        and result.ok
+        and type(result.ok.url) == "string"
+        and string.match(result.ok.url, "#(%a+%-%d+)$")
+      local ask = fragment and fragment ~= page.fragment and string.match(fragment, "^%a+")
+      page.fragment = fragment or page.fragment
+      if ask == "start" and page.path then
+        start_preview(current, page.path, page.root, nil, page)
+        return
+      elseif ask == "close" then
+        close_page(current, page)
+        return
+      elseif ask == "source" and page.path then
+        current:open(source.file_url(page.path))
+      end
+      watch_stopped(page)
+    end)
   end)
 end
 
-local function hide_live(cx, url)
-  live_closed[url] = true
-  live_blocks(cx, url, function(current, found)
-    for _, block in found do
-      live_closed[url] = nil
-      current.browser:call({ op = "close", block = block })
+poll_page = function(page)
+  local url = page.url
+  loopback.request(url .. "pane?after=" .. tostring(page.asked), nil, 30000, function(status, body, cx, timed_out)
+    if live_pages[url] ~= page then
+      return
+    end
+    if not cx then
+      forget_page(url)
+      return
+    end
+    if not cx.session:pane(page.pane) then
+      close_page(cx, page)
+      return
+    end
+    local ok, value = pcall(tern.json.decode, body)
+    value = ok and type(value) == "table" and value or {}
+    if status == 200 then
+      if type(value.id) == "number" and value.id > page.asked then
+        page.asked = value.id
+        if value.action == "source" and page.path then
+          cx:open(source.file_url(page.path))
+        elseif value.action == "close" then
+          close_page(cx, page)
+          return
+        elseif value.action == "retarget" then
+          local file = links.absolute(value.file)
+          if file and links.within(file, page.root) and source.extension(file) == "kt" then
+            page.path = file
+          end
+        end
+      end
+      poll_page(page)
+    elseif
+      status == 410 and (value.ended == "retargeted" or value.ended == "page-closed" or value.ended == "closed")
+    then
+      -- Another preview of the workspace took the service, or the session was closed.
+      close_page(cx, page)
+    elseif status == 0 and timed_out then
+      poll_page(page)
+    else
+      page_stopped(page)
     end
   end)
 end
+
+-- A closed page ends its session at once, rather than after the page's reconnect grace.
+tern.on("pane_closed", function(ev, cx)
+  for _, page in live_pages do
+    if page.pane == ev.pane then
+      close_page(cx, page)
+    end
+  end
+end)
+
+-- A plugin reload forgets the pages this window carried (`window_start` does not run again):
+-- each load takes over those still open.
+tern.timer(0, function(cx)
+  if not cx then
+    return
+  end
+  this_window = cx:window_key()
+  publish_sessions()
+  cx.browser:call({ op = "blocks" }):next(function(result, err, current)
+    if not current or err or not (result and result.ok and type(result.ok.blocks) == "table") then
+      return
+    end
+    for _, block in result.ok.blocks do
+      local url = type(block) == "table" and live_url(block.url)
+      if url and type(block.block) == "number" and not live_pages[url] then
+        loopback.request(url .. "info", nil, 5000, function(status, body, latest)
+          local decoded, info = pcall(tern.json.decode, body)
+          local root = status == 200 and decoded and type(info) == "table" and links.absolute(info.root)
+          if
+            latest
+            and root
+            and not string.find(root, "%c")
+            and latest.session:pane(block.block)
+            and not live_pages[url]
+          then
+            adopt(latest, url, block.block, root, links.absolute(info.file))
+          end
+        end)
+      end
+    end
+  end)
+end)
 
 -- `elide://` links (contract in docs/architecture.md). Every elide:// link is claimed, so a
 -- rejected one is dropped with a toast instead of reaching the system's URL handlers.
 tern.route.link(function(request, cx)
   if string.lower(string.sub(request.url, 1, 8)) ~= "elide://" then
     return nil
-  end
-  local pane, port, token, verb = string.match(request.url, "^elide://compose%-live/(%d+)/(%d+)/(%x+)(/?%a*)$")
-  if port and #token == 64 and tonumber(port) >= 1 and tonumber(port) <= 65535 and (verb == "" or verb == "/close") then
-    local url = "http://127.0.0.1:" .. port .. "/" .. token .. "/"
-    if verb == "/close" then
-      hide_live(cx, url)
-      native_sessions[url] = nil
-    elseif local_host(cx) then
-      -- The link names its Compose pane: a block's link reports the focused pane instead.
-      local owner = cx.session:pane(tonumber(pane))
-      if owner and owner.kind == "plugin" and owner.block == "elide.compose" then
-        show_live(cx, owner.pane, url)
-        -- The session's workspace bounds the native editors posted to it.
-        loopback.request(url .. "info", nil, 5000, function(status, body, current)
-          local ok, info = pcall(tern.json.decode, body)
-          local root = status == 200 and ok and type(info) == "table" and links.absolute(info.root)
-          if not current or not root or string.find(root, "%c") then
-            return
-          end
-          native_sessions[url] = { url = url, pane = owner.pane, root = root }
-          poll_native(current)
-          native_tick(current)
-        end)
-      end
-    end
-    return { handled = true }
   end
   local target = links.parse(request.url)
   local problem

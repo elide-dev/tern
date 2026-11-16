@@ -1,9 +1,9 @@
 import { runDisplay } from "./display";
 import { EmulatorDevice } from "./emulator";
-import { emulatorEndpoint } from "./grpc";
+import { advertisements, emulatorEndpoint } from "./grpc";
 import { MirroredDevice } from "./mirror";
 import { errorMessage } from "./process";
-import { createConfigured, projectInfo, ProjectChoiceError, resolveProject, resolveSdk } from "./project";
+import { createConfigured, NotAndroidError, projectInfo, ProjectChoiceError, resolveProject, resolveSdk } from "./project";
 import { AndroidSdk, validateName } from "./sdk";
 
 const USAGE = `Usage: elide-tern-android COMMAND [OPTIONS]
@@ -13,11 +13,13 @@ Commands:
   images     List installed system-image package IDs (no downloads)
   profiles   List hardware profile IDs and names
   create     Create a new AVD; never overwrite an existing AVD
-  start      Start an existing AVD without an emulator window
+  start      Start an existing AVD without an emulator window (with --held, return as soon as
+             its emulator holds the AVD, before adb lists it; Elide's --emulator adopts it)
   stop       Stop only the selected emulator
   delete     Delete a stopped AVD (requires --yes)
   display    Show and control a running emulator or attached device in this terminal until closed
              (with --start, start the AVD first, showing progress)
+  wait       Wait until a device finished booting (--name: until its emulator attaches first)
 
 Options:
   --json              Print one JSON result object (errors also on stderr)
@@ -29,6 +31,7 @@ Options:
   --device PROFILE    Hardware profile ID (create; list with profiles)
   --serial SERIAL     Exact emulator-PORT to stop; emulator or device serial to display
   --start             display: start the --name AVD unless it runs, showing progress
+  --held              start: return once the emulator holds the AVD, without waiting for adb
   --yes               Confirm deletion; never accepts SDK licenses
   --help              Show this help
 
@@ -45,17 +48,17 @@ const EMULATOR = /^emulator-\d+$/;
 /** adb serials: USB serial numbers, HOST:PORT and mDNS service names. */
 const SERIAL = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 
-type Command = "list" | "images" | "profiles" | "create" | "start" | "stop" | "delete" | "display";
+type Command = "list" | "images" | "profiles" | "create" | "start" | "stop" | "delete" | "display" | "wait";
 type Args = {
-  command: Command; json: boolean; yes: boolean; start: boolean;
+  command: Command; json: boolean; yes: boolean; start: boolean; held: boolean;
   sdk?: string; root?: string; runtime?: string; name?: string; image?: string; device?: string; serial?: string;
 };
 
 function parseArgs(argv: string[]): Args {
-  const commands: Record<string, true> = { list: true, images: true, profiles: true, create: true, start: true, stop: true, delete: true, display: true };
+  const commands: Record<string, true> = { list: true, images: true, profiles: true, create: true, start: true, stop: true, delete: true, display: true, wait: true };
   const command = argv[0];
   if (!command || !Object.hasOwn(commands, command)) throw new Error(`Expected a command.\n${USAGE}`);
-  const args: Args = { command: command as Command, json: false, yes: false, start: false };
+  const args: Args = { command: command as Command, json: false, yes: false, start: false, held: false };
   const seen = new Set<string>();
   const strings: Record<string, true> = { sdk: true, root: true, runtime: true, name: true, image: true, device: true, serial: true };
   for (let i = 1; i < argv.length; i++) {
@@ -63,7 +66,7 @@ function parseArgs(argv: string[]): Args {
     const key = flag.slice(2);
     if (!flag.startsWith("--") || seen.has(key)) throw new Error(`Invalid or repeated argument ${flag}. Use --help.`);
     seen.add(key);
-    if (key === "json" || key === "yes" || key === "start") args[key] = true;
+    if (key === "json" || key === "yes" || key === "start" || key === "held") args[key] = true;
     else if (Object.hasOwn(strings, key)) {
       const value = argv[++i];
       if (!value || value.startsWith("--")) throw new Error(`Missing value for ${flag}.`);
@@ -73,13 +76,14 @@ function parseArgs(argv: string[]): Args {
   const only = (key: string, allowed: string[]) => {
     if (seen.has(key) && !allowed.includes(command)) throw new Error(`--${key} is only valid for ${allowed.join(" or ")}.`);
   };
-  only("name", ["create", "start", "stop", "delete", "display"]);
+  only("name", ["create", "start", "stop", "delete", "display", "wait"]);
   only("image", ["create"]);
   only("device", ["create"]);
-  only("serial", ["stop", "display"]);
+  only("serial", ["stop", "display", "wait"]);
   only("yes", ["delete"]);
   only("start", ["display"]);
-  only("json", ["list", "images", "profiles", "create", "start", "stop", "delete"]);
+  only("held", ["start"]);
+  only("json", ["list", "images", "profiles", "create", "start", "stop", "delete", "wait"]);
   if (args.runtime && !args.root) throw new Error("--runtime is only needed with --root; omit it for standalone commands.");
   if (args.command === "display" && args.start) {
     if (!args.name || args.serial) throw new Error("display --start requires --name and takes no --serial.");
@@ -88,9 +92,11 @@ function parseArgs(argv: string[]): Args {
     if (!args.serial && !args.name) throw new Error("display requires --serial or --name.");
     if (args.sdk && (args.name || EMULATOR.test(args.serial!))) throw new Error("--sdk applies only to a physical device's --serial or with --start; emulators are found by their own advertisement.");
   }
+  if (args.command === "wait" && args.name && args.serial) throw new Error("wait takes --name or --serial, not both.");
   if (args.name) validateName(args.name);
-  if (args.serial && !(command === "display" ? SERIAL : EMULATOR).test(args.serial)) {
-    throw new Error(command === "display" ? `Invalid device serial ${args.serial}.` : "--serial must be emulator-PORT, never a physical device serial.");
+  const anySerial = command === "display" || command === "wait";
+  if (args.serial && !(anySerial ? SERIAL : EMULATOR).test(args.serial)) {
+    throw new Error(anySerial ? `Invalid device serial ${args.serial}.` : "--serial must be emulator-PORT, never a physical device serial.");
   }
   if (command === "delete" && !args.yes) throw new Error("Deletion requires --yes. This permanently deletes the selected AVD and its data.");
   return args;
@@ -130,7 +136,11 @@ async function main(args: Args): Promise<void> {
   switch (args.command) {
     case "list": {
       const snapshot = await sdk.snapshot();
-      result = { sdk: root, avds: snapshot.avds, devices: snapshot.devices, ...(project ? { project: projectInfo(project) } : {}), ...(snapshot.warnings.length ? { warnings: snapshot.warnings } : {}) };
+      const ads = await advertisements();
+      const avds = snapshot.avds.map(avd => avd.serial
+        ? { ...avd, embeddable: ads.some(ad => ad.serial === avd.serial && ad.port !== undefined && ad.token !== undefined) }
+        : avd);
+      result = { sdk: root, avds, devices: snapshot.devices, ...(project ? { project: projectInfo(project) } : {}), ...(snapshot.warnings.length ? { warnings: snapshot.warnings } : {}) };
       break;
     }
     case "images": result = { images: await sdk.images() }; break;
@@ -151,7 +161,8 @@ async function main(args: Args): Promise<void> {
     }
     case "start": {
       const avd = selectedName();
-      result = { message: `${avd} is running.`, name: avd, ...await sdk.start(avd) };
+      const started = await sdk.start(avd, undefined, args.held);
+      result = { message: started.serial ? `${avd} is running.` : `${avd} is starting.`, name: avd, ...started };
       break;
     }
     case "stop": {
@@ -163,6 +174,11 @@ async function main(args: Args): Promise<void> {
       const avd = selectedName();
       await sdk.delete(avd);
       result = { message: `Deleted ${avd}.`, name: avd };
+      break;
+    }
+    case "wait": {
+      const booted = await sdk.waitBooted(args.serial ? { serial: args.serial } : { name: selectedName() });
+      result = { message: `${booted.name ?? booted.serial} is ready.`, ...booted };
       break;
     }
   }
@@ -178,6 +194,6 @@ try {
 } catch (error) {
   const message = errorMessage(error);
   console.error(message);
-  if (argv.includes("--json")) console.log(JSON.stringify({ error: message, ...(error instanceof ProjectChoiceError ? { projects: error.projects } : {}) }));
+  if (argv.includes("--json")) console.log(JSON.stringify({ error: message, ...(error instanceof ProjectChoiceError ? { projects: error.projects } : {}), ...(error instanceof NotAndroidError ? { code: "not-android" } : {}) }));
   process.exitCode = 1;
 }

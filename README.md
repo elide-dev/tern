@@ -118,13 +118,13 @@ and [upstream provenance](third_party/README.md).
 ### Compose previews
 
 Open a saved Kotlin `.kt` file and choose **Open Compose preview**, or click **Preview**
-in the project workspace toolbar. A live page opens in the preview pane and renders the file's
-`@Preview`, multipreview, member-function and `@PreviewParameter` cards; Tern's browser toolbar
-stays hidden. Every card runs its composition: click to focus a card, drag or scroll to
-interact, and type when the card reports keyboard support. Escape releases input. Wheel input is
-translated to touch drags for the Android layoutlib host. The page's toolbar holds icon buttons,
-named in their tooltips: **Refresh previews**, **Stop renderer**, **Open source** and
-**Close preview**.
+in the project workspace toolbar. The preview is one pane: a live page that shows the renderer's
+startup, then the file's `@Preview`, multipreview, member-function and `@PreviewParameter`
+cards; Tern's browser toolbar stays hidden. Every card runs its composition: click to focus a
+card, drag or scroll to interact, and type when the card reports keyboard support. Escape
+releases input. Wheel input is translated to touch drags for the Android layoutlib host. The
+page's toolbar holds icon buttons, named in their tooltips: **Refresh previews**, **Stop
+renderer**, **Open source** and **Close preview**.
 
 Opening a preview resolves the enclosing Elide workspace and selects the nearest Android APK
 consuming that source set. Cards from the last build appear at once while `elide build`
@@ -140,9 +140,9 @@ One preview runs per workspace: previewing another file of the workspace shows i
 running preview's pane. The workspace's preview service (the Komodo language server, the
 compiler and the hosted cards) stays warm for 10 minutes after its pane closes, so the next
 preview paints at once; it starts nothing before the first preview. **Stop renderer** stops it
-at once and leaves the pane with **Start previews**. Closing the page closes its pane after a
-five-second reload grace period. Plugin reload ends the session (the service stays warm) and
-never automatically executes previews.
+at once; the pane stays, and its first button becomes **Start previews**. Closing the pane ends
+its session at once. Plugin reload ends the session (the service stays warm) and never
+automatically executes previews.
 
 Requires an Android-capable Elide runtime, the project's Android SDK/dependencies, a JDK 17+
 and a compatible Komodo distribution with Compose compiler plugins; an unavailable or
@@ -253,6 +253,7 @@ dist/elide-tern-android profiles
 dist/elide-tern-android create --name demo \
   --image 'system-images;android-36;default;arm64-v8a' --device pixel_6
 dist/elide-tern-android start --name demo              # no OS window
+dist/elide-tern-android wait --name demo               # until it finished booting
 dist/elide-tern-android display --name demo            # in a kitty-graphics terminal
 dist/elide-tern-android display --name demo --start    # start it there, showing progress
 dist/elide-tern-android display --serial R5CT1234ABC   # mirror a physical device
@@ -388,6 +389,29 @@ each location; `elide test --reporter=tap` shows a pass/fail summary with a tabl
 Both fall back to the raw output when nothing parses or the output is very large. After a
 typed `elide build`, the status bar reads, for example, "Build failed · 3 errors, 1 warning",
 and the workspace's Build button opens the full Build page when the runtime has one.
+
+The workspace's Run button opens the full Run page (`elide run --surface=screen`) at the bottom,
+beside the project terminal (beside the editor once that terminal is closed): status,
+the build's tasks and compile errors, the program's output (kept in
+`.dev/reports/run/tern/run-*/output.log`), **Stop** and **Run again**. The tasks sit above the
+output and fold when the program writes its first line; the log takes the height the pane has
+left and scrolls inside it, so the page itself stays put. An Android run's output, the app's
+logcat, is drawn as records: time, thread, level, tag and the message in the level's colour,
+wrapped to the pane; a narrow pane puts the message under its tag. Runtimes without the
+page print plain `elide run` output instead. A typed `elide run` stays plain, keeping stdin.
+In an Android project, Run first picks the device: the only attached one; with none, the
+project's AVD, started headless (created from the project when missing; the Run page opens
+as soon as the emulator holds the AVD, about a second, and Elide adopts it); with several, the project's AVD if it runs,
+else a picker. In a workspace with several Android projects, Run first asks which one to run,
+listing the last one chosen first. The Run page opens first and shows the build while the
+emulator boots; once the build is done, the emulator's device pane
+opens beside the editor, in the place of a Compose preview in that tab, and every open Compose
+preview closes. A failed build shows no device pane. The project's AVD deploys with
+`--emulator`, so Elide waits for the emulator Tern started; any other device with
+`--device=<serial>`. Elide never opens an emulator window of its own. Runtimes without the Run
+page show the device pane a few seconds after their output starts. Run
+`make running && make test-running RUNTIME=/path/to/elide` for the Run page in an isolated
+window.
 
 `elide://source`, `elide://debug`, `elide://tests` and `elide://help` links open a source line (in the
 [source editor](#source-editor) for project sources), the debugger, project test runs or a help topic. Elide prints them; any program can, as OSC 8 hyperlinks.

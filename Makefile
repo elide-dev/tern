@@ -106,6 +106,16 @@ building:
 test-building:
 	python3 -u tests/build.py --runtime "$(RUNTIME)"
 
+.PHONY: running test-running
+running:
+	$(MAKE) -C "$(ELIDE_SOURCE)" build-run-surface
+	mkdir -p dist
+	cp "$(ELIDE_SOURCE)/target/debug/examples/run_surface" dist/.elide-tern-run.new
+	mv dist/.elide-tern-run.new dist/elide-tern-run
+
+test-running:
+	python3 -u tests/run.py --runtime "$(RUNTIME)"
+
 .PHONY: help test-help
 help:
 	cd "$(ELIDE_SOURCE)" && PATH=/usr/bin:$$PATH cargo build -p cli --example help_surface

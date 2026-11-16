@@ -144,7 +144,10 @@ local function command_args(state, command, arguments)
   return argv
 end
 
-local function request(cx, state, command, arguments, callback)
+-- Runs the helper's `command`; `callback(current, value)` gets its JSON result. `failure(current,
+-- message, value)`, when given, replaces the default failure handling (toast, `state.failed`,
+-- the member picker); `value` is the helper's decoded error object, if any.
+local function request(cx, state, command, arguments, callback, failure)
   if state.busy or not alive(cx, state) then
     return
   end
@@ -152,7 +155,12 @@ local function request(cx, state, command, arguments, callback)
   state.busy = true
   state.message = nil
   render(cx, state)
-  local function failed(current, message)
+  local function failed(current, message, value)
+    if failure then
+      state.busy = false
+      failure(current, message, value)
+      return
+    end
     state.busy = false
     state.failed = command == "list" or state.failed
     state.message = message
@@ -169,6 +177,15 @@ local function request(cx, state, command, arguments, callback)
       end
       local decoded, value = pcall(tern.json.decode, result.stdout or "")
       if result.status ~= 0 or not decoded or type(value) ~= "table" then
+        if failure then
+          local message = decoded and type(value) == "table" and value.error
+          failed(
+            current,
+            tostring(message or result.stderr or "Android helper failed; rebuild or configure the helper."),
+            decoded and value or nil
+          )
+          return
+        end
         if command == "list" and decoded and type(value) == "table" and type(value.projects) == "table" then
           local items = {}
           for _, member in value.projects do
@@ -221,25 +238,50 @@ local function mutate(cx, state, command, arguments)
   end)
 end
 
--- The open Compose preview a device pane takes the place of, preferring one in the current tab.
-local function compose_pane(cx)
-  local focused = cx.session:focused()
-  local tab = focused and cx.session:tab_of(focused)
+-- Whether a pane is a Compose preview: the browser pane the window half opens on a session's
+-- page, which it recognizes with the predicate it registers through `M.previews`.
+local live_preview = function(_info): boolean
+  return false
+end
+
+function M.previews(predicate)
+  live_preview = predicate
+end
+
+local function is_preview(info)
+  return not info.parked and live_preview(info)
+end
+
+-- The open Compose preview a device pane takes the place of: one in `tab` when given, else
+-- preferably one in the current tab.
+local function compose_pane(cx, tab)
+  local only = tab ~= nil
+  if not only then
+    local focused = cx.session:focused()
+    tab = focused and cx.session:tab_of(focused)
+  end
   local found
   for _, info in cx.session:panes() do
-    if info.block == "elide.compose" and not info.parked then
+    if is_preview(info) then
       if info.tab == tab then
         return info.pane
       end
-      found = found or info.pane
+      if not only then
+        found = found or info.pane
+      end
     end
   end
   return found
 end
 
--- Whether a pane title is a display's for `device`: `NAME · SERIAL`, or the name (an emulator
--- starting) or serial (a device connecting) alone until the display knows both.
-local function shows(title, device)
+-- Whether a pane is a display's for `device`: a program pane titled `NAME · SERIAL`, or the
+-- name (an emulator starting) or serial (a device connecting) alone until the display knows both.
+-- Shells and the workspace toolbar are titled after their project, the default name of its AVD.
+local function shows(info, device)
+  if info.kind ~= "agent" then
+    return false
+  end
+  local title = info.title
   if device.physical then
     return device.serial ~= nil and (title == device.serial or title == (device.name or "") .. " · " .. device.serial)
   end
@@ -279,23 +321,33 @@ end
 -- Opens the device's pane: a terminal running the helper's display. A running AVD is shown over
 -- its emulator's gRPC endpoint, one with `start` is started there first, with its progress; a
 -- physical device (`physical`) is mirrored over adb. The pane takes the place of an open Compose
--- preview, else of `replace` (the manager it was chosen in); `replace` closes either way.
+-- preview, else of `replace` (the manager it was chosen in); `replace` closes either way. With
+-- `previews` it takes the place of one in `target`'s tab only, and every open Compose preview
+-- closes. Without a place it opens beside `target` when given, else beside the focused pane.
 -- `context` is the manager's project, whose SDK a start uses.
-local function show(cx, device, replace, context)
+local function show(cx, device, replace, context, target, previews)
   if not device.serial and not device.start then
     return
   end
   replace = replace and cx.session:pane(replace) and replace
-  local place = compose_pane(cx) or replace
+  local tab = previews and target and cx.session:pane(target) and cx.session:tab_of(target) or nil
+  local place = (if previews then (tab and compose_pane(cx, tab)) else compose_pane(cx)) or replace
   local closing = { place, replace ~= place and replace or nil }
+  if previews then
+    for _, info in cx.session:panes() do
+      if is_preview(info) then
+        table.insert(closing, info.pane)
+      end
+    end
+  end
   local known = displays[display_key(device)]
   local pane = known and known.pane
   local info = pane and cx.session:pane(pane)
-  if not info or info.exited ~= nil or not shows(info.title, device) then
+  if not info or info.exited ~= nil or not shows(info, device) then
     pane = nil
     -- A plugin reload forgets `displays`; the display titles its pane after the device.
     for _, candidate in cx.session:panes() do
-      if candidate.exited == nil and shows(candidate.title, device) then
+      if candidate.exited == nil and shows(candidate, device) then
         pane = candidate.pane
         break
       end
@@ -304,6 +356,9 @@ local function show(cx, device, replace, context)
   if pane then
     if place and place ~= pane then
       cx.layout:move(pane, place, "swap")
+    elseif target and cx.session:pane(target) and cx.session:tab_of(pane) ~= cx.session:tab_of(target) then
+      -- A device shown in another tab comes into the workspace.
+      cx.layout:move(pane, target, "right")
     end
     finish(cx, device, pane, closing)
     return
@@ -344,8 +399,8 @@ local function show(cx, device, replace, context)
     before[info.pane] = true
   end
   launching = { device = device, closing = closing, before = before, expires = os.clock() + 10 }
-  local target = place or cx.session:focused()
-  local pane = if target then cx.layout:split(target, "right", spec, { focus = true }) else cx.layout:new_tab(spec)
+  local beside = place or (target and cx.session:pane(target) and target) or cx.session:focused()
+  local pane = if beside then cx.layout:split(beside, "right", spec, { focus = true }) else cx.layout:new_tab(spec)
   if pane then
     launched(cx, pane)
   elseif launching then
@@ -485,6 +540,275 @@ local function local_host(cx)
   end
   cx:toast("info", "Android device management requires a local host.")
   return false
+end
+
+-- Whether the manifest at `root`, or a workspace member's it lists, mentions Android at all: a
+-- cheap filter, so projects without Android skip the helper (which evaluates the manifests with
+-- the runtime). A member pattern the filter cannot follow counts as Android; the helper decides.
+function M.declared(root)
+  local function manifest(directory)
+    local ok, text = pcall(tern.fs.read, directory .. "/elide.pkl", 1048576)
+    return ok and text or nil
+  end
+  local text = manifest(root)
+  if not text then
+    return false
+  end
+  if string.find(text, "android", 1, true) then
+    return true
+  end
+  local members = string.match(text, "members%s*{(.-)}")
+  for member in string.gmatch(members or "", '"([^"]+)"') do
+    if string.find(member, "[*?%[]") then
+      return true
+    end
+    local inner = manifest(if string.sub(member, 1, 1) == "/" then member else root .. "/" .. member)
+    if inner and string.find(inner, "android", 1, true) then
+      return true
+    end
+  end
+  return false
+end
+
+-- The Run whose device pane waits for its page's build: `{ plan, before = pane ids before the
+-- page's split, expires, page?, plain? }`, `plain` being when a page still without a surface
+-- counts as plain output.
+local following
+
+-- Opens the waiting Run's device pane in the place of a Compose preview in the editor's tab
+-- (`plan.beside`, set by the Run), closing every other one, else right of the editor; without
+-- one, right of the page.
+local function reveal(cx)
+  local follow = following
+  following = nil
+  local plan = follow.plan
+  if plan.display and cx.session:pane(follow.page) then
+    local beside = plan.beside and cx.session:pane(plan.beside) and plan.beside or follow.page
+    show(cx, plan.display, nil, plan.context, beside, true)
+  end
+end
+
+-- Prepares the device an Android project's Run deploys to, by Elide's own choice of device but
+-- inside Tern: one attached device (a running emulator or a phone) is used; none starts the
+-- project's AVD for the embedded emulator, creating it from the project when missing; several
+-- prefer the project's AVD, else ask. A workspace with several Android projects first asks which
+-- one runs, offering the last one chosen there first. Calls `done(cx, plan)` once: `{ root,
+-- args, display? }` (`root` is the chosen project's, `args` select the device for `elide run`,
+-- `display` is the device pane `M.follow` opens once the Run page's build is done), nil when the
+-- project is not Android, false when the run cannot go ahead (a toast says why, unless the user
+-- cancelled). Nothing waits for a boot: the project's AVD boots while the build runs, and
+-- `--emulator` makes Elide wait for it, so the Run page shows the build from its start.
+function M.run_device(cx, context, done)
+  if not local_host(cx) then
+    done(cx, false)
+    return
+  end
+  local state = { context = context }
+  local function fail(current, message)
+    if current then
+      current:toast("error", "Could not prepare an Android device.", message)
+      done(current, false)
+    end
+  end
+  -- Reports the plan for `device`; `start` starts the project's AVD first. The page opens as soon
+  -- as the emulator holds the AVD, before adb lists it: Elide's `--emulator` adopts an emulator
+  -- holding the AVD rather than booting its own, and the device pane, which finds it by name,
+  -- opens once the build is done.
+  local function embed(current, device, root, project_avd, start)
+    local plan = { root = root, context = state.context }
+    if start then
+      current:toast("info", "Starting " .. device.name .. "…")
+      request(current, state, "start", { "--name", device.name, "--held" }, function(fresh)
+        plan.args, plan.display = { "--emulator" }, { name = device.name, start = true }
+        done(fresh, plan)
+      end, fail)
+      return
+    end
+    local display = device.embeddable and { name = device.name, serial = device.serial } or nil
+    if not device.physical and device.name == project_avd then
+      plan.args, plan.display = { "--emulator" }, display
+      done(current, plan)
+      return
+    end
+    -- Elide installs on a `--device` as soon as adb lists it; another emulator may still boot.
+    request(current, state, "wait", { "--serial", device.serial }, function(fresh, value)
+      plan.args, plan.display = { "--device=" .. value.serial }, display
+      done(fresh, plan)
+    end, fail)
+  end
+  -- The project chosen last in this workspace, kept across reloads.
+  local remembered = "android:run-project:" .. context.root
+  local prepare
+  -- Asks which of the workspace's Android `projects` runs, the last one chosen first, then
+  -- prepares its device.
+  local function choose(current, projects)
+    local last = tern.kv.get(remembered)
+    local items = {}
+    for _, member in projects do
+      local path = member.root
+      if string.sub(path, 1, #context.root + 1) == context.root .. "/" then
+        path = string.sub(path, #context.root + 2)
+      end
+      -- The directory says nothing more when the project is named after it.
+      local detail = if path ~= member.name then path else nil
+      local item = { label = member.name, detail = detail, value = member.root, current = member.root == last }
+      table.insert(items, if item.current then 1 else #items + 1, item)
+    end
+    current
+      :pick({ placeholder = "Run which Android project?", icon = "smartphone", action = "run", items = items })
+      :next(function(item, err, fresh)
+        if not fresh then
+          return
+        end
+        if not item then
+          if err then
+            fresh:toast("error", err)
+          end
+          done(fresh, false)
+          return
+        end
+        tern.kv.set(remembered, item.value)
+        state.context = { root = item.value }
+        prepare(fresh)
+      end)
+  end
+  function prepare(from)
+    request(from, state, "list", {}, function(current, value)
+      local project = value.project
+      local candidates = {}
+      for _, avd in value.avds or {} do
+        if avd.serial then
+          table.insert(candidates, { name = avd.name, serial = avd.serial, embeddable = avd.embeddable == true })
+        end
+      end
+      for _, device in value.devices or {} do
+        if device.state == "device" then
+          table.insert(candidates, { name = device.name, serial = device.serial, physical = true })
+        end
+      end
+      if #candidates == 0 then
+        local exists = false
+        for _, avd in value.avds or {} do
+          exists = exists or avd.name == project.avd
+        end
+        if exists then
+          embed(current, { name = project.avd }, project.root, project.avd, true)
+        else
+          current:toast("info", "Creating " .. project.avd .. " from the project…")
+          request(current, state, "create", {}, function(fresh)
+            embed(fresh, { name = project.avd }, project.root, project.avd, true)
+          end, fail)
+        end
+        return
+      end
+      local chosen = #candidates == 1 and candidates[1] or nil
+      for _, candidate in candidates do
+        if not chosen and not candidate.physical and candidate.name == project.avd then
+          chosen = candidate
+        end
+      end
+      if chosen then
+        embed(current, chosen, project.root, project.avd, false)
+        return
+      end
+      local items = {}
+      for _, candidate in candidates do
+        local label = candidate.name and (candidate.name .. " · " .. candidate.serial) or candidate.serial
+        table.insert(items, { label = label, value = candidate.serial })
+      end
+      current
+        :pick({ placeholder = "Run " .. project.name .. " on", icon = "smartphone", items = items })
+        :next(function(item, err, fresh)
+          if not fresh then
+            return
+          end
+          for _, candidate in candidates do
+            if item and candidate.serial == item.value then
+              embed(fresh, candidate, project.root, project.avd, false)
+              return
+            end
+          end
+          if err then
+            fresh:toast("error", err)
+          end
+          done(fresh, false)
+        end)
+    end, function(current, message, value)
+      if not current then
+        return
+      end
+      if type(value) == "table" and value.code == "not-android" then
+        done(current, nil)
+      elseif type(value) == "table" and type(value.projects) == "table" and #value.projects > 0 then
+        choose(current, value.projects)
+      else
+        fail(current, message)
+      end
+    end)
+  end
+  prepare(cx)
+end
+
+-- Arms `plan`'s device pane before the Run page's split; `M.followed` (or the page's
+-- `pane_created`, when Tern aborted the hook at the split) starts watching the page.
+function M.follow(cx, plan)
+  local before = {}
+  for _, info in cx.session:panes() do
+    before[info.pane] = true
+  end
+  following = { plan = plan, before = before, expires = os.clock() + 30 }
+end
+
+-- Whether the Run page `pane` shows node `id` of its surface.
+local function shown(cx, pane, id)
+  return type(cx.session:surface(pane, { root = id, depth = 0 })) == "table"
+end
+
+-- Polls the waiting Run's page until its build is done: the Run page keys its bar `program` past
+-- a finished build, the program (an Android deploy) running. A page that shows a summary instead
+-- ended without one, and so did a pane that closed or exited; neither gets the device pane. A
+-- runtime without the page prints plain output, with nothing to wait for.
+local function watch(cx)
+  local follow = following
+  local info = cx.session:pane(follow.page)
+  if not info or info.exited ~= nil then
+    following = nil
+    return
+  end
+  local read = cx.session:read(follow.page, { lines = 1, max_chars = 1 })
+  if type(read) == "table" and read.surface then
+    if shown(cx, follow.page, "main.activity.program") then
+      reveal(cx)
+      return
+    elseif shown(cx, follow.page, "main.activity.summary") then
+      following = nil
+      return
+    end
+  elseif os.clock() >= follow.plain then
+    reveal(cx)
+    return
+  end
+  tern.timer(500, function(current)
+    if current and following == follow then
+      watch(current)
+    end
+  end)
+end
+
+-- Starts watching the Run page `pane` for the armed device pane. A nil `pane` (the page did not
+-- open) disarms it.
+function M.followed(cx, pane)
+  local follow = following
+  if not follow or follow.page or (pane and follow.before[pane]) then
+    return
+  end
+  if not pane or os.clock() >= follow.expires then
+    following = nil
+    return
+  end
+  -- The Run page opens its surface as it starts; a pane still without one is plain output.
+  follow.page, follow.plain = pane, os.clock() + 3
+  watch(cx)
 end
 
 function M.open(cx, context, target)
@@ -634,6 +958,7 @@ function M.install(config, path, runtime)
   end)
   tern.on("pane_created", function(event, cx)
     launched(cx, event.pane)
+    M.followed(cx, event.pane)
   end)
   tern.on("pane_closed", function(event, cx)
     if entries[event.pane] then
@@ -665,7 +990,7 @@ function M.install(config, path, runtime)
     -- A saved pane id this window now uses for something else is no device pane.
     for id, display in displays do
       local info = cx.session:pane(display.pane)
-      if info and not shows(info.title, display) then
+      if info and not shows(info, display) then
         displays[id] = nil
       end
     end
