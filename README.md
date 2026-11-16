@@ -28,9 +28,9 @@ checkout of `elide-dev/runtime`, so building needs access to that repository.
 Compose previews are hosted by the runtime (`elide tern compose`). To try an unreleased
 runtime, `make previewing` builds its development host from `../elide` into
 `dist/elide-tern-compose`; set `compose` in `plugin/config.json` to that path.
-`make android` bundles the same checkout's SDK/manifest utilities into
-`dist/elide-tern-android`, including its embedded emulator display. Releases also require
-this executable and `dist/elide-tern-android.LICENSE`.
+`make android` compiles the Android helper (`android/`, including its embedded emulator
+display) into `dist/elide-tern-android`; releases also require this executable.
+`make test-android-unit` runs its unit tests.
 
 ```sh
 make build

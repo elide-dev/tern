@@ -4,7 +4,7 @@ import {
   ANDROID_AVD_TASK, DEFAULT_AVD_NAME, MANIFEST_NAME, androidSdkRoot, buildTasksOf,
   compareElideVersions, decodeManifest, parseBuildInspect, parseElideVersion, projectName,
   resolveElideDistribution, unqualifiedTaskName, type Manifest,
-} from "@elide/ide-core";
+} from "./elide";
 import { executable, run } from "./process";
 
 export type Project = {

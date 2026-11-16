@@ -1,7 +1,6 @@
 ELIDE_SOURCE ?= ../elide
-ELIDE_VSCODE_SOURCE ?= ../elide-vscode
 
-.PHONY: build test fmt check types smoke link repl test-surface android test-android
+.PHONY: build test fmt check types smoke link repl test-surface android test-android test-android-unit
 build: android
 	cargo build --release -p elide-tern-broker
 	mkdir -p dist
@@ -10,7 +9,9 @@ build: android
 	cp target/release/elide-tern-worker dist/.elide-tern-worker.new
 	mv dist/.elide-tern-worker.new dist/elide-tern-worker
 android:
-	ELIDE_VSCODE_SOURCE="$(ELIDE_VSCODE_SOURCE)" bun scripts/build-android.ts
+	bun scripts/build-android.ts
+test-android-unit:
+	bun test tests/android-elide.test.ts
 test-android: android
 	python3 tests/android.py --image "$(ANDROID_IMAGE)" $(if $(ANDROID_SDK),--sdk "$(ANDROID_SDK)")
 .PHONY: previewing
