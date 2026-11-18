@@ -7,6 +7,7 @@ local M = {}
 local MAX_URL = 8192
 local MAX_NUMBER = 1000000000
 local MAX_TOPIC = 128
+local MAX_TARGET = 256
 -- The source block's overlays an `elide://source` link may open it in.
 local OVERLAYS = { none = true, coverage = true, debug = true, diagnostics = true }
 
@@ -16,6 +17,7 @@ local ACTIONS = {
   debug = { keys = { root = true, path = true, line = true }, required = { "root", "path" } },
   tests = { keys = { root = true }, required = { "root" } },
   help = { keys = { topic = true }, required = { "topic" } },
+  build = { keys = { root = true, target = true }, required = { "root", "target" } },
 }
 
 -- Decodes `%XX` escapes; nil for a malformed escape or a decoded control character.
@@ -79,7 +81,7 @@ local function number(value)
   return n
 end
 
--- Parses `elide://<action>?<query>` into `{ action, root?, path?, line?, col?, overlay?, topic? }`.
+-- Parses `elide://<action>?<query>` into `{ action, root?, path?, line?, col?, overlay?, topic?, target? }`.
 -- Returns nil for any other scheme, an unknown action, a malformed or duplicate query
 -- value, a non-absolute path, or a `path` outside the given `root`. Unknown keys are
 -- ignored so later contract versions can add some. When `root` is absent, the caller
@@ -128,6 +130,13 @@ function M.parse(url)
       return nil
     end
     result.topic = fields.topic
+  end
+  if fields.target ~= nil then
+    -- A build task: no whitespace, and no leading `-` the build would read as an option.
+    if #fields.target > MAX_TARGET or not string.find(fields.target, "^[^%s%-][^%s]*$") then
+      return nil
+    end
+    result.target = fields.target
   end
   if fields.overlay ~= nil then
     if not OVERLAYS[fields.overlay] then
