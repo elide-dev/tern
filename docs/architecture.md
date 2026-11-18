@@ -235,11 +235,22 @@ pane; touches map to the native portrait display through the frame's rotation. K
 hardware keys and `setPhysicalModel` rotations. An AVD without `hw.keyboard` has no guest
 keyboard device, so the view drops keys and says why; `create` enables the setting.
 
-`android/mirror.ts` mirrors any other serial over adb, installing nothing. `screenrecord
---output-format=frames` writes length-prefixed RGB888 frames (width, height, stride, depth
-header) when the screen changes, scaled on the device to the pane; it stops after its
-three-minute limit and is restarted. A once-a-second `dumpsys display` poll reads display 0's
-logical size and rotation and restarts the recording when the shape changes. Input runs as
+`android/mirror.ts` mirrors any other serial over adb, installing nothing. With `ffmpeg` on
+the host's PATH, `screenrecord --output-format=h264` streams from the device's hardware
+encoder, sized to the pane in steps of 8, and ffmpeg decodes it to RGB (no probing, one
+thread each side: a frame-threaded `rawvideo` encoder alone holds one frame back). ffmpeg's
+parser releases an access unit only when the next begins, and screenrecord sends one only on
+a screen change, so a 4 ms pause in the bytes ends the unit with an access unit delimiter; if
+the next bytes don't open a NAL unit, the pause split a unit and the recording restarts from a
+key frame. If the encoder rejects the size, the recording retries at screenrecord's own
+1280 fallback, then uses frames. Without ffmpeg, `--output-format=frames` writes
+length-prefixed RGB888 frames (width, height, stride, depth header): each is read back with
+`glReadPixels` and written raw, one at a time, so once screenrecord falls behind,
+SurfaceFlinger blocks on its BufferQueue and the device's own frame rate drops. Those frames
+are capped at 360k pixels and scaled up on the host, and the pane suggests installing ffmpeg.
+Either recording stops after its three-minute limit and is restarted. A once-a-second
+`dumpsys display` poll reads display 0's logical size and rotation and restarts the
+recording when the shape changes. Input runs as
 `input` commands in one `adb shell`, whose exit ends the view. Every command starts a process
 on the device, so a press becomes one `tap` or `swipe` on release; typed text is coalesced
 into `input text`; Android 13+ gets `keycombination` and `mouse scroll`. Rotation uses
