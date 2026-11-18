@@ -19,12 +19,15 @@ broker:
 android:
 	bun scripts/build-android.ts
 test-android-unit:
-	bun test tests/android-elide.test.ts tests/android-sdk.test.ts
+	bun test tests/android-elide.test.ts tests/android-sdk.test.ts tests/android-pair.test.ts
 test-android: android
 	python3 tests/android.py --image "$(ANDROID_IMAGE)" $(if $(ANDROID_SDK),--sdk "$(ANDROID_SDK)")
 .PHONY: test-android-run
 test-android-run: android
 	python3 -u tests/android_run.py --runtime "$(RUNTIME)" --project "$(ANDROID_PROJECT)"
+.PHONY: test-android-pair
+test-android-pair: android
+	python3 -u tests/android_pair.py
 .PHONY: previewing
 previewing:
 	$(MAKE) -C "$(ELIDE_SOURCE)" build-compose-preview

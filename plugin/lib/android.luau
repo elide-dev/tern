@@ -48,8 +48,101 @@ local DEVICE_STATES = {
   offline = "offline · reconnect it",
 }
 
+-- The QR code as rows of run-length `div`s (one per run of equal modules, sized by `data-w`),
+-- far below the canvas node cap; `tern.css` draws them black on white.
+local function qr_node(rows)
+  local lines = {}
+  for _, row in rows do
+    local runs = {}
+    local at = 1
+    while at <= #row do
+      local ink = string.sub(row, at, at)
+      local finish = at
+      while finish < #row and string.sub(row, finish + 1, finish + 1) == ink do
+        finish += 1
+      end
+      table.insert(
+        runs,
+        ui.el("div", {
+          role = ink == "1" and "android-qr-ink" or "android-qr-gap",
+          attrs = { ["data-w"] = tostring(finish - at + 1) },
+        })
+      )
+      at = finish + 1
+    end
+    table.insert(lines, ui.el("div", { role = "android-qr-row" }, runs))
+  end
+  return ui.el("div", { role = "android-qr", attrs = { ["aria-label"] = "Wi-Fi pairing QR code" } }, lines)
+end
+
+-- The Wi-Fi pairing view: a QR code to scan, and the devices showing a pairing code.
+local function render_pairing(cx, state)
+  local pairing = state.pairing
+  local view = {
+    ui.node("row", { role = "android-toolbar", gap = "xs" }, {
+      button("back", "Back to devices", "pair-back", state.busy),
+      ui.node("col", { grow = 1 }, { ui.el("strong", { role = "android-heading", text = "Pair device over Wi-Fi" }) }),
+    }),
+    ui.el("div", {
+      role = "android-context",
+      text = "The device (Android 11 or later) and this computer must be on the same Wi-Fi network. "
+        .. "On the device, open Settings › Developer options › Wireless debugging.",
+    }),
+  }
+  if pairing.error then
+    table.insert(view, ui.el("div", { role = "android-pair-failed", text = pairing.error }))
+  else
+    -- Local Network privacy keeps adb from discovering devices; pairing cannot work until it's fixed.
+    if pairing.blocked then
+      table.insert(view, ui.el("div", { role = "android-pair-blocked", text = pairing.blocked }))
+    end
+    table.insert(view, ui.el("strong", { role = "android-pair-title", text = "Pair with QR code" }))
+    table.insert(
+      view,
+      ui.el("div", {
+        role = "android-pair-steps",
+        text = "Choose Pair device with QR code on the device, then scan this code.",
+      })
+    )
+    if pairing.qr then
+      table.insert(view, qr_node(pairing.qr))
+    end
+    table.insert(
+      view,
+      ui.el("div", { role = pairing.failed and "android-pair-failed" or "android-pair-status", text = pairing.status })
+    )
+    table.insert(view, ui.el("strong", { role = "android-pair-title", text = "Pair with pairing code" }))
+    table.insert(
+      view,
+      ui.el("div", {
+        role = "android-pair-steps",
+        text = "Choose Pair device with pairing code on the device. It appears here while its code is showing.",
+      })
+    )
+    if #pairing.devices == 0 then
+      table.insert(view, ui.el("div", { role = "android-summary", text = "No device is showing a pairing code." }))
+    else
+      local rows = {}
+      for index, device in pairing.devices do
+        table.insert(
+          rows,
+          device_row("smartphone", "Device waiting to pair", device.name, device.address, false, {
+            button("key", "Pair with pairing code…", "paircode-" .. index, state.busy),
+          })
+        )
+      end
+      table.insert(view, ui.node("col", { gap = "sm" }, rows))
+    end
+  end
+  cx.canvas:set(state.pane, { view = ui.node("col", { role = "android-manager", gap = "md" }, view) })
+end
+
 local function render(cx, state)
   if not state.pane or not alive(cx, state) then
+    return
+  end
+  if state.pairing then
+    render_pairing(cx, state)
     return
   end
   local disabled = state.busy or state.failed
@@ -95,7 +188,7 @@ local function render(cx, state)
       virtual ..= ", " .. running .. " running"
     end
     local attached = #(state.devices or {})
-    local physical = attached == 0 and "Connect a phone with USB debugging on to show it here."
+    local physical = attached == 0 and "Connect a phone with USB debugging on, or pair one over Wi-Fi, to show it here."
       or (attached .. (attached == 1 and " physical device connected." or " physical devices connected."))
     summary = ui.el("div", { role = "android-summary", text = virtual .. ". " .. physical })
   end
@@ -111,6 +204,7 @@ local function render(cx, state)
     )
   end
   table.insert(controls, button("plus", "Create virtual device…", "create", disabled))
+  table.insert(controls, button("wifi", "Pair device over Wi-Fi…", "pair", disabled))
   table.insert(
     controls,
     button("refresh", state.sdk and ("Refresh · SDK " .. state.sdk) or "Refresh", "refresh", state.busy, state.busy)
@@ -134,12 +228,13 @@ local function render(cx, state)
   cx.canvas:set(state.pane, { view = ui.node("col", { role = "android-manager", gap = "md" }, view) })
 end
 
--- `state.sdk`, once a `list` named it, stands in for the project on `start` and `wait`: those
--- need only the SDK, and resolving the project again costs an `elide project export` per member.
+-- `state.sdk`, once a `list` named it, stands in for the project on `start`, `wait` and Wi-Fi
+-- pairing: those need only the SDK, and resolving the project again costs an `elide project
+-- export` per member.
 local function command_args(state, command, arguments)
   local config = configuration() or {}
   local argv = { plugin_path(config.android or "../dist/elide-tern-android"), command, "--json" }
-  local known = state.sdk and (command == "start" or command == "wait")
+  local known = state.sdk and (command == "start" or command == "wait" or command == "pairing" or command == "pair")
   if known then
     table.insert(argv, "--sdk")
     table.insert(argv, state.sdk)
@@ -250,6 +345,127 @@ local function mutate(cx, state, command, arguments)
     if state.pane then
       refresh(current, state)
     end
+  end)
+end
+
+-- Leaves the pairing view; the helper's QR session ends with it.
+local function stop_pairing(state)
+  local pairing = state.pairing
+  state.pairing = nil
+  if pairing and pairing.child then
+    pcall(function()
+      pairing.child:kill()
+    end)
+  end
+end
+
+-- Opens the pairing view, fed by the helper's `pairing` JSON lines. The view is not kept in kv:
+-- a reload returns to the list, and the helper ends when its stdin closes with the old VM.
+local function start_pairing(cx, state)
+  if state.pairing or not alive(cx, state) then
+    return
+  end
+  local pairing = { status = "Starting…", devices = {} }
+  state.pairing = pairing
+  local function current_view(current)
+    return current ~= nil and state.pairing == pairing and alive(current, state)
+  end
+  local ok, child = pcall(tern.process.spawn, command_args(state, "pairing"), {
+    stdout = function(line, current)
+      if not current_view(current) then
+        return
+      end
+      local decoded, value = pcall(tern.json.decode, line)
+      if not decoded or type(value) ~= "table" then
+        return
+      end
+      if value.error then
+        pairing.error = tostring(value.error)
+      elseif value.event == "ready" then
+        pairing.qr, pairing.status, pairing.failed = value.qr, "Waiting for the device to scan the code…", false
+      elseif value.event == "devices" then
+        pairing.devices = value.devices or {}
+      elseif value.event == "discovery" then
+        pairing.blocked = value.blocked and tostring(value.message) or nil
+      elseif value.event == "pairing" then
+        pairing.status, pairing.failed = "Pairing with " .. tostring(value.address) .. "…", false
+      elseif value.event == "paired" then
+        pairing.status = "Paired. Waiting for the device to connect…"
+      elseif value.event == "failed" then
+        pairing.status, pairing.failed = tostring(value.message), true
+      elseif value.event == "connected" then
+        stop_pairing(state)
+        current:toast("info", "Connected " .. tostring(value.name or value.serial) .. " over Wi-Fi.")
+        -- A request in flight refreshes the list when it ends.
+        if state.busy then
+          render(current, state)
+        else
+          refresh(current, state)
+        end
+        return
+      end
+      render(current, state)
+    end,
+    exit = function(result, current)
+      pairing.child = nil
+      if current_view(current) then
+        pairing.error = pairing.error
+          or (result.stderr ~= "" and result.stderr)
+          or "Wi-Fi pairing stopped unexpectedly."
+        render(current, state)
+      end
+    end,
+  })
+  if not ok then
+    state.pairing = nil
+    cx:toast("error", "Could not start Wi-Fi pairing.", tostring(child))
+    return
+  end
+  pairing.child = child
+  render(cx, state)
+end
+
+-- Pairs with a device that shows a pairing code: asks for its six digits.
+local function pair_with_code(cx, state, device)
+  cx:prompt({
+    placeholder = "Wi-Fi pairing code shown on " .. device.name .. " (6 digits)",
+    value = "",
+    icon = "key",
+    action = "pair",
+  }):next(function(code, err, current)
+    if not current then
+      return
+    end
+    if err then
+      current:toast("error", err)
+      return
+    end
+    if code == nil then
+      return
+    end
+    code = string.gsub(code, "%s", "")
+    if not string.match(code, "^%d%d%d%d%d%d$") then
+      current:toast("error", "The Wi-Fi pairing code is six digits.")
+      return
+    end
+    request(current, state, "pair", { "--address", device.address, "--code", code }, function(done, value)
+      done:toast("info", value.message or "Paired.")
+      if value.serial then
+        stop_pairing(state)
+        refresh(done, state)
+      elseif state.pairing then
+        state.pairing.status, state.pairing.failed = value.message, false
+        render(done, state)
+      end
+    end, function(done, message)
+      if done and alive(done, state) then
+        done:toast("error", message)
+        if state.pairing then
+          state.pairing.status, state.pairing.failed = message, true
+        end
+        render(done, state)
+      end
+    end)
   end)
 end
 
@@ -963,9 +1179,16 @@ end
 
 function M.install(config, path, runtime)
   configuration, plugin_path, runtime_path = config, path, runtime
-  tern.css(
-    "android-manager",
-    [[
+  -- QR modules are 6 px with a 4-module quiet zone, black on white in either theme: a scanner
+  -- needs dark on light.
+  local widths = {}
+  for modules = 1, 29 do
+    table.insert(
+      widths,
+      string.format('[data-role="android-qr-row"] > [data-w="%d"] { width: %dpx; }\n', modules, modules * 6)
+    )
+  end
+  tern.css("android-manager", [[
     [data-role="android-manager"] { padding: 16px 20px; overflow: auto; font-family: system-ui, sans-serif; max-width: 960px; }
     [data-role="android-toolbar"] { align-items: center; padding-bottom: 8px; border-bottom: 1px solid var(--l2); }
     [data-role="android-heading"] { font-size: 15px; font-weight: 600; }
@@ -978,8 +1201,14 @@ function M.install(config, path, runtime)
     [data-role="android-running"] { color: var(--ok); font-size: 12px; }
     [data-role="android-stopped"] { color: var(--t2); font-size: 12px; }
     [data-role="android-status"] { font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; }
-  ]]
-  )
+    [data-role="android-pair-title"] { font-size: 13px; font-weight: 600; padding-top: 4px; }
+    [data-role="android-pair-steps"], [data-role="android-pair-status"] { color: var(--t2); font-size: 12px; overflow-wrap: anywhere; }
+    [data-role="android-pair-failed"], [data-role="android-pair-blocked"] { color: var(--bad); font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; }
+    [data-role="android-qr"] { box-sizing: content-box; width: 174px; padding: 24px; background: #fff; border-radius: 6px; align-self: flex-start; flex: none; }
+    [data-role="android-qr-row"] { display: flex; height: 6px; }
+    [data-role="android-qr-row"] > * { flex: none; height: 6px; }
+    [data-role="android-qr-ink"] { background: #000; }
+  ]] .. table.concat(widths))
   tern.command({
     id = "android",
     title = "Show device manager",
@@ -1061,11 +1290,19 @@ function M.install(config, path, runtime)
         create(cx, state)
       elseif event.act == "configured" then
         mutate(cx, state, "create", {})
+      elseif event.act == "pair" then
+        start_pairing(cx, state)
+      elseif event.act == "pair-back" then
+        stop_pairing(state)
+        refresh(cx, state)
       else
         local command, index = string.match(event.act, "^(%a+)%-(%d+)$")
+        local waiting = command == "paircode" and state.pairing and state.pairing.devices[tonumber(index)]
         local device = command == "mirror" and state.devices and state.devices[tonumber(index)]
         local avd = index and state.avds and state.avds[tonumber(index)]
-        if device and device.state == "device" then
+        if waiting then
+          pair_with_code(cx, state, waiting)
+        elseif device and device.state == "device" then
           show(cx, { name = device.name, serial = device.serial, physical = true }, state.pane)
         elseif avd and (command == "start" or command == "stop" or command == "delete" or command == "show") then
           selected(cx, state, command, avd)
@@ -1080,6 +1317,7 @@ function M.install(config, path, runtime)
   end)
   tern.on("pane_closed", function(event, cx)
     if entries[event.pane] then
+      stop_pairing(entries[event.pane])
       entries[event.pane].closed = true
       entries[event.pane] = nil
     end

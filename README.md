@@ -208,6 +208,22 @@ project's configured device with Elide's `android-avd` target and configured set
 Custom creation selects an installed system image, hardware profile and name. Non-Android
 projects report a configuration error; use the standalone manager instead.
 
+The Wi-Fi button in the manager's header pairs a phone over Wi-Fi, as Android Studio's
+**Pair devices over Wi-Fi** does (Android 11 or later, on the same network as this computer;
+on the phone: Developer options › Wireless debugging). The view shows a QR code for **Pair
+device with QR code**; once the phone scanned it, the manager pairs and returns to the list
+as soon as the phone connects. Phones showing **Pair device with pairing code** are listed
+below it; their key button asks for the six digits. Paired phones connect through adb's mDNS
+discovery and join the list as physical devices, where **Show** mirrors them. Pairing needs
+Platform-Tools with mDNS (`adb mdns check`); **Back** returns to the list.
+
+On macOS, adb finds devices with multicast, which Local Network privacy allows only for
+apps granted it (Terminal by default). The adb server, shared by every tool, has the
+permission of the app that started it, so pairing from Tern or Android Studio works only when
+that app is on under System Settings › Privacy & Security › Local Network. When Bonjour sees
+a device waiting to pair that adb does not, the view says so; turn the app on and run
+`adb kill-server`.
+
 Requires a local Android SDK with Emulator, Platform-Tools, Command-line Tools and a
 JDK for `avdmanager`. Install system images with Android Studio or `sdkmanager` first:
 the helper does not install packages or accept licenses. SDK resolution follows Elide:
@@ -276,6 +292,8 @@ dist/elide-tern-android display --name demo --start    # start it there, showing
 dist/elide-tern-android display --serial R5CT1234ABC   # mirror a physical device
 dist/elide-tern-android stop --name demo               # or --serial emulator-5554
 dist/elide-tern-android delete --name demo --yes
+dist/elide-tern-android pairing                       # QR code and pairing-code devices, as JSON lines
+dist/elide-tern-android pair --address 192.168.1.23:37115 --code 123456
 dist/elide-tern-android create --root /path/to/android-project --runtime elide
 ```
 
@@ -291,6 +309,10 @@ With an installed, host-compatible image, run
 setting, overwrite and deletion protection, starts/stops/restarts it, draws one display frame
 over a pseudo-terminal, then deletes it. It also covers the persistent advisory lock
 Android leaves behind after a clean emulator exit.
+
+`make test-android-pair` checks Wi-Fi pairing with a fake adb in a real Tern window: the
+drawn QR code is decoded from the window's screenshot (macOS CoreImage, through `swift`),
+then both pairing modes run end to end.
 
 ### Debugging
 

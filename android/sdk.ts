@@ -62,7 +62,7 @@ export class AndroidSdk {
     return [...new Set(text.split(/\r?\n/).map(line => line.trim()).filter(line => /^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$/.test(line)))];
   }
 
-  private async attached(): Promise<AndroidDevice[]> {
+  async attached(): Promise<AndroidDevice[]> {
     return parseAdbDevices(await run(await this.tool("adb"), ["devices"], { env: this.env, timeout: 10_000 }));
   }
 
@@ -111,12 +111,15 @@ export class AndroidSdk {
   }
 
   private async physical(attached: AndroidDevice[]): Promise<Physical[]> {
+    return Promise.all(attached.filter(device => !device.emulator).map(device => this.describe(device)));
+  }
+
+  /** An attached device with its product name, read once the device accepts commands. */
+  async describe({ serial, state, ready }: AndroidDevice): Promise<Physical> {
+    if (!ready) return { serial, state };
     const adb = await this.tool("adb");
-    return Promise.all(attached.filter(device => !device.emulator).map(async ({ serial, state, ready }): Promise<Physical> => {
-      if (!ready) return { serial, state };
-      const name = productName((await run(adb, ["-s", serial, "shell", PRODUCT], { env: this.env, timeout: 5_000 }).catch(() => "")).split(/\r?\n/));
-      return { serial, state, ...(name ? { name } : {}) };
-    }));
+    const name = productName((await run(adb, ["-s", serial, "shell", PRODUCT], { env: this.env, timeout: 5_000 }).catch(() => "")).split(/\r?\n/));
+    return { serial, state, ...(name ? { name } : {}) };
   }
 
   async snapshot(): Promise<Snapshot> {
