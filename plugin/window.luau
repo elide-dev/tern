@@ -881,12 +881,7 @@ local function project_menu(context, cx)
     elseif current and item then
       if item.value == "test" then
         launch_job(current, "test", context.root, context.root)
-      elseif
-        item.value == "build"
-        or item.value == "run"
-        or item.value == "install"
-        or item.value == "toolchain"
-      then
+      elseif item.value == "build" or item.value == "run" or item.value == "install" or item.value == "toolchain" then
         project_action(current, context, item.value)
       elseif item.value == "debug" then
         launch_debug(current, context)
@@ -1011,7 +1006,11 @@ tern.command({
   end,
 })
 for _, action in
-  { { "build", "Build project", "wrench" }, { "run", "Run project", "run" }, { "toolchain", "Manage toolchains", "box" } }
+  {
+    { "build", "Build project", "wrench" },
+    { "run", "Run project", "run" },
+    { "toolchain", "Manage toolchains", "box" },
+  }
 do
   tern.command({
     id = action[1],
