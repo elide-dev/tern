@@ -133,6 +133,12 @@ local OUTCOMES = {
     interrupted = "Install interrupted",
     command = "plugin.elide.project",
   },
+  toolchain = {
+    ok = "Toolchains ready",
+    failed = "Toolchain install failed",
+    interrupted = "Toolchain install interrupted",
+    command = "plugin.elide.project",
+  },
 }
 
 -- The last outcome in `pane`, when it ran in project `root`: after a `cd` into another project

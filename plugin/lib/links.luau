@@ -18,6 +18,7 @@ local ACTIONS = {
   tests = { keys = { root = true }, required = { "root" } },
   help = { keys = { topic = true }, required = { "topic" } },
   build = { keys = { root = true, target = true }, required = { "root", "target" } },
+  toolchain = { keys = { root = true, tool = true }, required = { "root" } },
 }
 
 -- Decodes `%XX` escapes; nil for a malformed escape or a decoded control character.
@@ -81,7 +82,7 @@ local function number(value)
   return n
 end
 
--- Parses `elide://<action>?<query>` into `{ action, root?, path?, line?, col?, overlay?, topic?, target? }`.
+-- Parses `elide://<action>?<query>` into `{ action, root?, path?, line?, col?, overlay?, topic?, target?, tool? }`.
 -- Returns nil for any other scheme, an unknown action, a malformed or duplicate query
 -- value, a non-absolute path, or a `path` outside the given `root`. Unknown keys are
 -- ignored so later contract versions can add some. When `root` is absent, the caller
@@ -137,6 +138,13 @@ function M.parse(url)
       return nil
     end
     result.target = fields.target
+  end
+  if fields.tool ~= nil then
+    -- A declared tool name: no leading `-` the command would read as an option.
+    if #fields.tool > MAX_TARGET or not string.find(fields.tool, "^[%w][%w%._:/%-]*$") then
+      return nil
+    end
+    result.tool = fields.tool
   end
   if fields.overlay ~= nil then
     if not OVERLAYS[fields.overlay] then

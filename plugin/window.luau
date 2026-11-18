@@ -395,7 +395,7 @@ local function run_project(cx, context, target, opened, bottom)
   return false
 end
 
--- The page each project's Build, Run and Install opened from the project menu or the palette, by
+-- The page each project's Build, Run, Install and Toolchains opened from the project menu or the palette, by
 -- root and command (`true` while it opens): asking again focuses it while it is open, instead of
 -- starting a second, concurrent one.
 local action_panes = {}
@@ -857,6 +857,7 @@ local function project_menu(context, cx)
     { label = "Run project", value = "run", icon = "run" },
     { label = "Run tests", value = "test", icon = "play" },
     { label = "Install dependencies", value = "install", icon = "download" },
+    { label = "Manage toolchains", value = "toolchain", icon = "box" },
     { label = "Open debugger", value = "debug", icon = "bug" },
     { label = "Open Elide source…", value = "source", icon = "file" },
     { label = "Open Compose preview", value = "compose", icon = "eye" },
@@ -880,7 +881,7 @@ local function project_menu(context, cx)
     elseif current and item then
       if item.value == "test" then
         launch_job(current, "test", context.root, context.root)
-      elseif item.value == "build" or item.value == "run" or item.value == "install" then
+      elseif item.value == "build" or item.value == "run" or item.value == "install" or item.value == "toolchain" then
         project_action(current, context, item.value)
       elseif item.value == "debug" then
         launch_debug(current, context)
@@ -1004,7 +1005,13 @@ tern.command({
     end)
   end,
 })
-for _, action in { { "build", "Build project", "wrench" }, { "run", "Run project", "run" } } do
+for _, action in
+  {
+    { "build", "Build project", "wrench" },
+    { "run", "Run project", "run" },
+    { "toolchain", "Manage toolchains", "box" },
+  }
+do
   tern.command({
     id = action[1],
     title = action[2],
@@ -1079,7 +1086,7 @@ end
 -- is that command's. A directory listing and one bounded read: no process inside the 50 ms budget.
 local REPORT_BYTES = 8 * 1024 * 1024
 -- The report each kind of run writes.
-local REPORTS = { build = "diagnostics.json", install = "install.json" }
+local REPORTS = { build = "diagnostics.json", install = "install.json", toolchain = "toolchain.json" }
 local runs_before = {}
 
 local function report_runs(root, kind)
@@ -1161,6 +1168,19 @@ local function install_detail(report)
   return text
 end
 
+-- "3 tools, 1 installed" from a toolchain install's report, or nil.
+local function toolchain_detail(report)
+  local tools = type(report) == "table" and report.tools or nil
+  if type(tools) ~= "number" or tools <= 0 then
+    return nil
+  end
+  local text = tools .. " tool" .. (if tools == 1 then "" else "s")
+  if type(report.installed) == "number" and report.installed > 0 then
+    text ..= ", " .. report.installed .. " installed"
+  end
+  return text
+end
+
 tern.on("command_started", function(ev, cx)
   local command = shell.elide(ev.line)
   if not REPORTS[command] then
@@ -1180,6 +1200,10 @@ tern.on("command_finished", function(ev, cx)
     return
   end
   local report = if REPORTS[command] then fresh_report(ev.pane) else nil
+  -- Only a toolchain install writes a report: a listing, `which`, `env`, `exec` or the bare page leaves the bar alone.
+  if command == "toolchain" and type(report) ~= "table" then
+    return
+  end
   local status = report_status(report, ev.status, compound)
   if not status then
     if compound then
@@ -1194,8 +1218,8 @@ tern.on("command_finished", function(ev, cx)
   local detail, success = nil, nil
   if command == "build" then
     detail = build_counts(report)
-  elseif command == "install" then
-    detail = install_detail(report)
+  elseif command == "install" or command == "toolchain" then
+    detail = if command == "install" then install_detail(report) else toolchain_detail(report)
     -- The page says "Up to date" when nothing needed fetching; so does the bar.
     if type(report) == "table" and report.outcome == "up-to-date" then
       success = "Up to date"
@@ -1705,6 +1729,18 @@ tern.route.link(function(request, cx)
     -- A task row of `elide build --inspect`: that task's Build page, right of the link's pane.
     with_root(cx, target.root, function(current)
       runtime_action(current, { root = target.root }, "build", request.pane, nil, { args = { target.target } })
+    end)
+  elseif target.action == "toolchain" then
+    -- "Manage" or a tool's install from `elide toolchain list`: the Toolchains page, right of the link's pane.
+    with_root(cx, target.root, function(current)
+      runtime_action(
+        current,
+        { root = target.root },
+        "toolchain",
+        request.pane,
+        nil,
+        { args = if target.tool then { "install", target.tool } else nil }
+      )
     end)
   end
   return { handled = true }
