@@ -242,7 +242,10 @@ pointer, because Tern rounds the cell size it reports.
 **Show** on a physical device (connected over USB or Wi-Fi, with USB debugging allowed)
 mirrors it in the same kind of pane, over adb alone: nothing is installed on the device.
 Frames come from `screenrecord`, sized to the pane and sent only when the screen changes;
-the pane follows the device's rotation. Each touch is sent when the button is released: a
+the pane follows the device's rotation. With `ffmpeg` on PATH they're H.264 from the device's
+encoder, decoded on the host. Without it, screenrecord reads back raw frames, which slows the
+device while its screen moves, so they're smaller and look softer, and the pane suggests
+installing ffmpeg. Each touch is sent when the button is released: a
 click is a tap, a held click a long press, a drag one swipe from its start to its end, so the
 device shows the drag only afterwards. Alt+drag sends one finger. Typing covers ASCII text
 and named keys; modifier shortcuts and the wheel need Android 13 or later (older releases
