@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""Fake adb for tests/android_pair.py: devices, mdns check/services, pair, and a product-name shell.
+
+State lives in state.json in the parent of this file's directory; every argv is appended to log.jsonl there.
+"""
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+HOME = Path(__file__).resolve().parents[1]
+STATE = HOME / "state.json"
+
+
+def load():
+    state = json.loads(STATE.read_text()) if STATE.exists() else {}
+    state.setdefault("mdns", "mdns daemon version [fake]")
+    state.setdefault("services", [])
+    state.setdefault("secrets", {})
+    state.setdefault("devices", [])
+    return state
+
+
+def save(state):
+    descriptor, temporary = tempfile.mkstemp(dir=HOME, prefix=".state-")
+    with os.fdopen(descriptor, "w") as file:
+        json.dump(state, file)
+    os.replace(temporary, STATE)
+
+
+def main(args):
+    with open(HOME / "log.jsonl", "a") as log:
+        log.write(json.dumps(args) + "\n")
+    state = load()
+    if args == ["devices"]:
+        print("List of devices attached")
+        for serial in state["devices"]:
+            print(f"{serial}\tdevice")
+        print()
+        return 0
+    if args == ["mdns", "check"]:
+        print(state["mdns"])
+        return 0
+    if args == ["mdns", "services"]:
+        print("List of discovered mdns services")
+        for service in state["services"]:
+            print(f"{service['name']}\t{service['type']}\t{service['address']}")
+        return 0
+    if len(args) == 3 and args[0] == "pair":
+        address, secret = args[1], args[2]
+        if state["secrets"].get(address) != secret:
+            print("Failed: Wrong password or connection was dropped.")
+            return 0
+        name = next((service["name"] for service in state["services"] if service["address"] == address), "")
+        guid = name if name.startswith("adb-") else "adb-FAKE0001-AbCdEf"
+        serial = f"{guid}._adb-tls-connect._tcp"
+        if serial not in state["devices"]:
+            state["devices"].append(serial)
+        save(state)
+        print(f"Successfully paired to {address} [guid={guid}]")
+        return 0
+    if len(args) >= 3 and args[0] == "-s" and args[2] == "shell":
+        sys.stdout.write("Google\nPixel 8\n")
+        return 0
+    print(f"fake adb: unsupported {args}", file=sys.stderr)
+    return 1
+
+
+sys.exit(main(sys.argv[1:]))

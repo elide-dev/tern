@@ -2,6 +2,7 @@ import { runDisplay } from "./display";
 import { EmulatorDevice } from "./emulator";
 import { advertisements, emulatorEndpoint } from "./grpc";
 import { MirroredDevice } from "./mirror";
+import { pairWithCode, runPairing } from "./pair";
 import { errorMessage } from "./process";
 import { createConfigured, NotAndroidError, projectInfo, ProjectChoiceError, resolveProject, resolveSdk } from "./project";
 import { AndroidSdk, announceStart, validateName } from "./sdk";
@@ -20,6 +21,9 @@ Commands:
   display    Show and control a running emulator or attached device in this terminal until closed
              (with --start, start the AVD first, showing progress)
   wait       Wait until a device finished booting (--name: until its emulator attaches first)
+  pairing    Pair a device over Wi-Fi: print a QR code and the devices showing a pairing code as
+             JSON lines, until a device that scanned the code connects or standard input closes
+  pair       Pair with a device that shows a Wi-Fi pairing code (--address, --code)
 
 Options:
   --json              Print one JSON result object (errors also on stderr)
@@ -34,6 +38,8 @@ Options:
   --held              start: return once the emulator holds the AVD, without waiting for adb
   --announce DIR      start: leave a marker in DIR naming the AVD and this Tern pane (TERN_PANE),
                       so the Elide plugin opens the device pane beside it
+  --address HOST:PORT  pair: the address the device shows under its pairing code
+  --code CODE          pair: the six-digit Wi-Fi pairing code
   --yes               Confirm deletion; never accepts SDK licenses
   --help              Show this help
 
@@ -50,19 +56,20 @@ const EMULATOR = /^emulator-\d+$/;
 /** adb serials: USB serial numbers, HOST:PORT and mDNS service names. */
 const SERIAL = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 
-type Command = "list" | "images" | "profiles" | "create" | "start" | "stop" | "delete" | "display" | "wait";
+type Command = "list" | "images" | "profiles" | "create" | "start" | "stop" | "delete" | "display" | "wait" | "pairing" | "pair";
 type Args = {
   command: Command; json: boolean; yes: boolean; start: boolean; held: boolean;
   sdk?: string; root?: string; runtime?: string; name?: string; image?: string; device?: string; serial?: string; announce?: string;
+  address?: string; code?: string;
 };
 
 function parseArgs(argv: string[]): Args {
-  const commands: Record<string, true> = { list: true, images: true, profiles: true, create: true, start: true, stop: true, delete: true, display: true, wait: true };
+  const commands: Record<string, true> = { list: true, images: true, profiles: true, create: true, start: true, stop: true, delete: true, display: true, wait: true, pairing: true, pair: true };
   const command = argv[0];
   if (!command || !Object.hasOwn(commands, command)) throw new Error(`Expected a command.\n${USAGE}`);
   const args: Args = { command: command as Command, json: false, yes: false, start: false, held: false };
   const seen = new Set<string>();
-  const strings: Record<string, true> = { sdk: true, root: true, runtime: true, name: true, image: true, device: true, serial: true, announce: true };
+  const strings: Record<string, true> = { sdk: true, root: true, runtime: true, name: true, image: true, device: true, serial: true, announce: true, address: true, code: true };
   for (let i = 1; i < argv.length; i++) {
     const flag = argv[i]!;
     const key = flag.slice(2);
@@ -86,7 +93,9 @@ function parseArgs(argv: string[]): Args {
   only("start", ["display"]);
   only("held", ["start"]);
   only("announce", ["start"]);
-  only("json", ["list", "images", "profiles", "create", "start", "stop", "delete", "wait"]);
+  only("address", ["pair"]);
+  only("code", ["pair"]);
+  only("json", ["list", "images", "profiles", "create", "start", "stop", "delete", "wait", "pairing", "pair"]);
   if (args.runtime && !args.root) throw new Error("--runtime is only needed with --root; omit it for standalone commands.");
   if (args.command === "display" && args.start) {
     if (!args.name || args.serial) throw new Error("display --start requires --name and takes no --serial.");
@@ -96,6 +105,12 @@ function parseArgs(argv: string[]): Args {
     if (args.sdk && (args.name || EMULATOR.test(args.serial!))) throw new Error("--sdk applies only to a physical device's --serial or with --start; emulators are found by their own advertisement.");
   }
   if (args.command === "wait" && args.name && args.serial) throw new Error("wait takes --name or --serial, not both.");
+  if (command === "pair") {
+    if (!args.address || !args.code) throw new Error("pair requires --address HOST:PORT and --code CODE.");
+    // The first character keeps adb from reading the address as an option.
+    if (!/^[A-Za-z0-9\[]\S*:\d{1,5}$/.test(args.address)) throw new Error(`Invalid pairing address ${args.address}; expected HOST:PORT.`);
+    if (!/^\d{6}$/.test(args.code)) throw new Error("The Wi-Fi pairing code is six digits.");
+  }
   if (args.name) validateName(args.name);
   const anySerial = command === "display" || command === "wait";
   if (args.serial && !(anySerial ? SERIAL : EMULATOR).test(args.serial)) {
@@ -120,9 +135,9 @@ async function main(args: Args): Promise<void> {
     } else if (name || EMULATOR.test(serial!)) {
       await runDisplay(name ?? serial!, async () => new EmulatorDevice(await emulatorEndpoint(serial, name)));
     } else {
-      await runDisplay(serial!, async () => {
+      await runDisplay(serial!, async (_progress, signal) => {
         const sdk = new AndroidSdk(resolveSdk(args.sdk));
-        return MirroredDevice.connect(await sdk.tool("adb"), serial!, sdk.env);
+        return MirroredDevice.connect(await sdk.tool("adb"), serial!, sdk.env, signal);
       });
     }
     return;
@@ -130,6 +145,19 @@ async function main(args: Args): Promise<void> {
   const project = args.root ? await resolveProject(args.root, args.runtime) : undefined;
   const root = resolveSdk(args.sdk, project);
   const sdk = new AndroidSdk(root);
+  if (args.command === "pairing") {
+    const closed = new AbortController();
+    for (const event of ["end", "close", "error"]) process.stdin.once(event, () => closed.abort());
+    // Tern ends the view's helper with SIGTERM; the pairing then stops its dns-sd browser before exiting.
+    for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.once(signal, () => closed.abort());
+    process.stdin.resume();
+    try {
+      await runPairing(sdk, event => console.log(JSON.stringify(event)), closed.signal);
+    } finally {
+      process.stdin.destroy(); // lets the process exit while the pipe is still open
+    }
+    return;
+  }
   const name = args.name ?? project?.avd;
   const selectedName = () => {
     if (!name) throw new Error(`Specify --name for ${args.command}, or --root for the project's configured AVD.`);
@@ -185,6 +213,7 @@ async function main(args: Args): Promise<void> {
       result = { message: `${booted.name ?? booted.serial} is ready.`, ...booted };
       break;
     }
+    case "pair": result = await pairWithCode(sdk, args.address!, args.code!); break;
   }
   if (args.json) console.log(JSON.stringify(result));
   else if (typeof result.message === "string") console.log(result.message);

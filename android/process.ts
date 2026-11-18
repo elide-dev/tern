@@ -21,10 +21,11 @@ export async function executable(value: string, label: string): Promise<string> 
   }
 }
 
-/** No shell; every finite child has a deadline and a bounded combined output capture. */
+/** No shell; every finite child has a deadline and a bounded combined output capture. An aborted `signal` kills it. */
 export function run(file: string, args: string[], options: {
-  cwd?: string; env?: NodeJS.ProcessEnv; input?: string; timeout?: number;
+  cwd?: string; env?: NodeJS.ProcessEnv; input?: string; timeout?: number; signal?: AbortSignal;
 } = {}): Promise<string> {
+  if (options.signal?.aborted) return Promise.reject(new Error(`${path.basename(file)} was cancelled.`));
   const { promise, resolve, reject } = Promise.withResolvers<string>();
   const child = spawn(file, args, {
     cwd: options.cwd, env: { ...process.env, NO_COLOR: "1", ...options.env },
@@ -40,6 +41,8 @@ export function run(file: string, args: string[], options: {
   };
   const timeout = options.timeout ?? 30_000;
   const timer = setTimeout(() => terminate(`${path.basename(file)} timed out after ${timeout / 1000}s.`), timeout);
+  const cancel = () => terminate(`${path.basename(file)} was cancelled.`);
+  options.signal?.addEventListener("abort", cancel, { once: true });
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
   const capture = (text: string, err: boolean) => {
@@ -52,9 +55,14 @@ export function run(file: string, args: string[], options: {
   child.stderr.on("data", text => capture(text, true));
   child.stdin.on("error", () => {}); // A command can finish without reading its input.
   child.stdin.end(options.input ?? "");
-  child.once("error", error => { clearTimeout(timer); reject(new Error(`Cannot run ${file}: ${errorMessage(error)}`)); });
+  child.once("error", error => {
+    clearTimeout(timer);
+    options.signal?.removeEventListener("abort", cancel);
+    reject(new Error(`Cannot run ${file}: ${errorMessage(error)}`));
+  });
   child.once("close", (code, signal) => {
     clearTimeout(timer);
+    options.signal?.removeEventListener("abort", cancel);
     const detail = (stderr.trim() || stdout.trim()).slice(-16_384);
     if (failure || code !== 0) {
       reject(new Error(`${failure?.message ?? `${path.basename(file)} failed (${signal ?? code}).`}${detail ? `\n${detail}` : ""}`));
