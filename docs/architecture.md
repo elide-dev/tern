@@ -255,6 +255,10 @@ recording when the shape changes. Input runs as
 on the device, so a press becomes one `tap` or `swipe` on release; typed text is coalesced
 into `input text`; Android 13+ gets `keycombination` and `mouse scroll`. Rotation uses
 `wm user-rotation lock`, else the `user_rotation` setting after auto-rotate is turned off.
+Any live child keeps the process, and with it the restored, blank pane, alive. So a restart or
+close kills ffmpeg with SIGKILL: waiting on an idle stream it ignores SIGTERM, its read
+restarting. Closing the view, also while it connects, kills the adb queries in flight and gives
+the input shell 500 ms to run what is queued before killing it.
 
 The plugin opens one display pane per device (`exec` of the helper), split beside the pane
 it replaces. `cx.layout:split` is synchronous, and the first pane a Tern process launches with

@@ -135,9 +135,9 @@ async function main(args: Args): Promise<void> {
     } else if (name || EMULATOR.test(serial!)) {
       await runDisplay(name ?? serial!, async () => new EmulatorDevice(await emulatorEndpoint(serial, name)));
     } else {
-      await runDisplay(serial!, async () => {
+      await runDisplay(serial!, async (_progress, signal) => {
         const sdk = new AndroidSdk(resolveSdk(args.sdk));
-        return MirroredDevice.connect(await sdk.tool("adb"), serial!, sdk.env);
+        return MirroredDevice.connect(await sdk.tool("adb"), serial!, sdk.env, signal);
       });
     }
     return;

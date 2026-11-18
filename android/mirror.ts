@@ -35,17 +35,19 @@ const FALLBACK_SIDE = 1280;
 const UNIT_GAP = 4;
 /** An access unit delimiter: makes ffmpeg's parser hand over the unit before it. */
 const DELIMITER = new Uint8Array([0, 0, 0, 1, 9, 0xf0]);
+/** How long (ms) a closed view lets the input shell run the commands still queued. */
+const INPUT_GRACE = 500;
 
 type Size = { width: number; height: number };
 
 type Screen = Size & { rotation: number };
 
-/** Logical (rotated) size and rotation of display 0. */
-async function readScreen(adb: string, serial: string, env: NodeJS.ProcessEnv): Promise<Screen> {
-  const viewport = await run(adb, ["-s", serial, "shell", "dumpsys display | grep -m1 'displayId=0.*logicalFrame'"], { env, timeout: 5_000 }).catch(() => "");
+/** Logical (rotated) size and rotation of display 0; an aborted `signal` ends the queries. */
+async function readScreen(adb: string, serial: string, env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<Screen> {
+  const viewport = await run(adb, ["-s", serial, "shell", "dumpsys display | grep -m1 'displayId=0.*logicalFrame'"], { env, timeout: 5_000, signal }).catch(() => "");
   const match = /orientation=(\d)[^}]*?logicalFrame=Rect\(\d+, \d+ - (\d+), (\d+)\)/.exec(viewport);
   if (match) return { rotation: Number(match[1]), width: Number(match[2]), height: Number(match[3]) };
-  const size = await run(adb, ["-s", serial, "shell", "wm size"], { env, timeout: 5_000 });
+  const size = await run(adb, ["-s", serial, "shell", "wm size"], { env, timeout: 5_000, signal });
   const found = /Override size: (\d+)x(\d+)/.exec(size) ?? /Physical size: (\d+)x(\d+)/.exec(size);
   if (!found) throw new Error(`Cannot read the display size of ${serial}.`);
   return { rotation: 0, width: Number(found[1]), height: Number(found[2]) };
@@ -106,7 +108,8 @@ export class MirroredDevice implements Device {
   private typed = "";
   private typing?: Timer;
   private wheel?: { u: number; v: number; dx: number; dy: number; timer: Timer };
-  private closing = false;
+  /** Aborted by `close`: the adb queries in flight end with it. */
+  private readonly closing = new AbortController();
 
   private constructor(
     private readonly adb: string, private readonly serial: string, private readonly env: NodeJS.ProcessEnv,
@@ -116,15 +119,15 @@ export class MirroredDevice implements Device {
     this.ffmpeg = Bun.which("ffmpeg", { PATH: env.PATH ?? process.env.PATH ?? "" }) ?? undefined;
   }
 
-  static async connect(adb: string, serial: string, env: NodeJS.ProcessEnv): Promise<MirroredDevice> {
-    const state = await run(adb, ["-s", serial, "get-state"], { env, timeout: 5_000 }).then(text => text.trim(), error => {
+  static async connect(adb: string, serial: string, env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<MirroredDevice> {
+    const state = await run(adb, ["-s", serial, "get-state"], { env, timeout: 5_000, signal }).then(text => text.trim(), error => {
       // adb names the problem (not found, unauthorized, offline) on its first line.
       const lines = errorMessage(error).split("\n");
       throw new Error(`Cannot mirror ${serial}: ${(lines[1] ?? lines[0]!).replace(/^error:\s*/, "")}`);
     });
     if (state !== "device") throw new Error(`Cannot mirror ${serial} in ${state} mode; boot it into Android first.`);
-    const lines = (await run(adb, ["-s", serial, "shell", `${PRODUCT}; getprop ro.build.version.sdk`], { env, timeout: 5_000 })).split(/\r?\n/);
-    return new MirroredDevice(adb, serial, env, productName(lines) ?? serial, Number(lines[2]?.trim()) || 0, await readScreen(adb, serial, env));
+    const lines = (await run(adb, ["-s", serial, "shell", `${PRODUCT}; getprop ro.build.version.sdk`], { env, timeout: 5_000, signal })).split(/\r?\n/);
+    return new MirroredDevice(adb, serial, env, productName(lines) ?? serial, Number(lines[2]?.trim()) || 0, await readScreen(adb, serial, env, signal));
   }
 
   async open(events: DeviceEvents): Promise<void> {
@@ -132,7 +135,7 @@ export class MirroredDevice implements Device {
     const shell = this.shell = Bun.spawn([this.adb, "-s", this.serial, "shell"], { env: { ...process.env, ...this.env }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
     // `input` prints only failures; show the latest one.
     for (const stream of [shell.stdout, shell.stderr]) this.lines(stream, line => events.status(line));
-    shell.exited.then(() => { if (!this.closing) events.stop(`Lost the connection to ${this.title}.`); });
+    shell.exited.then(() => { if (!this.closing.signal.aborted) events.stop(`Lost the connection to ${this.title}.`); });
     // Rotation changes the frame's shape; restart the recording when it does.
     this.poll = setInterval(() => this.refreshScreen(), 1000);
     if (!this.ffmpeg) events.status("Install ffmpeg for a smooth mirror; without it, mirroring slows the device.");
@@ -150,8 +153,8 @@ export class MirroredDevice implements Device {
   }
 
   private async refreshScreen(): Promise<void> {
-    const screen = await readScreen(this.adb, this.serial, this.env).catch(() => undefined);
-    if (!screen || this.closing) return;
+    const screen = await readScreen(this.adb, this.serial, this.env, this.closing.signal).catch(() => undefined);
+    if (!screen || this.closing.signal.aborted) return;
     const resized = screen.width !== this.screen.width || screen.height !== this.screen.height;
     this.screen = screen;
     if (resized) this.record();
@@ -174,9 +177,8 @@ export class MirroredDevice implements Device {
    */
   private record(): void {
     const box = this.box;
-    if (!box || this.closing) return;
-    this.recorder?.kill();
-    this.decoder?.kill();
+    if (!box || this.closing.signal.aborted) return;
+    this.stopRecording();
     const { width, height } = this.screen;
     const fit = Math.min(1, box.width / width, box.height / height);
     // Encoders take sizes in steps of 8, read-back frames any even size.
@@ -191,10 +193,10 @@ export class MirroredDevice implements Device {
     let shown = false;
     const onFrame = (frame: Frame) => { shown = true; box.onFrame(frame); };
     (video ? this.decode(recorder, video, onFrame) : this.frames(recorder.stdout, sized(fit, 2), onFrame)).catch(error => {
-      if (this.recorder === recorder && !this.closing) this.events!.stop(`Screen recording failed: ${errorMessage(error)}`);
+      if (this.recorder === recorder && !this.closing.signal.aborted) this.events!.stop(`Screen recording failed: ${errorMessage(error)}`);
     });
     recorder.exited.then(async code => {
-      if (this.recorder !== recorder || this.closing) return;
+      if (this.recorder !== recorder || this.closing.signal.aborted) return;
       if (code === 0) { this.record(); return; }
       const detail = (await Bun.readableStreamToText(recorder.stderr)).trim();
       // The encoder may reject the size: retry at screenrecord's own fallback size, then read frames back.
@@ -209,6 +211,15 @@ export class MirroredDevice implements Device {
       }
       this.events!.stop(`Screen recording on ${this.title} ended${detail ? `: ${detail}` : ` (${code}).`}`);
     });
+  }
+
+  /**
+   * Ends the recording. ffmpeg blocked reading an idle stream ignores SIGTERM (its read restarts)
+   * and would live on, and this process and its pane with it: the decoder gets SIGKILL.
+   */
+  private stopRecording(): void {
+    this.recorder?.kill();
+    this.decoder?.kill("SIGKILL");
   }
 
   /** Decodes the recorder's H.264 into RGB frames of `size` with ffmpeg. */
@@ -234,8 +245,10 @@ export class MirroredDevice implements Device {
    * NAL unit; a new recording then starts again from a key frame.
    */
   private async feed(recorder: Subprocess<"ignore", "pipe", "pipe">, decoder: Subprocess<"pipe", "pipe", "pipe">): Promise<void> {
-    // A decoder that died is reported by `decode`; here writing to it only stops.
+    // A decoder that died is reported by `decode`; here writing to it only stops, and one that was
+    // replaced or closed gets nothing more.
     const send = (bytes: Uint8Array) => {
+      if (this.decoder !== decoder || this.closing.signal.aborted) return false;
       try { decoder.stdin.write(bytes); decoder.stdin.flush(); return true; } catch { return false; }
     };
     let pause: Timer | undefined, delimited = false;
@@ -243,7 +256,7 @@ export class MirroredDevice implements Device {
       for await (const chunk of recorder.stdout) {
         clearTimeout(pause);
         if (delimited && !opensUnit(chunk)) {
-          if (this.recorder === recorder && !this.closing) this.record();
+          if (this.recorder === recorder && !this.closing.signal.aborted) this.record();
           return;
         }
         delimited = false;
@@ -378,13 +391,17 @@ export class MirroredDevice implements Device {
   }
 
   async close(): Promise<void> {
-    this.closing = true;
+    this.closing.abort();
     clearInterval(this.poll);
     if (this.wheel) { clearTimeout(this.wheel.timer); this.flushWheel(); }
     this.flushText();
-    this.recorder?.kill();
-    this.decoder?.kill();
-    // Ending input lets the shell run what is queued, then exit.
-    this.shell?.stdin.end();
+    this.stopRecording();
+    // Ending input lets the shell run what is queued, then exit. One a slow link holds up is
+    // killed after a moment: the process, and with it the pane, ends with the view.
+    const shell = this.shell;
+    if (!shell) return;
+    shell.stdin.end();
+    const timer = setTimeout(() => shell.kill("SIGKILL"), INPUT_GRACE);
+    shell.exited.then(() => clearTimeout(timer));
   }
 }

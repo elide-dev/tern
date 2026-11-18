@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { run } from "../android/process";
 import { announceStart, liveLocks, logCause } from "../android/sdk";
 
 describe("liveLocks", () => {
@@ -64,5 +65,17 @@ describe("logCause", () => {
   test("without an error line, the last lines", () => {
     expect(logCause("INFO | a\nINFO | b\n\nINFO | c\n")).toEqual(["INFO | b", "INFO | c"]);
     expect(logCause("")).toEqual([]);
+  });
+});
+
+describe("run", () => {
+  // A closed device view cancels its adb queries; one left running holds the pane open.
+  test("aborting the signal kills the running child", async () => {
+    const cancel = new AbortController();
+    const started = Date.now();
+    const sleeping = run("/bin/sleep", ["30"], { signal: cancel.signal });
+    cancel.abort();
+    await expect(sleeping).rejects.toThrow("sleep was cancelled.");
+    expect(Date.now() - started).toBeLessThan(10_000);
   });
 });
