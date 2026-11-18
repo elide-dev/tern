@@ -158,6 +158,16 @@ installing:
 test-installing: installing
 	python3 -u tests/install_surface.py --runtime "$(RUNTIME)"
 
+.PHONY: toolchaining test-toolchaining
+toolchaining:
+	$(MAKE) -C "$(ELIDE_SOURCE)" build-toolchain-surface
+	mkdir -p dist
+	cp "$(ELIDE_SOURCE)/target/debug/examples/toolchain_surface" dist/.elide-tern-toolchain.new
+	mv dist/.elide-tern-toolchain.new dist/elide-tern-toolchain
+
+test-toolchaining: toolchaining
+	python3 -u tests/toolchain_surface.py --runtime "$(RUNTIME)"
+
 .PHONY: help test-help
 help:
 	cd "$(ELIDE_SOURCE)" && PATH=/usr/bin:$$PATH cargo build -p cli --example help_surface

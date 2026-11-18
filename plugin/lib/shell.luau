@@ -39,7 +39,7 @@ for _, option in ipairs({
   VALUED[option] = true
 end
 
-local COMMANDS = { test = true, build = true, run = true, install = true }
+local COMMANDS = { test = true, build = true, run = true, install = true, toolchain = true }
 
 -- The argument words of the first simple command in `line`, and whether a control operator
 -- (`|`, `;`, `&`, a newline) follows it: then the status the shell reports may not be that

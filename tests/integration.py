@@ -262,6 +262,16 @@ with tempfile.TemporaryDirectory(prefix='w3-', dir='/tmp') as temporary:
                 if wait(lambda: 'buildp' in tree('#pick'), 10):
                     ctl('key', 'Enter')
                 check('inline play button opens the task\'s page', wait(lambda: build_processes() > before, 30), before)
+        # elide://toolchain opens the project's Toolchains page beside the link's pane; an option as tool is refused.
+        check('option as toolchain tool rejected', toast_after('elide://toolchain?root=' + str(build) + '&tool=-x', 'malformed'), tree('.toast'))
+        ctl('open-url', 'elide://toolchain?root=' + str(build))
+        if wait(lambda: 'buildp' in tree('#pick'), 10):
+            ctl('key', 'Enter')
+        def toolchain_process():
+            listing = subprocess.run(['ps', '-axo', 'args'], capture_output=True, text=True).stdout
+            return next((line for line in listing.splitlines()
+                         if line.startswith(runtime + ' --ignore-version toolchain')), None)
+        check('toolchain link opens the page', wait(toolchain_process, 30), tree('.toast'))
         ctl('shot', 'routes')
     finally:
         ctl('quit')
